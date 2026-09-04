@@ -1,0 +1,92 @@
+{
+  "sources": [
+    {
+      "distribution": "Arch",
+      "type": "linux",
+      "strategy": "dated_directory",
+      "listing_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/",
+      "version_regex": "href=\\\"(?P<value>\\d{4}\\.\\d{2}\\.\\d{2})/\\\"",
+      "max_entries": 3,
+      "download_template": "{listing_url}{version}/archlinux-{version}-x86_64.iso",
+      "checksum_template": "{listing_url}{version}/sha256sums.txt"
+    },
+    {
+      "distribution": "CentOS",
+      "type": "linux",
+      "strategy": "static",
+      "versions": [
+        "7.9.2009"
+      ],
+      "download_template": "https://mirrors.tuna.tsinghua.edu.cn/centos-vault/{version}/isos/x86_64/CentOS-7-x86_64-Everything-2009.iso",
+      "checksum_template": "https://mirrors.tuna.tsinghua.edu.cn/centos-vault/{version}/isos/x86_64/sha256sum.txt"
+    },
+    {
+      "distribution": "Deepin",
+      "type": "linux",
+      "strategy": "dated_directory",
+      "listing_url": "https://mirrors.tuna.tsinghua.edu.cn/deepin-cd/",
+      "version_regex": "href=\\\"(?P<value>\\d+(?:\\.\\d+)+)/\\\"",
+      "max_entries": 3,
+      "download_template": "{listing_url}{version}/amd64/deepin-desktop-community-{version}-amd64.iso",
+      "checksum_template": "{listing_url}{version}/amd64/SHA256SUMS",
+      "overrides": [
+        {
+          "pattern": "^20\\.",
+          "download_template": "{listing_url}{version}/deepin-desktop-community-{version}-amd64.iso",
+          "checksum_template": "{listing_url}{version}/SHA256SUMS"
+        }
+      ]
+    },
+    {
+      "distribution": "Fedora",
+      "type": "linux",
+      "strategy": "versioned_flat_listing",
+      "listing_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/",
+      "version_regex": "href=\\\"(?P<value>\\d+)/\\\"",
+      "max_entries": 3,
+      "sub_listing_template": "{listing_url}{version}/Everything/x86_64/iso/",
+      "artifact_regex": "href=\\\"(?P<value>Fedora-Everything-netinst-x86_64-(?P<release>[\\d.-]+)\\.iso)\\\"",
+      "checksum_template": "{sub_listing_url}Fedora-Everything-{release}-x86_64-CHECKSUM"
+    },
+    {
+      "distribution": "Fedora",
+      "type": "linux",
+      "strategy": "versioned_flat_listing",
+      "listing_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/",
+      "version_regex": "href=\\\"(?P<value>\\d+)/\\\"",
+      "max_entries": 3,
+      "sub_listing_template": "{listing_url}{version}/Workstation/x86_64/iso/",
+      "artifact_regex": "href=\\\"(?P<value>Fedora-Workstation-Live-(?:x86_64-)?(?P<release>[\\d.-]+)(?:\\.x86_64)?\\.iso)\\\"",
+      "checksum_template": "{sub_listing_url}Fedora-Workstation-{release}-x86_64-CHECKSUM"
+    },
+    {
+      "distribution": "Proxmox",
+      "type": "linux",
+      "strategy": "flat_listing",
+      "listing_url": "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/",
+      "artifact_regex": "href=\\\"(?P<value>proxmox-ve_[\\d.]+-\\d\\.iso)\\\"",
+      "max_entries": 3,
+      "checksum_template": "{listing_url}SHA256SUMS"
+    },
+    {
+      "distribution": "Ubuntu",
+      "type": "linux",
+      "strategy": "dated_directory",
+      "listing_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/",
+      "version_regex": "href=\\\"(?P<value>\\d+(?:\\.\\d+)*)/\\\"",
+      "max_entries": 3,
+      "download_template": "{listing_url}{version}/ubuntu-{version}-desktop-amd64.iso",
+      "checksum_template": "{listing_url}{version}/SHA256SUMS"
+    },
+    {
+      "distribution": "Ubuntu",
+      "type": "linux",
+      "strategy": "dated_directory",
+      "listing_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/",
+      "version_regex": "href=\\\"(?P<value>\\d+(?:\\.\\d+)*)/\\\"",
+      "max_entries": 3,
+      "download_template": "{listing_url}{version}/ubuntu-{version}-live-server-amd64.iso",
+      "checksum_template": "{listing_url}{version}/SHA256SUMS"
+    }
+  ]
+}

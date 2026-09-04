@@ -1,0 +1,16 @@
+# WebDAV 配置 (hacdias/webdav)
+# 此文件挂载到容器 /config.yml, 主容器可在网页改密码后重写此文件+restart 生效
+# 注意: 凭据明文存放, 仅内网使用
+address: 0.0.0.0
+port: 6065
+prefix: /dav
+directory: /data
+permissions: R            # 只读 (R); 想可写改成 CRUD
+users:
+  - username: iso
+    password: iso123
+    permissions: R        # 只读, 覆盖全局默认(可写则删这行)
+log:
+  format: console
+  outputs:
+    - stderr

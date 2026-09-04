@@ -1,0 +1,1378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ISO Hub · 发行版镜像自动更新站</title>
+<style>
+  :root{
+    --bg:#eef4fb; --panel:#ffffff; --ink:#0f172a; --ink2:#475569; --ink3:#94a3b8;
+    --line:#e2e8f0; --brand:#2563eb; --brand2:#0ea5e9;
+    --ok:#059669; --okbg:#e7f8f1; --warn:#d97706; --warnbg:#fdf3e3;
+    --bad:#dc2626; --badbg:#fdecec; --chip:#eff6ff; --rowalt:#f1f5f9; --cardhead:#fbfdff;
+    --straybg:#fffaf2; --strayline:#f5ddb6; --fname:#1e293b;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,"SF Mono",monospace;
+    --shadow:0 1px 2px rgba(15,23,42,.05),0 8px 24px -12px rgba(37,99,235,.18);
+    --btn-s-bg:#fff; --tasklog-bg:#0b1220; --tasklog-line:#1e3a5f;
+    --tasklog-in:#cbe3ff; --tasklog-cur:#9fb9d8; --tasklog-lt:#4f6d94; --tasklog-er:#ff9d9d; --tasklog-ok:#7ee2b8;
+  }
+  html[data-theme="dark"]{
+    --bg:#0b1220; --panel:#111a2e; --ink:#e6edf7; --ink2:#a7b8d4; --ink3:#5d6f8f;
+    --line:#1e2c47; --brand:#3b82f6; --brand2:#38bdf8;
+    --ok:#34d399; --okbg:#0c2b21; --warn:#f59e0b; --warnbg:#2c2210;
+    --bad:#f87171; --badbg:#32171c; --chip:#0f2a4a; --rowalt:#0f1a30; --cardhead:#0f1a30;
+    --straybg:#241b0c; --strayline:#4a3a1a; --fname:#dbe6f5;
+    --shadow:0 1px 2px rgba(2,6,23,.5),0 10px 28px -14px rgba(0,0,0,.7);
+    --btn-s-bg:#152238; --tasklog-bg:#060b16; --tasklog-line:#14233f;
+    --tasklog-in:#cbe3ff; --tasklog-cur:#8fa9c9; --tasklog-lt:#4f6d94; --tasklog-er:#ff9d9d; --tasklog-ok:#7ee2b8;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font:14px/1.55 "PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+       background-image:radial-gradient(1100px 500px at 85% -10%,rgba(56,189,248,.14),transparent 60%),
+                        radial-gradient(900px 460px at -10% 0%,rgba(37,99,235,.10),transparent 55%);}
+  html[data-theme="dark"] body{
+    background-image:radial-gradient(1100px 500px at 85% -10%,rgba(56,189,248,.08),transparent 60%),
+                     radial-gradient(900px 460px at -10% 0%,rgba(37,99,235,.07),transparent 55%);}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 18px 60px}
+  /* header */
+  header{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{width:44px;height:44px;border-radius:12px;flex:0 0 auto;
+        background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;
+        display:flex;align-items:center;justify-content:center;
+        box-shadow:0 8px 18px -8px rgba(37,99,235,.6);font-size:22px}
+  h1{font-size:20px;letter-spacing:.3px}
+  .sub{color:var(--ink2);font-size:12.5px;margin-top:2px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  button{border:0;border-radius:9px;padding:8px 14px;font-size:13px;cursor:pointer;font-weight:600;
+         display:inline-flex;align-items:center;gap:6px;transition:.15s;font-family:inherit}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .btn-p{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;
+          box-shadow:0 6px 14px -6px rgba(37,99,235,.55)}
+  .btn-p:not(:disabled):hover{filter:brightness(1.06)}
+  .btn-s{background:var(--btn-s-bg);color:var(--ink);border:1px solid var(--line);box-shadow:var(--shadow)}
+  .btn-s:not(:disabled):hover{border-color:var(--brand2);color:var(--brand)}
+  .btn-d{background:var(--badbg);color:var(--bad)}
+  .btn-d:not(:disabled):hover{background:var(--badbg);filter:brightness(.94)}
+  /* tabs */
+  .tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+  .tab{background:var(--panel);color:var(--ink2);border:1px solid var(--line);padding:7px 14px;border-radius:9px}
+  .tab.active{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border-color:transparent;box-shadow:0 5px 12px -5px rgba(37,99,235,.5)}
+  /* inputs */
+  .inp{background:var(--btn-s-bg);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:13px;font-family:inherit}
+  .inp:focus{outline:none;border-color:var(--brand2);box-shadow:0 0 0 3px rgba(56,189,248,.15)}
+  .inp::placeholder{color:var(--ink3)}
+  .hint{color:var(--ink2);font-size:12.5px;line-height:1.7}
+  .hint code{font-family:var(--mono);font-size:12px;background:var(--chip);padding:1px 5px;border-radius:5px}
+  /* subs list rows */
+  .sub-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .sub-row:last-child{border-bottom:0}
+  .sub-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--brand)}
+  .sub-row input[type=number],.sub-row input[type=text]{width:90px;padding:5px 8px;font-size:12.5px}
+  .sub-row .keep{display:flex;align-items:center;gap:6px;color:var(--ink2);font-size:12px;white-space:nowrap}
+  .sub-row .sname{font-weight:700;min-width:120px}
+  .sub-row .sstat{margin-left:auto;font-size:12px;color:var(--ink2);white-space:nowrap}
+  /* share panel */
+  .share-body{padding:14px 16px}
+  .sw{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--ink);cursor:pointer}
+  .sw input{width:18px;height:18px;accent-color:var(--brand)}
+  .share-fields{margin-top:12px;display:flex;flex-direction:column;gap:10px}
+  .share-fields code{font-family:var(--mono);font-size:12.5px;background:var(--chip);padding:2px 7px;border-radius:6px;word-break:break-all}
+  .share-cred{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+  .share-cred label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink2)}
+  .share-cred .inp{width:130px;padding:7px 10px}
+  .cs-item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;font-size:13px}
+  .cs-item:last-child{border-bottom:0}
+  .cs-item .cu{font-family:var(--mono);font-size:12px;color:var(--ink2);word-break:break-all;flex:1;min-width:180px}
+  .cs-item .cn{font-weight:600;min-width:90px}
+  /* custom source sub-tabs */
+  .src-tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .src-tab{background:var(--panel);color:var(--ink2);border:1px solid var(--line);padding:7px 14px;border-radius:9px;font-size:13px;cursor:pointer;font-weight:600}
+  .src-tab.active{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border-color:transparent}
+  /* stats */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;box-shadow:var(--shadow)}
+  .stat b{font-size:22px;display:block;color:var(--brand);font-variant-numeric:tabular-nums}
+  .stat span{color:var(--ink2);font-size:12px}
+  .filter-bar{display:flex;align-items:center;gap:8px;margin:0 0 14px;flex-wrap:wrap}
+  .filter-bar .inp{background:var(--panel);border:1px solid var(--line);color:var(--ink);border-radius:8px}
+  /* task bar */
+  #taskbar{display:none;align-items:center;gap:12px;background:var(--tasklog-bg);color:var(--tasklog-in);border-radius:12px;
+           padding:10px 16px;margin-bottom:16px;font-family:var(--mono);font-size:12.5px;
+           border:1px solid var(--tasklog-line);box-shadow:var(--shadow)}
+  #taskbar.show{display:flex}
+  .spin{width:15px;height:15px;border:2px solid #2f6fc4;border-top-color:#7cc0ff;border-radius:50%;animation:rot .8s linear infinite;flex:0 0 auto}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  #taskinfo{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #curfile{color:var(--tasklog-cur)}
+  .muted{color:var(--ink3)}
+  /* group cards */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:14px;
+        overflow:hidden;box-shadow:var(--shadow)}
+  .card-head{display:flex;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid var(--line);
+             background:linear-gradient(180deg,var(--cardhead),var(--rowalt))}
+  .card-head input[type=checkbox]{width:16px;height:16px;accent-color:var(--brand);cursor:pointer}
+  .g-name{font-weight:700;font-size:15px;letter-spacing:.2px}
+  .chip{font-size:11px;padding:1px 8px;border-radius:20px;background:var(--chip);color:var(--brand);border:1px solid #dbeafe}
+  .chip.warn{background:var(--warnbg);color:var(--warn);border-color:#fde6c2}
+  .g-meta{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--ink2);font-size:12px;
+          font-variant-numeric:tabular-nums}
+  .btn-sub{padding:4px 11px;font-size:12px;border-radius:20px;background:var(--btn-s-bg);color:var(--ink2);border:1px solid var(--line)}
+  .btn-sub:hover{border-color:var(--brand2);color:var(--brand)}
+  .btn-sub.on{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border-color:transparent;box-shadow:0 3px 8px -3px rgba(37,99,235,.5)}
+  .btn-fav{padding:4px 10px;font-size:12px;border-radius:20px;background:var(--btn-s-bg);color:var(--ink2);border:1px solid var(--line)}
+  .btn-fav:hover{border-color:var(--gold,#f5b301);color:#e0a800}
+  .btn-fav.on{background:linear-gradient(135deg,#f5b301,#e08700);color:#fff;border-color:transparent;box-shadow:0 3px 8px -3px rgba(240,170,0,.5)}
+  .btn-lock{width:24px;height:24px;padding:0;border:none;background:transparent;font-size:13px;line-height:1;cursor:pointer;opacity:.55;flex:0 0 auto}
+  .btn-lock:hover{opacity:1;transform:scale(1.15)}
+  .btn-lock.on{opacity:1}
+  .prot-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .prot-row:last-child{border-bottom:0}
+  .prot-row .pn{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
+  .btn-fold{width:24px;height:24px;padding:0;border-radius:7px;background:var(--btn-s-bg);color:var(--ink2);border:1px solid var(--line);font-size:12px;line-height:1;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .btn-fold:hover{background:var(--chip);color:var(--brand)}
+  .tbl{width:100%;border-collapse:collapse}
+  .tbl td{padding:7px 16px 7px 0;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+  .tbl tr:last-child td{border-bottom:0}
+  .tbl td:first-child{padding-left:16px;width:30px}
+  .tbl td:nth-child(2){width:26px}
+  .fname{font-family:var(--mono);font-size:12.8px;word-break:break-all;color:var(--fname)}
+  .fname a{color:inherit;text-decoration:none;margin-left:4px;opacity:.55}
+  .fname a:hover{opacity:1;color:var(--brand2)}
+  .badge{font-size:11px;padding:1px 9px;border-radius:20px;white-space:nowrap;font-weight:600}
+  .badge.ok{background:var(--okbg);color:var(--ok)}
+  .badge.old{background:var(--warnbg);color:var(--warn)}
+  .badge.none{background:#f1f5f9;color:var(--ink3)}
+  .badge.wrk{background:var(--chip);color:var(--brand)}
+  td.size,.td-r{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+  td.size{color:var(--ink2);font-size:12.5px;padding-right:16px!important}
+  /* stray rows */
+  .stray{background:var(--straybg)}
+  .stray .fname{color:var(--warn)}
+  .foot-hint{display:flex;gap:6px;justify-content:flex-end;padding:8px 16px;background:var(--straybg);font-size:12px;color:var(--warn);
+             border-top:1px dashed var(--strayline);align-items:center}
+  .foot-hint button{margin-left:6px;padding:3px 10px;font-size:11.5px}
+  /* log */
+  .loghead{display:flex;align-items:center;justify-content:space-between;margin:8px 0 8px;cursor:pointer}
+  .loghead span{font-weight:700;font-size:13px;color:var(--ink2)}
+  #log{background:var(--tasklog-bg);border:1px solid var(--tasklog-line);border-radius:12px;height:250px;overflow:auto;padding:12px 14px;
+       font-family:var(--mono);font-size:12px;line-height:1.65}
+  #log:empty:after{content:attr(data-empty);color:var(--ink3)}
+  #log .ln{color:var(--tasklog-cur);user-select:none}
+  #log .lt{color:var(--tasklog-lt)}
+  #log .er{color:var(--tasklog-er)}
+  #log .ok{color:var(--tasklog-ok)}
+  #log pre{display:inline;white-space:pre-wrap;word-break:break-all}
+  .toast{position:fixed;right:20px;bottom:20px;background:var(--tasklog-bg);color:var(--tasklog-in);padding:10px 16px;border-radius:10px;
+         font-size:13px;z-index:99;box-shadow:0 10px 30px -8px rgba(2,6,23,.5);opacity:0;transform:translateY(8px);
+         transition:.25s;max-width:420px}
+  .toast.show{opacity:1;transform:none}
+  .toast.err{background:#3d0f14;border:1px solid #7f1d1d;color:#ffd0d0}
+  .empty{text-align:center;color:var(--ink3);padding:40px 0}
+  @media(max-width:720px){.g-meta{display:none}td.size{display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo">⬇</div>
+      <div>
+        <h1>ISO Hub</h1>
+        <div class="sub" data-i18n="subtitle">Linux 发行版 ISO 自动下载 · 元数据自动刷新 · SHA256 校验</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn-s" onclick="loadDistros()" data-i18n="refresh">⟳ 刷新列表</button>
+      <button class="btn-s" id="btnSel" onclick="toggleAll()" data-i18n="selectAll">☑ 全选</button>
+      <button class="btn-p" id="btnDown" onclick="downloadSel()" data-i18n="downloadSel">⬇ 下载所选</button>
+      <button class="btn-s" id="btnMeta" onclick="updateMeta()" data-i18n="fetchMeta">⤓ 抓取最新版本元数据</button>
+      <button class="btn-s" id="btnSync" onclick="syncSubs()" data-i18n="syncNow">🔄 订阅同步</button>
+      <button class="btn-d" id="btnStop" onclick="stopTask()" disabled data-i18n="stopTask">■ 停止任务</button>
+      <button class="btn-s" id="btnTheme" onclick="toggleTheme()" title="theme">🌓</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="mirror" onclick="switchTab('mirror')" data-i18n="mirror">📦 镜像列表</button>
+    <button class="tab" data-tab="source" onclick="switchTab('source')" data-i18n="source">🔗 自定义源</button>
+    <button class="tab" data-tab="subs" onclick="switchTab('subs')" data-i18n="subs">⭐ 订阅同步</button>
+    <button class="tab" data-tab="share" onclick="switchTab('share')" data-i18n="share">📡 网络共享</button>
+    <button class="tab" data-tab="settings" onclick="switchTab('settings')" data-i18n="settings">⚙️ 设置</button>
+  </nav>
+
+  <div id="panel-mirror">
+  <div class="stats">
+    <div class="stat"><b id="sGroups">–</b><span data-i18n="groupsStat">发行版组</span></div>
+    <div class="stat"><b id="sFiles">–</b><span data-i18n="filesStat">清单文件数</span></div>
+    <div class="stat"><b id="sLocal">–</b><span data-i18n="localStat">本地占用</span></div>
+    <div class="stat"><b id="sMeta">–</b><span data-i18n="metaStat">清单元数据更新时间</span></div>
+  </div>
+
+  <div class="filter-bar">
+    <span class="muted" data-i18n="filterBy">筛选:</span>
+    <select id="filterSel" class="inp" style="width:auto;padding:5px 10px" onchange="setFilter(this.value)">
+      <option value="all" data-i18n="filterAll">全部</option>
+      <option value="downloaded" data-i18n="filterDownloaded">已下载</option>
+      <option value="not_downloaded" data-i18n="filterNotDownloaded">未下载</option>
+      <option value="fav" data-i18n="filterFav">已收藏</option>
+    </select>
+  </div>
+
+  <div id="taskbar">
+    <div class="spin"></div>
+    <div id="taskinfo"><span id="taskkind"></span></div>
+    <div id="curfile" class="muted"></div>
+  </div>
+
+  <div id="groups"></div>
+  <div class="empty" id="empty" style="display:none" data-i18n="emptyHint">暂无数据 —— 点击右上角「抓取最新版本元数据」或「刷新列表」</div>
+
+  <div class="loghead" onclick="toggleLog()">
+    <span data-i18n="taskLogTitle">▾ 任务日志（实时）</span><span class="muted" data-i18n="clear">清除</span>
+  </div>
+  <div id="log"></div>
+  </div><!-- /panel-mirror -->
+
+  <!-- 自定义源面板 -->
+  <div id="panel-source" style="display:none">
+    <div class="src-tabs">
+      <button class="src-tab active" onclick="switchSrc('repo')" data-i18n="repoTab">📈 发行版源 · 追踪最新版本</button>
+      <button class="src-tab" onclick="switchSrc('direct')" data-i18n="directTab">🔗 单一直链</button>
+    </div>
+    <div id="src-repo">
+      <div class="card">
+        <div class="card-head"><span class="g-name" data-i18n="addDistroSrc">添加发行版源</span><span class="chip">自动抓取该源最新 ISO 版本</span></div>
+        <div style="padding:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
+          <select id="rs-tpl" class="inp" style="grid-column:1/-1" onchange="applySrcTpl()">
+            <option value="" data-i18n="selTpl">— 选择示例模板(自动填充下方配置) —</option>
+            <option value="ubuntu">Ubuntu desktop (清华)</option>
+            <option value="ubuntu-live">Ubuntu live-server (清华)</option>
+            <option value="arch">Arch Linux (清华)</option>
+            <option value="fedora-work">Fedora Workstation (清华)</option>
+            <option value="proxmox-ve">Proxmox VE (清华)</option>
+            <option value="debian">Debian (清华)</option>
+          </select>
+          <input id="rs-dist" class="inp" placeholder="发行版名,如 Ubuntu" value="Ubuntu">
+          <input id="rs-type" class="inp" placeholder="类型,默认 linux" value="linux">
+          <select id="rs-strategy" class="inp" onchange="toggleVersionsRow()">
+            <option value="dated_directory">dated_directory(版本目录)</option>
+            <option value="flat_listing">flat_listing(单页文件列表)</option>
+            <option value="versioned_flat_listing">versioned_flat_listing(分版本子页)</option>
+            <option value="static">static(固定版本列表)</option>
+          </select>
+          <input id="rs-listing" class="inp" style="grid-column:1/-1" placeholder="镜像站目录 URL,如 https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/">
+          <input id="rs-regex" class="inp" style="grid-column:1/-1" placeholder="版本/文件名正则(含 (?P&lt;value&gt;...) 命名组),如 href=&quot;(?P&lt;value&gt;\d+(?:\.\d+)*)/&quot;">
+          <input id="rs-art" class="inp" style="grid-column:1/-1" placeholder="[高级] artifact_regex: 分版本子页里的文件正则(versioned_flat_listing用)">
+          <input id="rs-sub" class="inp" style="grid-column:1/-1" placeholder="[高级] sub_listing_template: 子页URL模板(versioned_flat_listing用),如 {listing_url}{version}/Workstation/x86_64/iso/">
+          <input id="rs-dltpl" class="inp" style="grid-column:1/-1" placeholder="下载模板,如 {listing_url}{version}/ubuntu-{version}-desktop-amd64.iso">
+          <input id="rs-chktpl" class="inp" style="grid-column:1/-1" placeholder="校验模板(可选),如 {listing_url}{version}/SHA256SUMS">
+          <div id="rs-versions-row" style="display:none;grid-column:1/-1;display:flex;gap:8px;align-items:center">
+            <span class="muted" style="font-size:12px;white-space:nowrap" data-i18n="fixedList">固定版本列表(逗号分隔)</span>
+            <input id="rs-versions" class="inp" style="flex:1" placeholder="如 7.9.2009,8.0.2008 (static策略用)">
+          </div>
+          <input id="rs-max" class="inp" type="number" min="1" max="9" value="2" placeholder="保留最新 N 版" title="保留最新N版">
+          <button class="btn-p" onclick="addSrcRepo()" style="grid-column:1/-1" data-i18n="addRepoBtn">📈 添加发行版源(并解析当前最新版本)</button>
+        </div>
+        <div class="hint" style="margin:0 16px 6px" data-i18n="repoHint">发行版源每次「抓取元数据/订阅同步」都会重新解析镜像站目录，自动发现并追踪<b>最新版本</b>，按自然排序保留最新 N 版。正则需匹配镜像站当前页面结构（不同镜像站/版本可能不同，可用模板或自行调整）。</div>
+      </div>
+    </div>
+    <div id="src-direct" style="display:none">
+      <div class="card">
+        <div class="card-head"><span class="g-name" data-i18n="addDirectLink">添加单一直链</span><span class="chip">官方源之外的任意直链</span></div>
+        <div style="padding:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+          <input id="cs-dist" class="inp" placeholder="发行版名,如 Kali">
+          <input id="cs-type" class="inp" placeholder="类型,默认 linux">
+          <input id="cs-url" class="inp" style="grid-column:1/-1" placeholder="ISO 下载直链 https://… /xxx.iso">
+          <input id="cs-check" class="inp" style="grid-column:1/-1" placeholder="校验文件地址(可选, sha256sums.txt)">
+          <button class="btn-p" onclick="addCustomSource()" style="grid-column:1/-1" data-i18n="addLinkBtn">➕ 添加直链</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="existingSources">已有自定义源</span><span class="chip" id="cs-count">0</span></div>
+      <div id="cs-list" style="padding:6px 16px"></div>
+    </div>
+  </div>
+
+  <!-- 订阅同步面板 -->
+  <div id="panel-subs" style="display:none">
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="subs">订阅同步</span><span class="chip">自动拉最新 + 删旧版</span></div>
+      <div style="padding:12px 16px" class="hint">
+        对每个已启用的订阅，会<b>自动</b>：①刷新该发行版元数据 → ②下载最新 N 版 → ③删除组目录中不在最新 N 的过期 ISO。
+        也可用服务器 cron 定时调用 <code>/api/sync-subscriptions</code> 实现全自动。保留版本数 N 可逐组设置。
+      </div>
+      <div id="subs-list" style="padding:6px 16px"></div>
+      <div style="padding:10px 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <button class="btn-p" onclick="syncSubs()" data-i18n="syncRunNow">🔄 立即执行订阅同步</button>
+        <span class="muted" style="font-size:12px" data-i18n="syncNote">同步任务会显示在下方任务日志中</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 网络共享面板 -->
+  <div id="panel-share" style="display:none">
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="smbShare">SMB 共享</span><span class="chip" data-i18n="sambaDesc">PVE/Windows 挂载 ISO 库</span></div>
+      <div class="share-body">
+        <label class="sw"><input type="checkbox" id="sw-samba" onchange="saveShare('samba',this.checked)"><span data-i18n="enable">启用</span></label>
+        <span class="sstat" id="st-samba"></span>
+        <div class="share-fields">
+          <span><span data-i18n="addr">地址:</span> <code id="url-samba">smb://<服务器IP>:1445/iso</code></span>
+          <div class="share-cred">
+            <label data-i18n="username">用户名 <input type="text" id="u-samba" class="inp"></label>
+            <label data-i18n="password">密码 <input type="text" id="p-samba" class="inp"></label>
+            <button class="btn-s" onclick="saveShareCred('samba')" data-i18n="saveCred">保存凭据</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="davShare">WebDAV 共享</span><span class="chip">http://IP:8081/dav</span></div>
+      <div class="share-body">
+        <label class="sw"><input type="checkbox" id="sw-webdav" onchange="saveShare('webdav',this.checked)"><span data-i18n="enable">启用</span></label>
+        <span class="sstat" id="st-webdav"></span>
+        <div class="share-fields">
+          <span><span data-i18n="addr">地址:</span> <code id="url-webdav">http://<服务器IP>:8081/dav</code></span>
+          <div class="share-cred">
+            <label data-i18n="username">用户名 <input type="text" id="u-webdav" class="inp"></label>
+            <label data-i18n="password">密码 <input type="text" id="p-webdav" class="inp"></label>
+            <button class="btn-s" onclick="saveShareCred('webdav')" data-i18n="saveCred">保存凭据</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="hint" style="padding:0 4px 8px" data-i18n="shareDesc">
+      说明：开关会实时启动/停止对应共享容器。账号密码初始值来自 <code>docker-compose.yml</code> 的
+      <code>SAMBA_USER/PASS</code>、<code>WEBDAV_USER/PASS</code>；修改后写入 <code>./data/settings.json</code>，
+      若共享正在运行需 <code>docker compose restart samba webdav</code> 使新凭据生效。
+    </div>
+  <!-- 设置面板 -->
+  <div id="panel-settings" style="display:none">
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="userConfig">👤 用户设置</span></div>
+      <div style="padding:14px 16px">
+        <div id="user-panel" style="display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="chip" id="user-status" data-i18n="notLoggedIn">未登录</span>
+            <span id="user-name" class="muted"></span>
+            <span style="flex:1"></span>
+            <button class="btn-s" id="btn-login" onclick="showLogin()" data-i18n="login">🔑 登录</button>
+          </div>
+          <div id="pwd-form" style="display:none;flex-direction:column;gap:8px;max-width:360px">
+            <div style="display:flex;gap:8px;align-items:center"><label data-i18n="oldPwd">当前密码</label><input type="password" id="pwd-old" class="inp" style="flex:1"></div>
+            <div style="display:flex;gap:8px;align-items:center"><label data-i18n="newPwd">新密码</label><input type="password" id="pwd-new" class="inp" style="flex:1"></div>
+            <button class="btn-s" onclick="changePassword()" data-i18n="changePwd">修改密码</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="langConfig">🌐 语言设置</span></div>
+      <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+        <span class="muted" data-i18n="selectLang">选择界面语言（跟随浏览器自动切换）</span>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn-s" onclick="setLang('zh')" id="lang-zh">中文</button>
+          <button class="btn-s" onclick="setLang('en')" id="lang-en">English</button>
+          <button class="btn-s" onclick="setLang('auto')" id="lang-auto">🌓 自动</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="sharesConfig">📡 共享设置</span><span class="chip">SMB / WebDAV</span></div>
+      <div style="padding:6px 16px 12px">
+        <div class="card">
+          <div class="card-head"><span class="g-name" data-i18n="smbShare">SMB 共享</span><span class="chip" data-i18n="sambaDesc">PVE/Windows 挂载 ISO 库</span></div>
+          <div class="share-body">
+            <label class="sw"><input type="checkbox" id="sw-samba2" onchange="saveShare('samba',this.checked)"><span data-i18n="enable">启用</span></label>
+            <span class="sstat" id="st-samba2"></span>
+            <div class="share-fields">
+              <span><span data-i18n="addr">地址:</span> <code id="url-samba2">smb://&lt;服务器IP&gt;:1445/iso</code></span>
+              <div class="share-cred">
+                <label data-i18n="username">用户名 <input type="text" id="u-samba2" class="inp"></label>
+                <label data-i18n="password">密码 <input type="text" id="p-samba2" class="inp"></label>
+                <button class="btn-s" onclick="saveShareCred2('samba')" data-i18n="saveCred">保存凭据</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="g-name" data-i18n="davShare">WebDAV 共享</span><span class="chip">http://IP:8081/dav</span></div>
+          <div class="share-body">
+            <label class="sw"><input type="checkbox" id="sw-webdav2" onchange="saveShare('webdav',this.checked)"><span data-i18n="enable">启用</span></label>
+            <span class="sstat" id="st-webdav2"></span>
+            <div class="share-fields">
+              <span><span data-i18n="addr">地址:</span> <code id="url-webdav2">http://&lt;服务器IP&gt;:8081/dav</code></span>
+              <div class="share-cred">
+                <label data-i18n="username">用户名 <input type="text" id="u-webdav2" class="inp"></label>
+                <label data-i18n="password">密码 <input type="text" id="p-webdav2" class="inp"></label>
+                <button class="btn-s" onclick="saveShareCred2('webdav')" data-i18n="saveCred">保存凭据</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="hint" style="padding:0 4px" data-i18n="shareDesc"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="schedules">⏰ 定时任务</span><span class="chip" data-i18n="schedTip">每天/周/月/年 自动同步</span></div>
+      <div style="padding:12px 16px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:10px">
+          <input id="sch-name" class="inp" placeholder="名称,如 每日清晨" data-i18n="schedName">
+          <select id="sch-type" class="inp" onchange="schedTypeChanged()">
+            <option value="daily" data-i18n="daily">每天</option>
+            <option value="weekly" data-i18n="weekly">每周</option>
+            <option value="monthly" data-i18n="monthly">每月</option>
+            <option value="yearly" data-i18n="yearly">每年</option>
+            <option value="once" data-i18n="once">一次性</option>
+          </select>
+          <input id="sch-time" class="inp" type="time" value="02:00">
+          <div id="sch-week" style="display:none;grid-column:1/-1">
+            <label class="muted" data-i18n="weekday">星期:</label>
+            <select id="sch-dow" class="inp" style="width:auto">
+              <option value="0" data-i18n="w0">周一</option>
+              <option value="1" data-i18n="w1">周二</option>
+              <option value="2" data-i18n="w2">周三</option>
+              <option value="3" data-i18n="w3">周四</option>
+              <option value="4" data-i18n="w4">周五</option>
+              <option value="5" data-i18n="w5">周六</option>
+              <option value="6" data-i18n="w6">周日</option>
+            </select>
+          </div>
+          <div id="sch-monthly" style="display:none;grid-column:1/-1">
+            <label class="muted" data-i18n="dayOfMonth">每月第几日:</label>
+            <input id="sch-dom" class="inp" type="number" min="1" max="31" value="1" style="width:80px">
+          </div>
+          <div id="sch-yearly" style="display:none;grid-column:1/-1">
+            <label class="muted" data-i18n="monthOfYear">月份:</label>
+            <input id="sch-moy" class="inp" type="number" min="1" max="12" value="1" style="width:80px">
+            <label class="muted" data-i18n="dayOfMonth">日:</label>
+            <input id="sch-y-dom" class="inp" type="number" min="1" max="31" value="1" style="width:80px">
+          </div>
+          <div id="sch-once" style="display:none;grid-column:1/-1">
+            <label class="muted" data-i18n="onceAt">执行时刻(一次性):</label>
+            <input id="sch-once-time" class="inp" type="datetime-local" style="width:auto">
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn-p" onclick="addSchedule()" data-i18n="addSchedule">➕ 添加定时任务</button>
+          <button class="btn-s" onclick="runSyncNow()" data-i18n="syncRunNow">🔄 立即执行订阅同步</button>
+        </div>
+        <div id="sched-list" style="margin-top:12px"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="protectList">🔒 受保护文件</span><span class="chip" id="protect-count">0</span></div>
+      <div id="protect-list" style="padding:6px 16px 12px"></div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={};
+let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
+
+const $=s=>document.querySelector(s);
+const fmt=n=>{if(n==null)return'–';n=+n||0;const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return i?n.toFixed(1)+' '+u[i]:n+' B'};
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const time2str=t=>{if(!t)return'–';const d=new Date(t*1000);return d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})};
+function toast(msg,err){const t=$('#toast');t.textContent=msg;t.className='toast show'+(err?' err':'');clearTimeout(t._h);t._h=setTimeout(()=>t.className='toast',3200)}
+
+/* ---------- i18n 多语言 ---------- */
+const I18N={
+  'subtitle':{zh:'Linux 发行版 ISO 自动下载 · 元数据自动刷新 · SHA256 校验',en:'Automatic Linux distro ISO download · meta auto-refresh · SHA256 verify'},
+  'theme':{zh:'切换日/夜间模式',en:'Toggle light/dark mode'},
+  'mirror':{zh:'镜像列表',en:'Mirror List'},
+  'source':{zh:'自定义源',en:'Custom Sources'},
+  'subs':{zh:'订阅同步',en:'Subscription Sync'},
+  'share':{zh:'网络共享',en:'Network Share'},
+  'settings':{zh:'设置',en:'Settings'},
+  'refresh':{zh:'刷新列表',en:'Refresh'},
+  'selectAll':{zh:'全选',en:'Select All'},
+  'deselectAll':{zh:'取消全选',en:'Deselect'},
+  'downloadSel':{zh:'下载所选',en:'Download Selected'},
+  'fetchMeta':{zh:'抓取最新版本元数据',en:'Fetch Latest Meta'},
+  'syncNow':{zh:'订阅同步',en:'Sync Subscriptions'},
+  'stopTask':{zh:'停止任务',en:'Stop Task'},
+  'groupsStat':{zh:'发行版组',en:'Distro Groups'},
+  'filesStat':{zh:'清单文件数',en:'Listed Files'},
+  'localStat':{zh:'本地占用',en:'Local Used'},
+  'metaStat':{zh:'清单元数据更新时间',en:'Meta Updated'},
+  'versions':{zh:'个版本',en:'versions'},
+  'local':{zh:'本地',en:'Local'},
+  'downloaded':{zh:'已下载',en:'Downloaded'},
+  'oldVer':{zh:'旧版本',en:'Old'},
+  'notDownloaded':{zh:'未下载',en:'Not Downloaded'},
+  'stale':{zh:'已过期',en:'Stale'},
+  'filterAll':{zh:'全部',en:'All'},
+  'filterDownloaded':{zh:'已下载',en:'Downloaded'},
+  'filterNotDownloaded':{zh:'未下载',en:'Not Downloaded'},
+  'filterFav':{zh:'已收藏',en:'Favorited'},
+  'filterBy':{zh:'筛选:',en:'Filter:'},
+  'favGroup':{zh:'收藏',en:'Favorite'},
+  'unfavGroup':{zh:'取消收藏',en:'Unfavorite'},
+  'subscribed':{zh:'已订阅',en:'Subscribed'},
+  'subscribe':{zh:'订阅',en:'Subscribe'},
+  'subTipOn':{zh:'已订阅该发行版,点击取消',en:'Subscribed, click to unsubscribe'},
+  'subTipOff':{zh:'订阅该发行版,自动追踪最新版本',en:'Subscribe to track latest versions'},
+  'foldExpand':{zh:'折叠/展开',en:'Fold / Expand'},
+  'emptyHint':{zh:'暂无数据 —— 点击右上角「抓取最新版本元数据」或「刷新列表」',en:'No data — click "Fetch Latest Meta" or "Refresh"'},
+  'emptySubs':{zh:'暂无订阅 —— 在「镜像列表」点每个发行版右上角的 ☆订阅 即可加入，或点右上角「订阅同步」',en:'No subscriptions — click ☆Subscribe on a distro, or Sync Subscriptions'},
+  'noCustomSrc':{zh:'暂无自定义源',en:'No custom sources'},
+  'taskLogTitle':{zh:'任务日志（实时）',en:'Task Log (live)'},
+  'taskLogHidden':{zh:'任务日志（实时）',en:'Task Log (live)'},
+  'clear':{zh:'清除',en:'Clear'},
+  'logEmpty':{zh:'暂无日志 —— 运行任务后将在此实时输出（含下载进度/校验结果）',en:'No logs yet — task output appears here in real time'},
+  'taskMeta':{zh:'元数据',en:'Meta'},
+  'taskDownload':{zh:'下载',en:'Download'},
+  'curPrefix':{zh:'当前:',en:'Current:'},
+  'no':{zh:'未',en:''},
+  'previouslyRun':{zh:'上次',en:'Last run'},
+  'neverRun':{zh:'尚未运行',en:'Not run yet'},
+  'keep':{zh:'保留',en:'Keep'},
+  'keepVer':{zh:'版',en:'ver'},
+  'edit':{zh:'编辑',en:'Edit'},
+  'add':{zh:'添加',en:'Add'},
+  'enable':{zh:'启用',en:'Enable'},
+  'disable':{zh:'停用',en:'Disable'},
+  'saveCred':{zh:'保存凭据',en:'Save Credentials'},
+  'addr':{zh:'地址',en:'Address'},
+  'username':{zh:'用户名',en:'Username'},
+  'password':{zh:'密码',en:'Password'},
+  'usrname':{zh:'用户名',en:'Username'},
+  'pwd':{zh:'密码',en:'Password'},
+  'openUrl':{zh:'打开下载地址',en:'Open download URL'},
+  'dirtyHint':{zh:'个文件不在最新清单元数据中（通常是已被更新淘汰的旧版 ISO）',en:'files not in the latest listing (usually superseded ISOs)'},
+  'cleanStale':{zh:'清理过期',en:'Clean Stale'},
+  'login':{zh:'登录',en:'Login'},
+  'logout':{zh:'登出',en:'Logout'},
+  'notLoggedIn':{zh:'未登录',en:'Not logged in'},
+  'loggedIn':{zh:'已登录',en:'Logged in'},
+  'loginUser':{zh:'用户名:',en:'Username:'},
+  'loginPass':{zh:'密码:',en:'Password:'},
+  'loginFailed':{zh:'登录失败',en:'Login failed'},
+  'oldPwd':{zh:'当前密码',en:'Current password'},
+  'newPwd':{zh:'新密码',en:'New password'},
+  'enterNewPwd':{zh:'请输入新密码',en:'Enter a new password'},
+  'changePwdFailed':{zh:'修改密码失败',en:'Password change failed'},
+  'pwdChanged':{zh:'密码已修改',en:'Password changed'},
+  'askToken':{zh:'该服务设置了访问令牌，请输入 (ISO_HUB_TOKEN):',en:'This service requires an access token (ISO_HUB_TOKEN):'},
+  'changePwd':{zh:'修改密码',en:'Change Password'},
+  'lang':{zh:'语言',en:'Language'},
+  'selectLang':{zh:'选择界面语言',en:'Select UI Language'},
+  'schedules':{zh:'定时任务',en:'Schedules'},
+  'addSchedule':{zh:'添加定时任务',en:'Add Schedule'},
+  'daily':{zh:'每天',en:'Daily'},
+  'weekly':{zh:'每周',en:'Weekly'},
+  'monthly':{zh:'每月',en:'Monthly'},
+  'yearly':{zh:'每年',en:'Yearly'},
+  'at':{zh:'于',en:'at'},
+  'lock':{zh:'锁定',en:'Lock'},
+  'unlock':{zh:'解锁',en:'Unlock'},
+  'locked':{zh:'已锁定',en:'locked'},
+  'unlocked':{zh:'已解锁',en:'unlocked'},
+  'protectFailed':{zh:'操作失败',en:'Operation failed'},
+  'settingsDesc':{zh:'用户、语言、共享设置',en:'User, language & share settings'},
+  'shareDesc':{zh:'说明：开关会实时启动/停止对应共享容器。账号密码初始值来自 docker-compose.yml 的 SAMBA_USER/PASS、WEBDAV_USER/PASS；修改后写入 ./data/settings.json，若共享正在运行需 docker compose restart 使新凭据生效。',en:'Toggles start/stop the share containers live. Credentials come from SAMBA_USER/PASS, WEBDAV_USER/PASS in docker-compose.yml; changes are saved to ./data/settings.json and need a container restart to apply.'},
+  'sambaDesc':{zh:'PVE/Windows 挂载 ISO 库',en:'Mount ISO library from PVE/Windows'},
+  'webdavDesc':{zh:'HTTP WebDAV endpoint',en:'HTTP WebDAV endpoint'},
+  'repoTab':{zh:'发行版源 · 追踪最新版本',en:'Distro source · track latest'},
+  'directTab':{zh:'单一直链',en:'Direct link'},
+  'addDistroSrc':{zh:'添加发行版源',en:'Add Distro Source'},
+  'addDirectLink':{zh:'添加单一直链',en:'Add Direct Link'},
+  'existingSources':{zh:'已有自定义源',en:'Existing Custom Sources'},
+  'syncDesc1':{zh:'对每个已启用的订阅，会',en:'For each enabled subscription, it will'},
+  'syncDescAuto':{zh:'自动',en:'automatically'},
+  'syncDesc2':{zh:'①刷新该发行版元数据 → ②下载最新 N 版 → ③删除组目录中不在最新 N 的过期 ISO。',en:'①refresh metadata → ②download latest N versions → ③delete stale ISOs beyond latest N.'},
+  'syncDesc3':{zh:'也可用服务器 cron 定时调用',en:'You can also call'},
+  'syncDesc4':{zh:'实现全自动。保留版本数 N 可逐组设置。',en:'via cron for full automation. Per-group keep count is configurable.'},
+  'syncRunNow':{zh:'立即执行订阅同步',en:'Run Subscription Sync'},
+  'syncNote':{zh:'同步任务会显示在下方任务日志中',en:'Sync tasks appear in the task log below'},
+  'selTpl':{zh:'— 选择示例模板(自动填充下方配置) —',en:'— Select example template (auto-fills config) —'},
+  'distName':{zh:'发行版名,如',en:'Distro name, e.g.'},
+  'distType':{zh:'类型,默认',en:'Type, default'},
+  'distUrl':{zh:'镜像站目录 URL,如',en:'Mirror dir URL, e.g.'},
+  'regexPlace':{zh:'版本/文件名正则(含 (?P<value>...) 命名组),如',en:'Version/filename regex (with (?P<value>...) named group), e.g.'},
+  'artPlace':{zh:'[高级] artifact_regex: 分版本子页里的文件正则(versioned_flat_listing用)',en:'[advanced] artifact_regex: file regex inside version subpages (for versioned_flat_listing)'},
+  'subPlace':{zh:'[高级] sub_listing_template: 子页URL模板(versioned_flat_listing用),如',en:'[advanced] sub_listing_template: subpage URL template (for versioned_flat_listing), e.g.'},
+  'dlTpl':{zh:'下载模板,如',en:'Download template, e.g.'},
+  'ckTpl':{zh:'校验模板(可选),如',en:'Checksum template (optional), e.g.'},
+  'fixedList':{zh:'固定版本列表(逗号分隔)',en:'Fixed version list (comma separated)'},
+  'keepN':{zh:'保留最新 N 版',en:'Keep latest N versions'},
+  'addRepoBtn':{zh:'添加发行版源(并解析当前最新版本)',en:'Add Distro Source (parse latest)'},
+  'repoHint':{zh:'发行版源每次「抓取元数据/订阅同步」都会重新解析镜像站目录，自动发现并追踪',en:'Distro sources are re-parsed on every meta-fetch/sync, auto-discovering and tracking the'},
+  'repoHint2':{zh:'最新版本',en:'latest version'},
+  'repoHint3':{zh:'，按自然排序保留最新 N 版。正则需匹配镜像站当前页面结构（不同镜像站/版本可能不同，可用模板或自行调整）。',en:', keeping the latest N by natural sort. The regex must match the current mirror page structure.'},
+  'csDist':{zh:'发行版名,如',en:'Distro name, e.g.'},
+  'csType':{zh:'类型,默认',en:'Type, default'},
+  'csUrl':{zh:'ISO 下载直链',en:'ISO direct download URL'},
+  'csCheck':{zh:'校验文件地址(可选, sha256sums.txt)',en:'Checksum file URL (optional)'},
+  'addLinkBtn':{zh:'添加直链',en:'Add Direct Link'},
+  'smbShare':{zh:'SMB 共享',en:'SMB Share'},
+  'davShare':{zh:'WebDAV 共享',en:'WebDAV Share'},
+  'sambaOn':{zh:'运行中',en:'Running'},
+  'sambaCreated':{zh:'已创建(未启动)',en:'Created (not started)'},
+  'sambaExited':{zh:'已停止',en:'Stopped'},
+  'sambaNone':{zh:'未找到容器',en:'Container not found'},
+  'pleaseSel':{zh:'请先勾选要下载的版本',en:'Please select versions to download'},
+  'startFailed':{zh:'启动失败',en:'Failed to start'},
+  'taskStarted':{zh:'任务已启动:',en:'Task started:'},
+  'files':{zh:'个文件',en:'files'},
+  'startedMeta':{zh:'已启动：抓取镜像站最新版本…',en:'Started: fetching latest versions…'},
+  'pruneConfirm':{zh:'确定清理',en:'Confirm cleanup'},
+  'pruneConfirm2':{zh:'组目录下的过期 ISO 吗？\n将删除不在最新清单元数据中的文件。',en:'stale ISOs? Files not in the latest listing will be deleted.'},
+  'deleted':{zh:'已删除',en:'Deleted'},
+  'staleFiles':{zh:'个过期文件',en:'stale files'},
+  'failed':{zh:'失败',en:'Failed'},
+  'subscribedTo':{zh:'已订阅',en:'Subscribed'},
+  'unsubscribed':{zh:'已取消订阅',en:'Unsubscribed'},
+  'subKeepMsg':{zh:'（保留最新 2 版）',en:'(keeping latest 2)'},
+  'saveFailed':{zh:'保存失败',en:'Save failed'},
+  'delConfirm':{zh:'删除该自定义源？不会删除已下载的 ISO。',en:'Delete this source? Downloaded ISOs are kept.'},
+  'delSubConfirm1':{zh:'删除订阅',en:'Delete subscription'},
+  'delSubConfirm2':{zh:'？(不会删除已下载的 ISO，如需保留自动追踪请点镜像列表的★再订阅)',en:'? (Downloaded ISOs are kept. Re-subscribe to resume tracking.)'},
+  'delSubDone':{zh:'已删除订阅',en:'Subscription deleted'},
+  'delFailed':{zh:'删除失败',en:'Delete failed'},
+  'syncStarted':{zh:'订阅同步已启动:',en:'Subscription sync started:'},
+  'distros':{zh:'个发行版',en:'distros'},
+  'fillingTpl':{zh:'已填充模板:',en:'Template loaded:'},
+  'fillDistro':{zh:'请填写发行版名和下载直链',en:'Enter distro name and download URL'},
+  'addFailed':{zh:'添加失败',en:'Add failed'},
+  'addedCustom':{zh:'已添加自定义源',en:'Custom source added'},
+  'deletedSrc':{zh:'已删除',en:'Deleted'},
+  'parsing':{zh:'正在解析发行版源，请稍候…',en:'Parsing distro source, please wait…'},
+  'needUrl':{zh:'请填写镜像站目录URL与下载模板',en:'Enter mirror dir URL and download template'},
+  'addedRepo':{zh:'已添加发行版源，解析出',en:'Distro source added, expanded'},
+  'versionsCount':{zh:'个版本',en:'versions'},
+  'delRepoConfirm1':{zh:'删除发行版源',en:'Delete distro source'},
+  'delRepoConfirm2':{zh:'？(不会删除已下载的 ISO)',en:'? (Downloaded ISOs are kept.)'},
+  'loadedCfg':{zh:'已载入配置，可修改后点「添加发行版源」更新',en:'Config loaded, edit and click Add to update'},
+  'staticNeed':{zh:'static 策略需要填写固定版本列表(逗号分隔)',en:'static strategy requires a fixed version list'},
+  'savedShare':{zh:'共享',en:'Share'},
+  'enabledMsg':{zh:'已启用',en:'Enabled'},
+  'disabledMsg':{zh:'已停用',en:'Disabled'},
+  'credSaved':{zh:'凭据已保存，运行中的共享需 restart 生效',en:'Credentials saved; restart running shares to apply'},
+  'shareErr':{zh:'操作失败',en:'Operation failed'},
+  'clickTitle':{zh:'在该处点击或长按切换语言',en:'Click to switch language'},
+  'adminLogin':{zh:'管理员登录',en:'Admin Login'},
+  'loginTitle':{zh:'请输入管理员账号与密码以继续访问',en:'Enter admin credentials to continue'},
+  'wrongCred':{zh:'账号或密码错误',en:'Wrong username or password'},
+  'oldPwd':{zh:'旧密码',en:'Current password'},
+  'newPwd':{zh:'新密码',en:'New password'},
+  'confirmNewPwd':{zh:'确认新密码',en:'Confirm new password'},
+  'pwdChanged':{zh:'密码已修改',en:'Password changed'},
+  'pwdMismatch':{zh:'两次输入的新密码不一致',en:'New passwords do not match'},
+  'needOldPwd':{zh:'请填写旧密码',en:'Enter current password'},
+  'plsLogin':{zh:'请先登录',en:'Please log in first'},
+  'all':{zh:'全部',en:'All'},
+  'nVersions':{zh:'个版本',en:'versions'},
+  'groups':{zh:'个发行版组',en:'groups'},
+  'sharesConfig':{zh:'共享设置',en:'Share Settings'},
+  'userConfig':{zh:'用户设置',en:'User Settings'},
+  'langConfig':{zh:'语言设置',en:'Language Settings'},
+  'protectList':{zh:'受保护文件',en:'Protected Files'},
+  'protectEmpty':{zh:'暂无受保护文件 —— 在镜像列表每行点 🔒 锁定',en:'No protected files — click 🔒 on any ISO row to lock it'},
+  /* ---------- 定时任务 ---------- */
+  'schedTip':{zh:'每天/周/月/年 自动同步',en:'Auto-sync daily/weekly/monthly/yearly'},
+  'schedName':{zh:'名称,如 每日清晨',en:'Name, e.g. daily morning'},
+  'weekday':{zh:'星期',en:'Weekday'},
+  'dayOfMonth':{zh:'每月第几日',en:'Day of month'},
+  'monthOfYear':{zh:'月份',en:'Month'},
+  'onceAt':{zh:'执行时刻(一次性)',en:'Run time (one-time)'},
+  'w0':{zh:'周一',en:'Mon'},'w1':{zh:'周二',en:'Tue'},'w2':{zh:'周三',en:'Wed'},
+  'w3':{zh:'周四',en:'Thu'},'w4':{zh:'周五',en:'Fri'},'w5':{zh:'周六',en:'Sat'},'w6':{zh:'周日',en:'Sun'},
+  'once':{zh:'一次性',en:'One-time'},
+  'schedEmpty':{zh:'暂无定时任务 —— 添加后将按计划自动同步',en:'No schedules — add one to auto-sync'},
+  'needOnceTime':{zh:'一次性任务请填写执行时刻',en:'Set a run time for one-time schedules'},
+  'schedAdded':{zh:'定时任务已保存',en:'Schedule saved'},
+  'delSchedConfirm':{zh:'删除该定时任务?',en:'Delete this schedule?'},
+  'busy':{zh:'已有任务在运行,请稍候',en:'A task is already running, please wait'},
+  'syncRunNow':{zh:'立即执行订阅同步',en:'Run subscription sync now'},
+};
+let LANG_PREF=localStorage.getItem('iso_hub_lang')||'auto'; // 'zh'|'en'|'auto'
+function detectLang(){return (navigator.language||'zh').toLowerCase().startsWith('zh')?'zh':'en'}
+let LANG=LANG_PREF==='auto'?detectLang():LANG_PREF;
+function t(key){const e=I18N[key];return e?e[LANG]:key}
+function setLang(l){
+  LANG_PREF=l;localStorage.setItem('iso_hub_lang',l);
+  LANG=l==='auto'?detectLang():l;
+  applyLang();
+}
+function applyLang(){
+  document.documentElement.setAttribute('lang',LANG==='zh'?'zh-CN':'en');
+  // 高亮语言按钮
+  ['zh','en','auto'].forEach(p=>{const b=document.getElementById('lang-'+p);if(b)b.classList.toggle('on',LANG_PREF===p)});
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    const k=el.dataset.i18n;const v=t(k);
+    if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'){if(el.dataset.i18nPh!==undefined)el.placeholder=v;else el.value=v}
+    else el.innerHTML=v;
+  });
+  // 刷新动态内容
+  if(typeof refreshSelState==='function')refreshSelState();
+  if(typeof loadDistros==='function')loadDistros();
+  if(typeof loadSubs==='function')loadSubs();
+}
+
+let TOKEN=localStorage.getItem('iso_hub_token')||'';
+let UTOKEN=localStorage.getItem('iso_hub_user')||'';   // 登录会话 token
+const authH=()=>{const t=UTOKEN||TOKEN;return t?{'X-Auth-Token':t}:{}};
+function askToken(){const t=prompt(t('askToken'));if(t){TOKEN=t.trim();localStorage.setItem('iso_hub_token',TOKEN);return true}return false}
+async function jget(u){let r=await fetch(u,{headers:authH()});if(r.status===401){if(!askToken())return{};r=await fetch(u,{headers:authH()})}return r.json()}
+async function jpost(u,b){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{})});if(r.status===401){if(!askToken())return{s:401,j:{error:'unauthorized'}};r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{})})}return{s:r.status,j:await r.json()}}
+
+/* ---------- 数据渲染 ---------- */
+async function loadDistros(){
+  try{const sr=await jget('/api/subscriptions');SUBS=sr.subscriptions||[];}catch(e){}
+  const d=await jget('/api/distros');
+  GROUPS=d.groups||[];
+  render(d);
+}
+function render(d){
+  const groups=d.groups||[];
+  $('#sGroups').textContent=groups.length;
+  const total=groups.reduce((a,g)=>a+g.file_count,0);
+  $('#sFiles').textContent=total;
+  $('#sLocal').textContent=fmt(groups.reduce((a,g)=>a+g.local_total,0));
+  $('#sMeta').textContent=time2str(d.updated_at);
+  const box=$('#groups');box.innerHTML='';
+  if(!groups.length){$('#empty').style.display='';return}
+  $('#empty').style.display='none';
+  groups.forEach(g=>{
+    const card=document.createElement('div');card.className='card';
+    const stray=g.stray_files||[];
+    let rows='';
+    g.entries.forEach(e=>{
+      const st=e.local_size>0?'ok':'none';
+      const label=st==='ok'?('✓ '+t('downloaded')):(st==='old'?t('oldVer'):t('notDownloaded'));
+      rows+=`<tr data-url="${esc(e.download_url)}" data-rel="${esc(g.type)}/${esc(g.name)}/${esc(e.filename)}">
+        <td><input type="checkbox" class="ck" data-url="${esc(e.download_url)}"></td>
+        <td>${st==='ok'?'<span class="badge ok">●</span>':'<span class="badge none">○</span>'}</td>
+        <td><div class="fname">${esc(e.filename)}<a target="_blank" rel="noopener" href="${esc(e.download_url)}" title="${t('openUrl')}">↗</a></div></td>
+        <td class="size">${e.local_size>0?t('local')+' '+fmt(e.local_size):'<span class="muted">—</span>'}</td>
+        <td class="td-r"><span class="badge ${st==='ok'?'ok':st==='old'?'old':'none'}">${label}</span></td>
+        <td class="td-r"><button class="btn-lock ${isProtected(e.filename)?'on':''}" onclick="toggleProtect('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${isProtected(e.filename)?t('unlock'):t('lock')}">${isProtected(e.filename)?'🔒':'🔓'}</button></td>
+      </tr>`;
+    });
+    let strayHtml='';
+    if(stray.length){
+      strayHtml=stray.map(f=>`<tr class="stray"><td></td><td>!</td>
+        <td><div class="fname" title="${esc(t('notDownloaded'))}">${esc(f.name)}</div></td>
+        <td class="size">${fmt(f.size)}</td>
+        <td class="td-r"><span class="badge old">${t('stale')}</span></td></tr>`).join('');
+      strayHtml+=`<tr class="stray"><td></td><td></td>
+        <td colspan="3"><div class="foot-hint">⚠ ${stray.length} ${t('dirtyHint')}
+        <button class="btn-d" onclick="prune('${esc(g.name)}','${esc(g.type)}')">🗑 ${t('cleanStale')} (${stray.length})</button></div></td></tr>`;
+    }
+    card.innerHTML=`<div class="card-head">
+        <button class="btn-fold" onclick="toggleGroupFold(this)" title="${t('foldExpand')}">${isFolded(g.type,g.name)?'▸':'▾'}</button>
+        <input type="checkbox" class="ckg" onclick="toggleGroup(this)">
+        <span class="g-name">${esc(g.name)}</span><span class="chip">${esc(g.type)}</span>
+        <div class="g-meta"><span>${g.file_count} ${t('versions')}</span><span>${t('local')} ${fmt(g.local_total)}</span></div>
+        <button class="btn-fav ${isFav(g.type,g.name)?'on':''}" onclick="toggleFav(this)" title="${isFav(g.type,g.name)?t('unfavGroup'):t('favGroup')}">${isFav(g.type,g.name)?'★':'☆'}</button>
+        <button class="btn-sub ${isSubscribed(g.type,g.name)?'on':''}" onclick="toggleSubscribe('${esc(g.name)}','${esc(g.type)}')" title="${isSubscribed(g.type,g.name)?t('subTipOn'):t('subTipOff')}">${isSubscribed(g.type,g.name)?('★ '+t('subscribed')):('☆ '+t('subscribe'))}</button>
+      </div>
+      <table class="tbl" id="tbl-${esc(g.type)}-${esc(g.name)}" style="${isFolded(g.type,g.name)?'display:none':''}">${rows}${strayHtml}</table>`;
+    box.appendChild(card);
+  });
+  $('#sFiles').textContent=total;
+  // 应用筛选(初始加载/重绘时)
+  if(typeof applyFilter==='function')applyFilter();
+}
+function refreshSelState(){ // 全选按钮文案
+  const cks=[...document.querySelectorAll('.ck')];
+  const on=cks.filter(c=>c.checked).length;
+  allChecked=!!cks.length&&on===cks.length;
+  $('#btnSel').textContent=allChecked?('☐ '+t('deselectAll')):('☑ '+t('selectAll'));
+}
+function toggleAll(){document.querySelectorAll('.ckg').forEach(c=>c.checked=!allChecked);toggleAllGroups(!allChecked)}
+function toggleAllGroups(v){document.querySelectorAll('.ck').forEach(c=>c.checked=v);refreshSelState()}
+function toggleGroup(cb){const g=cb.closest('.card');g.querySelectorAll('.ck').forEach(c=>c.checked=cb.checked);refreshSelState()}
+document.addEventListener('change',e=>{if(e.target.classList.contains('ck'))refreshSelState()});
+
+/* ---------- 操作 ---------- */
+async function downloadSel(){
+  const urlSet=[...document.querySelectorAll('.ck:checked')].map(c=>c.dataset.url);
+  if(!urlSet.length)return toast(t('pleaseSel'),'err');
+  const map=new Map();
+  GROUPS.forEach(g=>g.entries.forEach(e=>map.set(e.download_url,e)));
+  const entries=urlSet.map(u=>{const e=map.get(u);return e?{distribution:e.distribution,download_url:u}:null}).filter(Boolean);
+  const r=await jpost('/api/download',{entries});
+  if(r.s===409)return toast(r.j.error,'err');
+  if(r.s!==200)return toast(r.j.error||t('startFailed'),'err');
+  toast(t('taskStarted')+r.j.files+' '+t('files'));
+  AFTER=0;startPoll(true);
+}
+async function updateMeta(){
+  const r=await jpost('/api/update-meta');
+  if(r.s===409)return toast(r.j.error,'err');
+  toast(t('startedMeta'));AFTER=0;startPoll(true);
+}
+async function prune(name,type){
+  if(!confirm(`${t('pruneConfirm')}「${name}」${t('pruneConfirm2')}`))return;
+  const r=await jpost('/api/prune',{distribution:name,type});
+  toast(r.j.ok?(t('deleted')+' '+r.j.removed.length+' '+t('staleFiles')):(r.j.error||t('failed')),!r.j.ok);
+  loadDistros();
+}
+async function stopTask(){await jpost('/api/stop')}
+
+/* ---------- 任务轮询 ---------- */
+function startPoll(force){
+  if(POLL&&!force)return;
+  clearInterval(POLL);
+  POLL=setInterval(poll,1000);
+}
+async function poll(){
+  const s=await jget('/api/state');
+  const wasRunning=RUNNING;
+  RUNNING=s.running;
+  $('#btnStop').disabled=!RUNNING;
+  $('#btnMeta').disabled=RUNNING;
+  $('#btnDown').disabled=RUNNING;
+  const bar=$('#taskbar');
+  if(RUNNING){
+    bar.classList.add('show');
+    const t=s.task;
+    $('#taskkind').textContent='['+(t.kind==='meta'?t('taskMeta'):t('taskDownload'))+'] '+t.title;
+    if(t.downloads&&t.downloads.length){
+      const now=Date.now();
+      let act=null;
+      for(const d of t.downloads){if(d.size>0&&(!act||d.size>act.size))act=d}
+      const key=act?act.path:'';
+      const p=prev[key];
+      let rate=0;
+      if(act&&p&&now>p.t)rate=(act.size-p.s)/((now-p.t)/1000);
+      prev={};t.downloads.forEach(d=>{prev[d.path]={t:now,s:d.size}});
+      $('#curfile').textContent=act
+        ?(t('curPrefix')+' '+esc(act.filename.split('/').pop())+' · '+fmt(act.size)+(rate>0?' · '+fmt(rate)+'/s':''))
+        :'…';
+    } else $('#curfile').textContent='';
+    // 拉日志
+    fetchLogs();
+    return;
+  }
+  prev={};
+  if(POLL){clearInterval(POLL);POLL=null}
+  bar.classList.remove('show');
+  fetchLogs();
+  if(wasRunning)loadDistros();   // 任务结束,刷新本地磁盘状态
+}
+async function fetchLogs(){
+  const r=await jget('/api/logs?after='+AFTER);
+  AFTER=r.after;
+  if(!r.lines.length)return;
+  const box=$('#log');const autos=box.scrollTop+box.clientHeight>=box.scrollHeight-30;
+  r.lines.forEach(x=>{
+    const d=document.createElement('div');
+    const cls=x.l.startsWith('[任务')||x.l.startsWith('>>>')?'ok':(/失败|错误|✗|WARN|error|Error/i.test(x.l)?'er':'');
+    d.innerHTML=`<span class="lt">${time2str(x.t)}</span> <pre class="${cls}">${esc(x.l)}</pre>`;
+    box.appendChild(d);
+  });
+  if(box.children.length>1500){[...box.children].slice(0,300).forEach(n=>n.remove())}
+  if(autos)box.scrollTop=box.scrollHeight;
+}
+function toggleLog(){const l=$('#log');l.style.display=l.style.display==='none'?'':'none';const h=document.querySelector('.loghead span');if(l.style.display==='none')h.textContent='▸ '+t('taskLogTitle');else h.textContent='▾ '+t('taskLogTitle')}
+
+refreshProtected();   // 先加载受保护名单, 再渲染列表以显示🔒状态
+loadDistros();
+startPoll();
+setInterval(()=>{if(!RUNNING&&!document.hidden)loadDistros()},30000);
+
+/* ---------- 日夜模式 ---------- */
+function applyTheme(theme){
+  document.documentElement.setAttribute('data-theme',theme);
+  localStorage.setItem('iso_hub_theme',theme);
+  const b=document.querySelector('#btnTheme');
+  if(b)b.textContent=theme==='dark'?'☀':'🌙';
+  applyLang();
+}
+function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')}
+(function initTheme(){
+  const saved=localStorage.getItem('iso_hub_theme');
+  const theme=saved||(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  applyTheme(theme);
+  if(window.matchMedia)window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',e=>{
+    if(!localStorage.getItem('iso_hub_theme'))applyTheme(e.matches?'dark':'light');
+  });
+})();
+
+/* ---------- Tab 切换 ---------- */
+function switchTab(tab){
+  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  ['mirror','source','subs','share','settings'].forEach(p=>{
+    document.getElementById('panel-'+p).style.display=(p===tab)?'':'none';
+  });
+  if(tab==='source')loadCustomSources();
+  if(tab==='subs')loadSubs();
+  if(tab==='share')loadShares();
+  if(tab==='settings')loadSettings();
+}
+
+/* ---------- 设置面板 ---------- */
+function loadSettings(){
+  loadShares();
+  loadUserState();
+  renderProtectedList();
+  renderSchedules();
+}
+function renderProtectedList(){
+  const box=$('#protect-list');if(!box)return;
+  jget('/api/protected').then(r=>{
+    const arr=(r.protected||[]).filter(Boolean);
+    const cnt=$('#protect-count');if(cnt)cnt.textContent=arr.length;
+    box.innerHTML=arr.length
+      ? arr.map(p=>`<div class="prot-row" data-p="${esc(p)}">
+          <span class="pn">${esc(p)}</span>
+          <button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="unprotectFromList('${esc(p)}')">🔓 ${t('unlock')}</button>
+        </div>`).join('')
+      : '<div class="empty" style="padding:12px 0">'+t('protectEmpty')+'</div>';
+  });
+}
+function unprotectFromList(p){
+  jpost('/api/protected',{path:p}).then(r=>{
+    if(r.s!==200)return toast(r.j.error||t('protectFailed'),'err');
+    PROTECTED=new Set(r.j.protected||[]);
+    toast(t('unlocked')+' '+p);
+    renderProtectedList();
+    if(typeof loadDistros==='function')loadDistros();
+  });
+}
+async function loadUserState(){
+  const r=await jget('/api/user/me');
+  const ok=r.j&&r.j.authenticated;
+  $('#user-status').textContent=ok?t('loggedIn'):t('notLoggedIn');
+  $('#user-name').textContent=ok?('['+esc(r.j.username)+']'):'';
+  $('#btn-login').textContent=ok?t('logout'):t('login');
+  $('#pwd-form').style.display=ok?'flex':'none';
+}
+/* ---------- 定时任务 ---------- */
+const SCH_WEEK_KEYS=['w0','w1','w2','w3','w4','w5','w6'];
+function schedTypeChanged(){
+  const typ=$('#sch-type').value;
+  $('#sch-week').style.display=typ==='weekly'?'grid':'none';
+  $('#sch-monthly').style.display=typ==='monthly'?'grid':'none';
+  $('#sch-yearly').style.display=typ==='yearly'?'grid':'none';
+  $('#sch-once').style.display=typ==='once'?'grid':'none';
+}
+async function renderSchedules(){
+  const box=$('#sched-list');if(!box)return;
+  const r=await jget('/api/schedules');
+  const arr=r.schedules||[];
+  const cnt=$('#sched-count');if(cnt)cnt.textContent=arr.length;
+  if(!arr.length){box.innerHTML='<div class="empty" style="padding:12px 0">'+t('schedEmpty')+'</div>';return;}
+  box.innerHTML=arr.map(s=>{
+    const when=scheduleDesc(s);
+    const en=s.enabled?'btn-p':'btn-s';
+    const enTxt=s.enabled?t('enabledMsg'):t('disabledMsg');
+    return `<div class="sub-row" style="display:flex;align-items:center;gap:8px;padding:8px 2px">
+      <input type="checkbox" class="sch-en" data-id="${esc(s.id)}" ${s.enabled?'checked':''} onchange="setScheduleEnabled('${esc(s.id)}',this.checked)">
+      <span style="flex:1;min-width:0">
+        <span class="pn" style="font-weight:600">${esc(s.name||s.type)}</span>
+        <span class="muted" style="font-size:11.5px">${esc(when)}</span>
+      </span>
+      <button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="runScheduleNow()">${t('syncRunNow')}</button>
+      <button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="delSchedule('${esc(s.id)}')">🗑</button>
+    </div>`;
+  }).join('');
+}
+function scheduleDesc(s){
+  const tstr=s.time||'00:00';
+  const m={daily:t('daily'),weekly:t('weekly'),monthly:t('monthly'),yearly:t('yearly'),once:t('once')};
+  const base=(m[s.type]||s.type)+' '+tstr+' '+t('at');
+  if(s.type==='weekly')return base+' '+(SCH_WEEK_KEYS[(s.day_of_week||0)]||'');
+  if(s.type==='monthly')return base+' '+t('dayOfMonth')+' '+(s.day_of_month||1);
+  if(s.type==='yearly')return base+' '+(s.month_of_year||1)+'/'+(s.day_of_month||1);
+  if(s.type==='once'&&s.scheduled_at){const d=new Date(s.scheduled_at*1000);return base+' '+d.toLocaleString();}
+  return base;
+}
+async function setScheduleEnabled(id,en){
+  const r=await jget('/api/schedules');
+  const s=(r.schedules||[]).find(x=>x.id===id);if(!s)return;
+  s.enabled=en;
+  const r2=await jpost('/api/schedules',s);
+  if(r2.s!==200)return toast(r2.j.error||t('shareErr'),'err');
+  toast(en?t('enabledMsg'):t('disabledMsg'));renderSchedules();
+}
+async function addSchedule(){
+  const name=$('#sch-name').value.trim()||t('schedules');
+  const typ=$('#sch-type').value;
+  const time=$('#sch-time').value||'00:00';
+  const body={name,type:typ,time,
+    day_of_week:+$('#sch-dow').value||0,
+    day_of_month:+$('#sch-dom').value||1,
+    month_of_year:+$('#sch-moy').value||1};
+  if(typ==='once'){
+    const v=$('#sch-once-time').value;
+    if(!v)return toast(t('needOnceTime'),'err');
+    body.scheduled_at=Math.floor(new Date(v).getTime()/1000);
+  }else{
+    body.scheduled_at=0;
+  }
+  const r=await jpost('/api/schedules',body);
+  if(r.s!==200)return toast(r.j.error||t('shareErr'),'err');
+  toast(t('schedAdded'));renderSchedules();
+}
+async function delSchedule(id){
+  if(!confirm(t('delSchedConfirm')))return;
+  const r2=await fetch('/api/schedules?id='+encodeURIComponent(id),{method:'DELETE',headers:authH()});
+  if(!r2.ok)return toast(t('shareErr'),'err');
+  toast(t('schedAdded')+' ✔');renderSchedules();
+}
+async function runScheduleNow(){
+  const r=await jpost('/api/schedules/run');
+  if(r.s===409)return toast(r.j.error,'err');
+  if(r.s!==200)return toast(r.j.error||t('startFailed'),'err');
+  toast(t('syncStarted'));
+  AFTER=0;if(typeof startPoll==='function')startPoll(true);if(typeof switchTab==='function')switchTab('mirror');
+}
+async function runSyncNow(){
+  const r=await jpost('/api/sync-subscriptions');
+  if(r.s===409)return toast(r.j.error,'err');
+  if(r.s!==200)return toast(r.j.error||t('startFailed'),'err');
+  toast(t('syncStarted')+' '+r.j.count+' '+t('distros'));
+  AFTER=0;if(typeof startPoll==='function')startPoll(true);if(typeof switchTab==='function')switchTab('mirror');
+}
+function showLogin(){
+  // 若已登录则登出，否则弹出登录框
+  if($('#user-status').textContent===t('loggedIn')){
+    jpost('/api/user/logout').then(r=>{
+      UTOKEN='';localStorage.removeItem('iso_hub_user');
+      loadUserState();loadDistros();
+    });
+  }else{
+    const u=prompt(t('loginUser'));
+    if(u==null)return;
+    const p=prompt(t('loginPass'));
+    if(p==null)return;
+    jpost('/api/user/login',{username:u,password:p}).then(r=>{
+      if(r.s!==200)return toast(r.j.error||t('loginFailed'),'err');
+      UTOKEN=r.j.token||'';localStorage.setItem('iso_hub_user',UTOKEN);
+      loadUserState();loadDistros();
+    });
+  }
+}
+async function changePassword(){
+  const old=$('#pwd-old').value.trim(),nw=$('#pwd-new').value.trim();
+  if(!nw)return toast(t('enterNewPwd'),'err');
+  const r=await jpost('/api/user/password',{old_password:old,new_password:nw});
+  if(r.s!==200)return toast(r.j.error||t('changePwdFailed'),'err');
+  toast(t('pwdChanged'));$('#pwd-old').value=$('#pwd-new').value='';
+}
+
+/* ---------- 自定义源 ---------- */
+const SRC_TPL={
+  ubuntu:{type:'linux',dist:'Ubuntu',strategy:'dated_directory',listing:'https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/',
+    regex:'href="(?P<value>\\d+(?:\\.\\d+)*)/"',dltpl:'{listing_url}{version}/ubuntu-{version}-desktop-amd64.iso',chktpl:'{listing_url}{version}/SHA256SUMS'},
+  'ubuntu-live':{type:'linux',dist:'Ubuntu',strategy:'dated_directory',listing:'https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/',
+    regex:'href="(?P<value>\\d+(?:\\.\\d+)*)/"',dltpl:'{listing_url}{version}/ubuntu-{version}-live-server-amd64.iso',chktpl:'{listing_url}{version}/SHA256SUMS'},
+  arch:{type:'linux',dist:'Arch',strategy:'dated_directory',listing:'https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/',
+    regex:'href="(?P<value>\\d{4}\\.\\d{2}\\.\\d{2})/"',dltpl:'{listing_url}{version}/archlinux-{version}-x86_64.iso',chktpl:'{listing_url}{version}/sha256sums.txt'},
+  'fedora-work':{type:'linux',dist:'Fedora',strategy:'versioned_flat_listing',listing:'https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/',
+    regex:'href="(?P<value>\\d+)/"',dltpl:'{sub_listing_url}Fedora-Workstation-Live-{release}-x86_64.iso',chktpl:'{sub_listing_url}Fedora-Workstation-{release}-x86_64-CHECKSUM',
+    artifact:'href="(?P<value>Fedora-Workstation-Live-(?:x86_64-)?(?P<release>[\\d.-]+)(?:\\.x86_64)?\\.iso)"',sub:'{listing_url}{version}/Workstation/x86_64/iso/'},
+  'proxmox-ve':{type:'linux',dist:'Proxmox',strategy:'flat_listing',listing:'https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/',
+    regex:'filename">(?P<value>proxmox-ve_[\\d.]+-\\d\\.iso)<',dltpl:'{listing_url}{match}',chktpl:'{listing_url}SHA256SUMS'},
+  debian:{type:'linux',dist:'Debian',strategy:'flat_listing',listing:'https://mirrors.tuna.tsinghua.edu.cn/debian-cd/current/amd64/iso-cd/',
+    regex:'href="(?P<value>debian-[\\d.]+-amd64-netinst\\.iso)"',dltpl:'{listing_url}{match}',chktpl:'{listing_url}SHA256SUMS'},
+};
+function switchSrc(t){
+  document.querySelectorAll('.src-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
+  document.getElementById('src-'+t).style.display=t==='repo'?'':'none';
+}
+function toggleVersionsRow(){document.getElementById('rs-versions-row').style.display=$('#rs-strategy').value==='static'?'flex':'none'}
+function applySrcTpl(){
+  const t=SRC_TPL[$('#rs-tpl').value];if(!t)return;
+  $('#rs-dist').value=t.dist||'';
+  $('#rs-type').value=t.type||'linux';
+  $('#rs-strategy').value=t.strategy||'dated_directory';
+  $('#rs-listing').value=t.listing||'';
+  $('#rs-regex').value=t.regex||'';
+  $('#rs-art').value=t.artifact||'';
+  $('#rs-sub').value=t.sub||'';
+  $('#rs-dltpl').value=t.dltpl||'';
+  $('#rs-chktpl').value=t.chktpl||'';
+  $('#rs-max').value=(t.max||2);
+  if(t.versions)$('#rs-versions').value=t.versions.join(',');else $('#rs-versions').value='';
+  $('#rs-versions-row').style.display=(t.strategy==='static')?'':'none';
+  toast(t('fillingTpl')+' '+$('#rs-tpl').selectedOptions[0].text);
+}
+async function loadCustomSources(){
+  const r=await jget('/api/custom-sources');
+  const arr=r.sources||[];
+  $('#cs-count').textContent=arr.length;
+  const box=$('#cs-list');box.innerHTML='';
+  if(!arr.length){box.innerHTML='<div class="empty" style="padding:16px 0">'+t('noCustomSrc')+'</div>';return}
+  arr.forEach(c=>{
+    const d=document.createElement('div');d.className='cs-item';
+    if(c.strategy){
+      d.innerHTML=`<span class="cn">${esc(c.distribution)}</span><span class="chip" style="font-size:10.5px" title="${t('repoTab')}">📈 ${esc(c.strategy)}</span>
+        <span class="cu">${esc(c.listing_url)}</span>
+        <button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="applySrcEdit('${esc(c.distribution)}','${esc(c.strategy)}')">${t('edit')}</button>
+        <button class="btn-d" style="padding:4px 10px;font-size:11.5px" onclick="delSrcRepo('${esc(c.distribution)}','${esc(c.strategy)}')">🗑</button>`;
+    }else{
+      d.innerHTML=`<span class="cn">${esc(c.distribution)}</span><span class="chip" style="font-size:10.5px">${esc(c.type||'linux')}</span>
+        <span class="cu">${esc(c.download_url)}</span>
+        <button class="btn-d" onclick="delCustomSource('${esc(c.download_url)}')" style="padding:4px 10px;font-size:11.5px">🗑</button>`;
+    }
+    box.appendChild(d);
+  });
+}
+async function addCustomSource(){
+  const distribution=$('#cs-dist').value.trim(), type=$('#cs-type').value.trim()||'linux';
+  const url=$('#cs-url').value.trim(), check=$('#cs-check').value.trim();
+  if(!distribution||!url)return toast(t('fillDistro'),'err');
+  const r=await jpost('/api/custom-sources',{distribution,type,download_url:url,checksum_url:check});
+  if(!r.j.ok)return toast(r.j.error||t('addFailed'),'err');
+  toast(t('addedCustom'));$('#cs-dist').value=$('#cs-type').value=$('#cs-url').value=$('#cs-check').value='';
+  loadCustomSources();loadDistros();
+}
+async function delCustomSource(url){
+  if(!confirm(t('delConfirm')))return;
+  const r=await fetch('/api/custom-sources?url='+encodeURIComponent(url),{method:'DELETE',headers:authH()});
+  toast(t('deletedSrc'));loadCustomSources();loadDistros();
+}
+function srcRepoPayload(){
+  const p={
+    distribution:$('#rs-dist').value.trim()||'Custom',
+    type:$('#rs-type').value.trim()||'linux',
+    strategy:$('#rs-strategy').value,
+    listing_url:$('#rs-listing').value.trim(),
+    version_regex:$('#rs-regex').value.trim(),
+    artifact_regex:$('#rs-art').value.trim(),
+    sub_listing_template:$('#rs-sub').value.trim(),
+    download_template:$('#rs-dltpl').value.trim(),
+    checksum_template:$('#rs-chktpl').value.trim(),
+    max_entries:+$('#rs-max').value||1,
+  };
+  if(p.strategy==='static'){
+    p.versions=($('#rs-versions').value||'').split(',').map(s=>s.trim()).filter(Boolean);
+    if(!p.versions.length){toast(t('staticNeed'),'err');return null}
+  }
+  return p;
+}
+async function addSrcRepo(){
+  const p=srcRepoPayload();if(!p)return;
+  if(!p.listing_url||!p.download_template)return toast(t('needUrl'),'err');
+  toast(t('parsing'));
+  const r=await jpost('/api/custom-sources',p);
+  if(!r.j.ok)return toast(r.j.error||t('addFailed'),'err');
+  toast(t('addedRepo')+' '+r.j.expanded+' '+t('versionsCount'));loadCustomSources();loadDistros();
+}
+async function delSrcRepo(dist,strategy){
+  if(!confirm(`${t('delRepoConfirm1')}「${dist}」${t('delRepoConfirm2')}`))return;
+  const r=await fetch('/api/custom-sources?distribution='+encodeURIComponent(dist)+'&strategy='+encodeURIComponent(strategy),{method:'DELETE',headers:authH()});
+  toast(t('deletedSrc'));loadCustomSources();loadDistros();
+}
+async function applySrcEdit(dist,strategy){
+  const r=await jget('/api/custom-sources');
+  const c=(r.sources||[]).find(x=>x.distribution===dist&&x.strategy===strategy);if(!c)return;
+  $('#rs-dist').value=c.distribution;$('#rs-type').value=c.type||'linux';
+  $('#rs-strategy').value=c.strategy;
+  $('#rs-listing').value=c.listing_url||'';$('#rs-regex').value=c.version_regex||'';
+  $('#rs-art').value=c.artifact_regex||'';$('#rs-sub').value=c.sub_listing_template||'';
+  $('#rs-dltpl').value=c.download_template||'';$('#rs-chktpl').value=c.checksum_template||'';
+  $('#rs-max').value=c.max_entries||1;
+  $('#rs-versions').value=(c.versions||[]).join(',');toggleVersionsRow();
+  switchSrc('repo');switchTab('source');
+  toast(t('loadedCfg'));
+}
+
+/* ---------- 订阅同步 ---------- */
+function isSubscribed(type,name){return SUBS.some(s=>s.type===type&&s.distribution===name)}
+const FOLD_KEY='iso_hub_folded';
+function foldedSet(){try{return new Set(JSON.parse(localStorage.getItem(FOLD_KEY)||'[]'))}catch(e){return new Set()}}
+function isFolded(type,name){return foldedSet().has(type+'|'+name)}
+function saveFolded(set){localStorage.setItem(FOLD_KEY,JSON.stringify([...set]))}
+function toggleGroupFold(btn){
+  const head=btn.closest('.card-head');
+  const tbl=head.parentElement.querySelector('.tbl');
+  const key=btn.parentElement.querySelector('.chip').textContent+'|'+btn.parentElement.querySelector('.g-name').textContent;
+  const set=foldedSet();
+  if(tbl.style.display==='none'){tbl.style.display='';btn.textContent='▾';set.delete(key)}
+  else{tbl.style.display='none';btn.textContent='▸';set.add(key)}
+  saveFolded(set);
+}
+/* ---------- 收藏 & 筛选 ---------- */
+const FAV_KEY='iso_hub_fav';
+let FILTER=localStorage.getItem('iso_hub_filter')||'all';
+function favSet(){try{return new Set(JSON.parse(localStorage.getItem(FAV_KEY)||'[]'))}catch(e){return new Set()}}
+function isFav(type,name){return favSet().has(type+'|'+name)}
+function saveFav(set){localStorage.setItem(FAV_KEY,JSON.stringify([...set]))}
+function toggleFav(btn){
+  const head=btn.closest('.card-head');
+  const key=btn.parentElement.querySelector('.chip').textContent+'|'+btn.parentElement.querySelector('.g-name').textContent;
+  const set=favSet();
+  if(set.has(key)){set.delete(key);btn.textContent='☆';btn.title=t('unfavGroup')}
+  else{set.add(key);btn.textContent='★';btn.title=t('favGroup')}
+  saveFav(set);applyFilter();renderCurrent();
+}
+/* ---------- 受保护/锁定 ---------- */
+let PROTECTED=new Set();
+function refreshProtected(){
+  jget('/api/protected').then(r=>{
+    PROTECTED=new Set(r.protected||[]);
+    if(typeof loadDistros==='function')loadDistros();
+  });
+}
+function isProtected(name){
+  // 支持按文件名或相对路径匹配
+  if(PROTECTED.has(name))return true;
+  return [...PROTECTED].some(p=>p.endsWith('/'+name));
+}
+function toggleProtect(type,name,file,btn){
+  const rel=type+'/'+name+'/'+file;
+  jpost('/api/protected',{path:rel}).then(r=>{
+    if(r.s!==200)return toast(r.j.error||t('protectFailed'),'err');
+    PROTECTED=new Set(r.j.protected||[]);
+    const locked=r.j.protected.includes(rel)||isProtected(file);
+    btn.textContent=locked?'🔒':'🔓';
+    btn.title=locked?t('unlock'):t('lock');
+    btn.classList.toggle('on',locked);
+    toast(locked?(file+' '+t('locked')):(file+' '+t('unlocked')));
+  });
+}
+function setFilter(v){FILTER=v;localStorage.setItem('iso_hub_filter',v);renderCurrent()}
+function applyFilter(){
+  const f=FILTER;
+  document.querySelectorAll('.card').forEach(card=>{
+    const chipEl=card.querySelector('.chip');
+    const nameEl=card.querySelector('.g-name');
+    if(!chipEl||!nameEl)return;   // 跳过设置/共享等非发行版组卡片(它们无 .chip 或 .g-name)
+    const chip=chipEl.textContent;
+    const name=nameEl.textContent;
+    const key=chip+'|'+name;
+    const fav=favSet().has(key);
+    // 计算组内是否含匹配行（已下载/未下载）
+    let match=true;
+    if(f==='downloaded')match=!!card.querySelector('.tbl tr .badge.ok');
+    else if(f==='not_downloaded')match=!!card.querySelector('.tbl tr .badge.none');
+    else if(f==='fav')match=fav;
+    // 对 downloaded/not_downloaded 还需逐行隐藏不匹配行
+    if(f==='downloaded'||f==='not_downloaded'){
+      card.querySelectorAll('.tbl tbody tr, .tbl tr').forEach(tr=>{
+        if(tr.classList.contains('stray')){tr.style.display='none';return}
+        const b=tr.querySelector('.badge');
+        const ok=b&&b.classList.contains('ok');
+        const none=b&&b.classList.contains('none');
+        const show=f==='downloaded'?ok:none;
+        tr.style.display=show?'':'none';
+      });
+    }else{
+      card.querySelectorAll('.tbl tr').forEach(tr=>{tr.style.display=''});
+    }
+    card.style.display=match?'':'none';
+  });
+}
+function renderCurrent(){if(typeof GROUPS!=='undefined'&&GROUPS.length)loadDistros()}
+async function toggleSubscribe(name,type){
+  const r=await jget('/api/subscriptions');
+  let subs=r.subscriptions||[];
+  const idx=subs.findIndex(s=>s.type===type&&s.distribution===name);
+  if(idx>=0){
+    subs.splice(idx,1);
+    toast(t('unsubscribed')+' '+name);
+  }else{
+    subs.push({distribution:name,type:type||'linux',enabled:true,keep:2,last_run:0});
+    toast(t('subscribedTo')+' '+name+' '+t('subKeepMsg'));
+  }
+  const r2=await jpost('/api/subscriptions',{subscriptions:subs});
+  if(r2.s!==200)return toast(r2.j.error||t('saveFailed'),'err');
+  SUBS=subs;
+  loadDistros(); // 刷新列表更新订阅按钮状态
+}
+async function loadSubs(){
+  const r=await jget('/api/subscriptions');
+  const arr=r.subscriptions||[];
+  SUBS=arr; // 同步全局,供镜像列表订阅按钮判断
+  const box=$('#subs-list');box.innerHTML='';
+  if(!arr.length){
+    box.innerHTML='<div class="empty" style="padding:16px 0">'+t('emptySubs')+'</div>';
+    return;
+  }
+  arr.forEach(s=>{
+    const d=document.createElement('div');d.className='sub-row';
+    d.dataset.last=s.last_run||0;
+    d.dataset.name=esc(s.distribution);d.dataset.type=esc(s.type||'linux');
+    d.innerHTML=`<input type="checkbox" class="sub-en" ${s.enabled?'checked':''}>
+      <span class="sname">${esc(s.distribution)}</span><span class="chip" style="font-size:10.5px">${esc(s.type||'linux')}</span>
+      <label class="keep">${t('keep')} <input type="number" min="1" max="9" value="${s.keep||2}" class="sub-keep"> ${t('keepVer')}</label>
+      <span class="sstat">${s.last_run?(t('previouslyRun')+' '+time2str(s.last_run)):t('neverRun')}</span>
+      <button class="btn-d sub-del" onclick="delSub(this)" title="${t('delSubConfirm2')}">🗑</button>`;
+    box.appendChild(d);
+  });
+  box.onchange=e=>{if(e.target.classList.contains('sub-en')||e.target.classList.contains('sub-keep'))saveSubs()};
+}
+async function delSub(btn){
+  const row=btn.closest('.sub-row');
+  const name=row.dataset.name, type=row.dataset.type;
+  if(!confirm(`${t('delSubConfirm1')}「${name}」${t('delSubConfirm2')}`))return;
+  let subs=SUBS.filter(s=>!(s.type===type&&s.distribution===name));
+  const r=await jpost('/api/subscriptions',{subscriptions:subs});
+  if(r.s!==200)return toast(r.j.error||t('delFailed'),'err');
+  SUBS=subs;toast(t('delSubDone')+' '+name);loadSubs();loadDistros();
+}
+async function saveSubs(){
+  const subs=[...document.querySelectorAll('#subs-list .sub-row')].map(row=>({
+    distribution:row.dataset.name,
+    type:row.dataset.type||'linux',
+    enabled:row.querySelector('.sub-en').checked,
+    keep:+row.querySelector('.sub-keep').value||2,
+    last_run:+(row.dataset.last||0)||0,
+  }));
+  SUBS=subs; // 同步到全局
+  await jpost('/api/subscriptions',{subscriptions:subs});
+}
+async function syncSubs(){
+  const r=await jpost('/api/sync-subscriptions');
+  if(r.s===409)return toast(r.j.error,'err');
+  if(r.s!==200)return toast(r.j.error||t('startFailed'),'err');
+  toast(t('syncStarted')+' '+r.j.count+' '+t('distros'));
+  AFTER=0;startPoll(true);switchTab('mirror');
+}
+
+/* ---------- 网络共享 ---------- */
+const CONTAINER_OK={'running':()=>'● '+t('sambaOn'),'created':()=>'○ '+t('sambaCreated'),'exited':()=>'■ '+t('sambaExited'),'none':()=>'？ '+t('sambaNone')};
+async function loadShares(){
+  const r=await jget('/api/shares');
+  const s=r.shares||{};
+  for(const proto of ['samba','webdav']){
+    const cfg=s[proto]||{};
+    const sw=$('#sw-'+proto); if(sw)sw.checked=!!cfg.enabled;
+    const uin=$('#u-'+proto); if(uin)uin.value=cfg.username||'';
+    const pin=$('#p-'+proto); if(pin)pin.value=cfg.password||'';
+    const st=$('#st-'+proto);
+    const key=cfg.container||'none';
+    if(st){st.textContent=(CONTAINER_OK[key]||(()=>key))();st.className='sstat '+(cfg.enabled&&cfg.container==='running'?'':'muted');}
+    // 设置面板镜像控件
+    if($('#sw-'+proto+'2'))$('#sw-'+proto+'2').checked=!!cfg.enabled;
+    if($('#u-'+proto+'2'))$('#u-'+proto+'2').value=cfg.username||'';
+    if($('#p-'+proto+'2'))$('#p-'+proto+'2').value=cfg.password||'';
+    const st2=$('#st-'+proto+'2');
+    if(st2){st2.textContent=(CONTAINER_OK[key]||(()=>key))();st2.className='sstat '+(cfg.enabled&&cfg.container==='running'?'':'muted');}
+  }
+}
+async function saveShare(proto,enabled){
+  const body={};body[proto]={enabled:enabled};
+  const r=await jpost('/api/shares',body);
+  if(r.s!==200)return toast(r.j.error||t('shareErr'),'err');
+  toast((enabled?t('enabledMsg'):t('disabledMsg'))+' '+proto.toUpperCase()+' '+t('savedShare'));
+  loadShares();
+}
+async function saveShareCred(proto){
+  const body={};body[proto]={username:$('#u-'+proto).value.trim(),password:$('#p-'+proto).value.trim()};
+  const r=await jpost('/api/shares',body);
+  if(r.s!==200)return toast(r.j.error||t('saveFailed'),'err');
+  toast(proto.toUpperCase()+' '+t('credSaved'));
+  loadShares();
+}
+async function saveShareCred2(proto){
+  const body={};body[proto]={username:$('#u-'+proto+'2').value.trim(),password:$('#p-'+proto+'2').value.trim()};
+  const r=await jpost('/api/shares',body);
+  if(r.s!==200)return toast(r.j.error||t('saveFailed'),'err');
+  toast(proto.toUpperCase()+' '+t('credSaved'));
+  loadShares();
+}
+</script>
+</body>
+</html>

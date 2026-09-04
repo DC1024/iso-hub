@@ -1,0 +1,135 @@
+# ISO Hub · 网页版 Linux 发行版 ISO 自动更新器
+
+把上游 [Sowevo/iso_download](https://github.com/Sowevo/iso_download)（纯 CLI）封装成
+**带网页界面的 Docker 服务**：网页上勾选要下载的发行版/版本，后台实时下载、SHA256 校验；
+一键抓取镜像站目录自动刷新"最新版本"元数据；过期旧 ISO 可视化清理。
+
+## 功能
+
+| 能力 | 说明 |
+|---|---|
+| 📋 发行版/版本列表 | 按发行版分组展示（Arch/Ubuntu/Fedora/Deepin/Proxmox/CentOS），含本地是否已下载 |
+| ⬇ 选择性下载 | 可勾选**单个版本文件**或整组，后台顺序下载，日志实时输出 |
+| ⤓ 元数据自动更新 | 抓取清华镜像站目录，把最新版本写入持久化清单（默认每组保留最新 3 个版本） |
+| ✓ SHA256 校验 | 下载后自动校验（在线 checksum 优先，其次清单内置值） |
+| 🗑 过期清理 | 标记并一键删除"不在最新清单中"的旧 ISO（如 Ubuntu 25.10 → 26.04 后被淘汰的版本） |
+| 📊 实时进度 | 顶部任务条显示当前文件、已下载大小与速率；下方日志面板实时滚动 |
+| 🔗 自定义源 | 「自定义源」页可添加官方/第三方镜像站的**任意直链**，独立保存、不会被元数据刷新覆盖 |
+| ⭐ 订阅同步 | 每个发行版可设「订阅」：自动刷元数据→下载最新 N 版→删旧版，内置调度器定时全自动执行 |
+| 🌓 日夜模式 | 右上角一键切换日/夜间主题，记忆到本地并跟随系统深色偏好 |
+| 📡 网络共享 | 内置 SMB + WebDAV 共享容器，把 `./data` 里的 ISO 分享给 PVE/Windows/其他设备挂载 |
+
+默认数据源为**清华 TUNA 镜像站**（国内速度快）。支持的版本策略见上游 `sources_config.json`。
+
+## 快速开始
+
+```bash
+git clone 本项目  # 或直接拷贝 iso-hub/ 目录到服务器
+cd iso-hub
+
+# 构建并启动（可选设置访问令牌）
+# echo "ISO_HUB_TOKEN=换成你的随机密码" > .env
+docker compose up -d --build
+```
+
+打开 `http://<服务器IP>:8899` 即可使用。**首次登录后建议先点右上角「抓取最新版本元数据」**，
+将内置样例清单刷新为当前镜像站上的最新版本列表。
+
+### 常用命令
+
+```bash
+docker compose logs -f iso-hub   # 看服务日志
+docker compose restart iso-hub   # 重启
+docker exec iso-hub python /app/iso_download/update_distributions.py --output /data/distributions.json --pretty  # 手动刷元数据
+```
+
+## 端口 / 目录 / 环境变量
+
+| 项目 | 默认 | 说明 |
+|---|---|---|
+| 端口 | `8899:8080` | 左侧宿主机端口，可用 `ISO_HUB_PORT=xxxx docker compose up -d` 覆盖 |
+| 数据卷 | `./data:/data` | ISO 全部落盘于此：`data/linux/<发行版>/<版本>.iso`，另有 `distributions.json`/`custom_sources.json`/`subscriptions.json` 元数据 |
+| `ISO_HUB_TOKEN` | 空 | 设置后所有写操作需网页弹窗输入令牌，建议公网/多设备环境开启 |
+| `ISO_HUB_SYNC_INTERVAL` | `86400` | 订阅自动同步间隔(秒)；0=关闭内置调度器 |
+| `SAMBA_PORT`/`SAMBA_USER`/`SAMBA_PASS` | `445`/`iso`/`iso123` | SMB 共享端口与凭据 |
+| `WEBDAV_PORT`/`WEBDAV_USER`/`WEBDAV_PASS` | `8081`/`iso`/`iso123` | WebDAV 共享端口与凭据 |
+| `TZ` | `Asia/Shanghai` | 时区 |
+
+> 无鉴权功能，若暴露到公网请务必配置 `ISO_HUB_TOKEN` 或置于反代（Caddy/Nginx Basic Auth）之后。
+
+## 数据目录结构
+
+```
+data/
+├── distributions.json      # 当前发行版清单(手动/自动更新生成, 持久化)
+├── custom_sources.json     # 自定义镜像源(独立保存, 不被刷新覆盖)
+├── subscriptions.json      # 订阅配置(发行版/保留版本数/开关/上次运行)
+└── linux/                  # 下载目录: {type}/{发行版}/{文件}
+    ├── Ubuntu/ubuntu-26.04-live-server-amd64.iso
+    └── Proxmox/proxmox-ve_9.1-1.iso
+```
+
+## 网络共享 (SMB / WebDAV)
+
+下载的 ISO 已映射到宿主机 `./data`，compose 额外启动两个共享容器把同一目录暴露给局域网：
+
+| 协议 | 访问地址 | 账号/密码 |
+|---|---|---|
+| **SMB** (PVE/Windows 挂载) | `smb://<服务器IP>:1445/iso` | 默认 `iso` / `iso123` |
+| **WebDAV** | `http://<服务器IP>:8081/dav` | 默认 `iso` / `iso123` |
+
+- 两个共享都是**只读**，防止误改 ISO。
+- 在 `.env` 改 `SAMBA_USER/SAMBA_PASS` 和 `WEBDAV_USER/WEBDAV_PASS` 修改账号密码。
+- **PVE 使用**：数据中心 → 存储 → 添加 → SMB/CIFS，服务器填 IP，**端口填 1445**，共享填 `iso`，用户名密码 `iso/iso123`，即可把 ISO 挂成 PVE 的 ISO 存储直接安装。
+
+> 端口说明：Z4Pro 宿主机**自带 Samba** 已占用 445/139/137/138，故容器版 Samba 映射到高位端口 **1445(445)/1139(139)/1137(137)/1138(138)** 避免冲突。若你部署的机器没跑原生 Samba，可用 `SAMBA_PORT=445` 等环境变量改回标准端口。访问地址里的 `:1445` 也要随端口改动。
+
+## 自定义源 (官方/镜像站任意直链)
+
+「自定义源」页可添加清单里没有的发行版或版本（如 Kali、特定 LTS、官方地址等）：
+
+- 只需填**发行版名 + ISO 直链**，可选校验文件地址。
+- 独立保存到 `custom_sources.json`，**「抓取最新版本元数据」不会覆盖它**；订阅同步也会把它并入候选池。
+- 会在「镜像列表」中自动合并显示、可勾选下载。
+
+## 订阅同步 (全自动拉新+删旧)
+
+「订阅同步」页对每个发行版组可开启订阅：
+
+1. 设置 **保留 N 个最新版本**（默认 2）。
+2. 开启订阅后，会**自动**：刷新该发行版元数据 → 下载最新 N 版 → 删除组目录中不在最新 N 的过期 ISO。
+3. **内置调度器**默认每天（`ISO_HUB_SYNC_INTERVAL`，秒，设 0 关闭）自动执行一次。
+4. 也可在服务器用 cron 定时调接口实现任意时刻全自动同步：
+   ```bash
+   # 每天凌晨 3 点执行订阅同步 (替换端口/令牌)
+   0 3 * * * curl -s -X POST -H "X-Auth-Token: 你的令牌" http://127.0.0.1:8899/api/sync-subscriptions
+   ```
+5. UI 右上角「🔄 订阅同步」可手动立即触发一次。
+
+## 日夜模式
+
+右上角 🌓 按钮一键切换日/夜间主题，选择会记忆到浏览器 localStorage；若未手动选过则自动跟随系统深色偏好（`prefers-color-scheme`）。
+
+## 工作原理（对应上游两个脚本）
+
+1. **元数据刷新** → 运行 `update_distributions.py --config sources_config.json --output /data/distributions.json --pretty`：
+   请求清华镜像站目录 → 正则提取版本目录 → 组合下载/校验 URL → 排序写入清单（每组保留最新 N 个版本）。
+2. **选择性下载** → 本项目自带 `web/iso_runner.py`：复用上游 `LinuxDistributionDownloader`，但只下载所选条目、
+   **禁用自动清理**（避免误删同组未选文件），下载完做 SHA256 校验；校验失败自动删文件重下。
+
+## 升级上游脚本
+
+```bash
+# 在 iso-hub 目录内
+rm -rf iso_download && git clone --depth 1 https://github.com/Sowevo/iso_download.git iso_download
+# (国内无法直连 GitHub 时, 可下载加速镜像 zip: ghfast.top / gh-proxy.com / ghproxy.net 前缀)
+docker compose up -d --build
+```
+
+## 说明与限制
+
+- 同一时刻只运行**一个任务**（下载或刷元数据互斥），UI 上有任务进度条。
+- 中断/停止任务会留下不完整文件，下次下载该校验失败会自动覆盖重下。
+- 清单元数据默认保留各组**最新 3 个版本**（上游策略），想调整请在
+  `iso_download/sources_config.json` 修改各 source 的 `max_entries` 后重建镜像。
+- 上游项目 README 免责声明：脚本由 AI 生成，使用风险自负（代码均已本地审查，逻辑简单清晰）。
