@@ -212,6 +212,8 @@ def build_distros() -> dict:
         local = next((f for f in inv.get(key, []) if f["name"] == fname), None)
         groups[key]["entries"].append(
             {
+                "distribution": name,
+                "type": typ,
                 "filename": fname,
                 "download_url": url,
                 "checksum_url": e.get("checksum_url", ""),
