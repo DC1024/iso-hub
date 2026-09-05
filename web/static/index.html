@@ -227,7 +227,6 @@
     <button class="tab active" data-tab="mirror" onclick="switchTab('mirror')" data-i18n="mirror">📦 镜像列表</button>
     <button class="tab" data-tab="source" onclick="switchTab('source')" data-i18n="source">🔗 自定义源</button>
     <button class="tab" data-tab="subs" onclick="switchTab('subs')" data-i18n="subs">⭐ 订阅同步</button>
-    <button class="tab" data-tab="share" onclick="switchTab('share')" data-i18n="share">📡 网络共享</button>
     <button class="tab" data-tab="settings" onclick="switchTab('settings')" data-i18n="settings">⚙️ 设置</button>
   </nav>
 
@@ -342,44 +341,6 @@
     </div>
   </div>
 
-  <!-- 网络共享面板 -->
-  <div id="panel-share" style="display:none">
-    <div class="card">
-      <div class="card-head"><span class="g-name" data-i18n="smbShare">SMB 共享</span><span class="chip" data-i18n="sambaDesc">PVE/Windows 挂载 ISO 库</span></div>
-      <div class="share-body">
-        <label class="sw"><input type="checkbox" id="sw-samba" onchange="saveShare('samba',this.checked)"><span data-i18n="enable">启用</span></label>
-        <span class="sstat" id="st-samba"></span>
-        <div class="share-fields">
-          <span><span data-i18n="addr">地址:</span> <code id="url-samba">smb://<服务器IP>:1445/iso</code></span>
-          <div class="share-cred">
-            <label data-i18n="username">用户名 <input type="text" id="u-samba" class="inp"></label>
-            <label data-i18n="password">密码 <input type="text" id="p-samba" class="inp"></label>
-            <button class="btn-s" onclick="saveShareCred('samba')" data-i18n="saveCred">保存凭据</button>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-head"><span class="g-name" data-i18n="davShare">WebDAV 共享</span><span class="chip">http://IP:8081/dav</span></div>
-      <div class="share-body">
-        <label class="sw"><input type="checkbox" id="sw-webdav" onchange="saveShare('webdav',this.checked)"><span data-i18n="enable">启用</span></label>
-        <span class="sstat" id="st-webdav"></span>
-        <div class="share-fields">
-          <span><span data-i18n="addr">地址:</span> <code id="url-webdav">http://<服务器IP>:8081/dav</code></span>
-          <div class="share-cred">
-            <label data-i18n="username">用户名 <input type="text" id="u-webdav" class="inp"></label>
-            <label data-i18n="password">密码 <input type="text" id="p-webdav" class="inp"></label>
-            <button class="btn-s" onclick="saveShareCred('webdav')" data-i18n="saveCred">保存凭据</button>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="hint" style="padding:0 4px 8px" data-i18n="shareDesc">
-      说明：开关会实时启动/停止对应共享容器。账号密码初始值来自 <code>docker-compose.yml</code> 的
-      <code>SAMBA_USER/PASS</code>、<code>WEBDAV_USER/PASS</code>；修改后写入 <code>./data/settings.json</code>，
-      若共享正在运行需 <code>docker compose restart samba webdav</code> 使新凭据生效。
-    </div>
-  </div><!-- /panel-share -->
   <!-- 设置面板 -->
   <div id="panel-settings" style="display:none">
     <div class="card">
@@ -505,8 +466,8 @@
 <script>
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={};
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.0.2';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
-const VERSION_TAG='1.0.2';
+const APP_VERSION='1.0.3';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
+const VERSION_TAG='1.0.3';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -960,12 +921,11 @@ function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-th
 /* ---------- Tab 切换 ---------- */
 function switchTab(tab){
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  ['mirror','source','subs','share','settings'].forEach(p=>{
+  ['mirror','source','subs','settings'].forEach(p=>{
     document.getElementById('panel-'+p).style.display=(p===tab)?'':'none';
   });
   if(tab==='source')loadCustomSources();
   if(tab==='subs')loadSubs();
-  if(tab==='share')loadShares();
   if(tab==='settings')loadSettings();
 }
 
@@ -1418,14 +1378,6 @@ async function saveShare(proto,enabled){
   if(r.s===401)return toast(t('pleaseLogin'),'err');
   if(r.s!==200)return toast(r.j&&r.j.error||t('shareErr'),'err');
   toast((enabled?t('enabledMsg'):t('disabledMsg'))+' '+proto.toUpperCase()+' '+t('savedShare'));
-  loadShares();
-}
-async function saveShareCred(proto){
-  const body={};body[proto]={username:$('#u-'+proto).value.trim(),password:$('#p-'+proto).value.trim()};
-  const r=await jpost('/api/shares',body);
-  if(r.s===401)return toast(t('pleaseLogin'),'err');
-  if(r.s!==200)return toast(r.j&&r.j.error||t('saveFailed'),'err');
-  toast(proto.toUpperCase()+' '+t('credSaved'));
   loadShares();
 }
 async function saveShareCred2(proto){
