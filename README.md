@@ -1,5 +1,8 @@
 # ISO Hub · 网页版 Linux 发行版 ISO 自动更新器
 
+> **项目源码 / 完整文档：** <https://github.com/DC1024/iso-hub> 　·　
+> **Docker Hub 镜像：** <https://hub.docker.com/r/dcchendockeruser/iso-hub>
+
 把上游 [Sowevo/iso_download](https://github.com/Sowevo/iso_download)（纯 CLI）封装成
 **带网页界面的 Docker 服务**：网页上勾选要下载的发行版/版本，后台实时下载、SHA256 校验；
 一键抓取镜像站目录自动刷新"最新版本"元数据；过期旧 ISO 可视化清理。

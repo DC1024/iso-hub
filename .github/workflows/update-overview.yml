@@ -1,0 +1,39 @@
+name: Update Docker Hub Overview
+on:
+  workflow_dispatch:
+jobs:
+  update-overview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync README to Docker Hub full_description
+        env:
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          REPO: dcchendockeruser/iso-hub
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, urllib.request, urllib.error
+          token = os.environ["HUB_TOKEN"]
+          repo  = os.environ["REPO"]
+          desc  = open("README.md", encoding="utf-8").read()
+          req = urllib.request.Request(
+              f"https://hub.docker.com/v2/repositories/{repo}/",
+              data=json.dumps({"full_description": desc}).encode(),
+              method="PATCH",
+              headers={
+                  "Content-Type": "application/json",
+                  "Authorization": f"JWT {token}",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req) as r:
+                  print("STATUS", r.status)
+                  body = r.read().decode()
+                  print("BODY_LEN", len(body))
+          except urllib.error.HTTPError as e:
+              print("HTTP_ERROR", e.code)
+              print(e.read().decode()[:800])
+          except Exception as e:
+              print("EXC", repr(e))
+          PYEOF
