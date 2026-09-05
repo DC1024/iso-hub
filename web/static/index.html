@@ -505,8 +505,8 @@
 <script>
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={};
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.0.1';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
-const VERSION_TAG='1.0.1';
+const APP_VERSION='1.0.2';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
+const VERSION_TAG='1.0.2';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -880,24 +880,24 @@ async function poll(){
   const bar=$('#taskbar');
   if(RUNNING&&s&&s.task){
     bar.classList.add('show');
-    const t=s.task;
-    const tk=$('#taskkind');if(tk)tk.textContent='['+(t.kind==='meta'?t('taskMeta'):t('taskDownload'))+'] '+t.title;
-    if(t.downloads&&t.downloads.length){
+    const tk=s.task;   // 注意: 不能叫 t, 否则遮蔽全局翻译函数 t()
+    const _tk=$('#taskkind');if(_tk)_tk.textContent='['+(tk.kind==='meta'?t('taskMeta'):t('taskDownload'))+'] '+tk.title;
+    if(tk.downloads&&tk.downloads.length){
       const now=Date.now();
       let act=null;
-      for(const d of t.downloads){if(d.size>0&&(!act||d.size>act.size))act=d}
+      for(const d of tk.downloads){if(d.size>0&&(!act||d.size>act.size))act=d}
       const key=act?act.path:'';
       const p=prev[key];
       let rate=0;
       if(act&&p&&now>p.t)rate=(act.size-p.s)/((now-p.t)/1000);
-      prev={};t.downloads.forEach(d=>{prev[d.path]={t:now,s:d.size}});
+      prev={};tk.downloads.forEach(d=>{prev[d.path]={t:now,s:d.size}});
       const cf=$('#curfile');
       if(cf)cf.textContent=act
         ?(t('curPrefix')+' '+esc(act.filename.split('/').pop())+' · '+fmt(act.size)+(rate>0?' · '+fmt(rate)+'/s':''))
         :'…';
       // 进度条: 用所有文件的 已下载/目标大小 聚合计算整体百分比
       let got=0,total=0;
-      t.downloads.forEach(d=>{got+=d.size||0;total+=(d.total||0)});
+      tk.downloads.forEach(d=>{got+=d.size||0;total+=(d.total||0)});
       const pf=$('#progfill'),pt=$('#progtext');
       const pct=(total>0?Math.min(100,got/total*100):0);
       if(pf)pf.style.setProperty('--w',pct+'%');
@@ -1142,19 +1142,19 @@ function switchSrc(t){
 }
 function toggleVersionsRow(){document.getElementById('rs-versions-row').style.display=$('#rs-strategy').value==='static'?'flex':'none'}
 function applySrcTpl(){
-  const t=SRC_TPL[$('#rs-tpl').value];if(!t)return;
-  $('#rs-dist').value=t.dist||'';
-  $('#rs-type').value=t.type||'linux';
-  $('#rs-strategy').value=t.strategy||'dated_directory';
-  $('#rs-listing').value=t.listing||'';
-  $('#rs-regex').value=t.regex||'';
-  $('#rs-art').value=t.artifact||'';
-  $('#rs-sub').value=t.sub||'';
-  $('#rs-dltpl').value=t.dltpl||'';
-  $('#rs-chktpl').value=t.chktpl||'';
-  $('#rs-max').value=(t.max||2);
-  if(t.versions)$('#rs-versions').value=t.versions.join(',');else $('#rs-versions').value='';
-  $('#rs-versions-row').style.display=(t.strategy==='static')?'':'none';
+  const tpl=SRC_TPL[$('#rs-tpl').value];if(!tpl)return;
+  $('#rs-dist').value=tpl.dist||'';
+  $('#rs-type').value=tpl.type||'linux';
+  $('#rs-strategy').value=tpl.strategy||'dated_directory';
+  $('#rs-listing').value=tpl.listing||'';
+  $('#rs-regex').value=tpl.regex||'';
+  $('#rs-art').value=tpl.artifact||'';
+  $('#rs-sub').value=tpl.sub||'';
+  $('#rs-dltpl').value=tpl.dltpl||'';
+  $('#rs-chktpl').value=tpl.chktpl||'';
+  $('#rs-max').value=(tpl.max||2);
+  if(tpl.versions)$('#rs-versions').value=tpl.versions.join(',');else $('#rs-versions').value='';
+  $('#rs-versions-row').style.display=(tpl.strategy==='static')?'':'none';
   toast(t('fillingTpl')+' '+$('#rs-tpl').selectedOptions[0].text);
 }
 async function loadCustomSources(){
