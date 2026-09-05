@@ -704,14 +704,27 @@ def stop_task() -> bool:
 # --------------------------------------------------------------------------- flask app
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 AUTH_TOKEN = os.environ.get("ISO_HUB_TOKEN", "").strip()
+# 强制登录开关: ISO_HUB_REQUIRE_LOGIN=1 时, 除登录/自身状态接口外所有 API 均需登录会话或 X-Auth-Token
+REQUIRE_LOGIN = os.environ.get("ISO_HUB_REQUIRE_LOGIN", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 @app.before_request
 def require_auth():
-    """设置 ISO_HUB_TOKEN 后,除页面/静态/健康检查外的所有 API 需携带 X-Auth-Token 或有效登录会话。"""
+    """设置 ISO_HUB_TOKEN 后,除页面/静态/健康检查外的所有 API 需携带 X-Auth-Token 或有效登录会话。
+    设置 ISO_HUB_REQUIRE_LOGIN 后, 除登录/自身状态接口外的所有 API 均需登录会话或 X-Auth-Token(强制登录)。"""
     # 登录/登出/获取自身状态接口始终放行
     if request.path in ("/api/user/login", "/api/user/me", "/api/user/logout"):
         return None
+    if REQUIRE_LOGIN:
+        # 强制登录: 页面壳子/静态/健康检查放行(前端靠 /api/user/me 判断是否弹登录遮罩), 其余 API 一律需登录
+        if request.method == "GET" and (request.path == "/" or request.path.startswith("/static/") or request.path == "/api/health"):
+            return None
+        if request.headers.get("X-Auth-Token") == AUTH_TOKEN:
+            return None
+        if _valid_session():
+            return None
+        return jsonify({"error": "unauthorized"}), 401
+    # 原逻辑: 仅设置 ISO_HUB_TOKEN 时拦截写操作 API
     if not AUTH_TOKEN:
         return None
     if request.method == "GET" and (request.path == "/" or request.path.startswith("/static/") or request.path == "/api/health"):
