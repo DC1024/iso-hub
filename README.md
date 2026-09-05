@@ -18,6 +18,14 @@
 | ⭐ 订阅同步 | 每个发行版可设「订阅」：自动刷元数据→下载最新 N 版→删旧版，内置调度器定时全自动执行 |
 | 🌓 日夜模式 | 右上角一键切换日/夜间主题，记忆到本地并跟随系统深色偏好 |
 | 📡 网络共享 | 内置 SMB + WebDAV 共享容器，把 `./data` 里的 ISO 分享给 PVE/Windows/其他设备挂载 |
+| 🗂 分组折叠 | 每个发行版组头部可折叠/展开版本列表，状态记忆到浏览器 |
+| 🌐 中英双语 | 全界面支持 中文 / English / 自动（跟随系统）三态切换，记忆到本地 |
+| ⚙️ 设置菜单 | 统一面板：用户登录、语言切换、网络共享、定时任务、受保护列表 |
+| 🔍 筛选 + 收藏 | 镜像列表按 全部/已下载/未下载/已收藏 筛选；每行可 ★ 收藏 |
+| 🔒 镜像保护 | 每行可锁定，受保护文件在过期清理/订阅同步时不会被删除 |
+| 👤 用户登录 | 单管理员账号（PBKDF2-SHA256 加密 + 会话），首次登录自动创建管理员 |
+| ⏰ 定时任务 | 网页自建调度（每天/每周/每月/每年/一次性），定时自动触发订阅同步 |
+| 🖼 Logo | 内嵌 Syncbox Logo（base64 data URI，零外部资源） |
 
 默认数据源为**清华 TUNA 镜像站**（国内速度快）。支持的版本策略见上游 `sources_config.json`。
 
@@ -55,7 +63,7 @@ docker exec iso-hub python /app/iso_download/update_distributions.py --output /d
 | `WEBDAV_PORT`/`WEBDAV_USER`/`WEBDAV_PASS` | `8081`/`iso`/`iso123` | WebDAV 共享端口与凭据 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 
-> 无鉴权功能，若暴露到公网请务必配置 `ISO_HUB_TOKEN` 或置于反代（Caddy/Nginx Basic Auth）之后。
+> 内置**用户登录**（设置面板可设/改管理员密码）。若暴露到公网建议同时配置 `ISO_HUB_TOKEN` 或置于反代（Caddy/Nginx Basic Auth）之后。
 
 ## 数据目录结构
 
