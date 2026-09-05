@@ -37,3 +37,34 @@ jobs:
           tags: dcchendockeruser/iso-hub:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Sync README to Docker Hub overview
+        env:
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          REPO: dcchendockeruser/iso-hub
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, urllib.request, urllib.error
+          token = os.environ["HUB_TOKEN"]
+          repo  = os.environ["REPO"]
+          desc  = open("README.md", encoding="utf-8").read()
+          req = urllib.request.Request(
+              f"https://hub.docker.com/v2/repositories/{repo}/",
+              data=json.dumps({"full_description": desc}).encode(),
+              method="PATCH",
+              headers={
+                  "Content-Type": "application/json",
+                  "Authorization": f"JWT {token}",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req) as r:
+                  print("OVERVIEW STATUS", r.status)
+          except urllib.error.HTTPError as e:
+              print("OVERVIEW HTTP_ERROR", e.code)
+              print(e.read().decode()[:800])
+              raise SystemExit(1)
+          except Exception as e:
+              print("OVERVIEW EXC", repr(e))
+              raise SystemExit(1)
+          PYEOF
