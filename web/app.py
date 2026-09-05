@@ -23,6 +23,7 @@ import sys
 import json
 import re
 import time
+import shlex
 from time import struct_time  # 供 _sched_matches 类型注解
 import threading
 import subprocess
@@ -543,7 +544,8 @@ def apply_share_creds(proto: str, username: str, password: str) -> bool:
 def _spawn_worker() -> None:
     """把当前全局 task 记录启动为后台进程,并逐行写入日志。"""
     global task
-    cmd = task["cmd"].split(" ") if isinstance(task["cmd"], str) else task["cmd"]
+    # cmd 存的是 list,直接使用; 若为字符串(兼容旧数据)则用 shlex 按 shell 规则拆分
+    cmd = shlex.split(task["cmd"]) if isinstance(task["cmd"], str) else task["cmd"]
     proc = subprocess.Popen(
         cmd,
         cwd=str(REPO_DIR),
@@ -558,8 +560,18 @@ def _spawn_worker() -> None:
         task["proc"] = proc
     for raw in proc.stdout:
         line = raw.rstrip("\n").rstrip("\r")
-        if line:
-            log(line)
+        if not line:
+            continue
+        # 捕获 iso_runner 打印的目标文件大小标记: #TARGET <path> <bytes>
+        if line.startswith("#TARGET "):
+            try:
+                _, _p, _s = line.split(" ", 2)
+                with _lock:
+                    task["targets"][_p] = int(_s)
+            except (ValueError, IndexError):
+                pass
+            continue
+        log(line)
     code = proc.wait()
     with _lock:
         task["proc"] = None
@@ -580,12 +592,14 @@ def start_task(kind: str, title: str, cmd: list, downloads=None) -> bool:
         task = {
             "kind": kind,
             "title": title,
-            "cmd": " ".join(str(c) for c in cmd),
+            # cmd 直接存 list,避免字符串 split 拆坏含空格的 --select JSON 参数
+            "cmd": list(cmd),
             "started": time.time(),
             "finished": None,
             "exit_code": None,
             "cancelled": False,
             "downloads": downloads or [],
+            "targets": {},   # path -> 目标字节数(由 iso_runner 打印 #TARGET 收集)
             "proc": None,
         }
     log(f"[任务开始] {title}")
@@ -681,7 +695,8 @@ def running_task() -> dict | None:
                 size = p.stat().st_size if p.exists() else 0
             except OSError:
                 pass
-            info["downloads"].append({"filename": d["filename"], "path": str(p), "size": size})
+            info["downloads"].append({"filename": d["filename"], "path": str(p),
+                                      "size": size, "total": task.get("targets", {}).get(str(p), 0)})
         return info
 
 
@@ -737,6 +752,16 @@ def require_auth():
     if _valid_session():
         return None
     return jsonify({"error": "unauthorized"}), 401
+
+
+@app.after_request
+def no_cache_api(resp):
+    """所有 API 响应禁用缓存, 避免前端「刷新列表」拿到浏览器缓存的旧数据而无反应。"""
+    if request.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.get("/")

@@ -12,6 +12,19 @@ import json
 import sys
 from pathlib import Path
 
+import requests
+
+
+def _head_target_size(url: str, headers: dict) -> int:
+    """对下载 URL 发 HEAD 请求获取目标文件字节数(总大小), 用于 UI 进度条。失败返回 0。"""
+    try:
+        r = requests.head(url, headers=headers, timeout=15, allow_redirects=True)
+        if r.status_code < 400 and r.headers.get("content-length"):
+            return int(r.headers["content-length"])
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ISO Hub selective download runner")
@@ -50,8 +63,18 @@ def main() -> None:
 
     failed = False
     for name in names:
-        downloader.distributions = {"distributions": [e for e in subset if e["distribution"] == name]}
+        group = [e for e in subset if e["distribution"] == name]
+        downloader.distributions = {"distributions": group}
         print(f"\n{'='*60}\n>>> 任务组: {name}")
+        # 预先 HEAD 探测每个目标文件的总大小, 供 UI 显示下载进度条
+        for entry in group:
+            fname = entry["download_url"].rstrip("/").rsplit("/", 1)[-1]
+            target_path = Path(downloader.download_dir) / entry["type"] / entry["distribution"] / fname
+            total = _head_target_size(entry["download_url"], downloader.headers)
+            # 标记行由后端拦截收集, 不写入任务日志
+            print(f"#TARGET {target_path} {total}")
+            if total:
+                print(f"  目标大小: {total/1024/1024:.1f} MiB")
         ok = downloader.download_distribution(name, verify_checksum=True)
         if not ok:
             failed = True

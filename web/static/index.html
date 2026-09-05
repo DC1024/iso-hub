@@ -106,6 +106,11 @@
   @keyframes rot{to{transform:rotate(360deg)}}
   #taskinfo{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #curfile{color:var(--tasklog-cur)}
+  /* 下载进度条 */
+  #progwrap{display:flex;align-items:center;gap:8px;min-width:140px;max-width:220px;flex:0 0 auto}
+  #progfill{height:8px;border-radius:6px;flex:1;background:#16253d;border:1px solid var(--tasklog-line);overflow:hidden;position:relative}
+  #progfill::before{content:"";position:absolute;inset:0;width:var(--w,0%);background:linear-gradient(90deg,var(--brand),var(--brand2));border-radius:6px;transition:width .4s ease}
+  #progtext{font-size:11px;color:var(--tasklog-cur);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
   .muted{color:var(--ink3)}
   /* group cards */
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:14px;
@@ -157,13 +162,14 @@
   .loghead{display:flex;align-items:center;justify-content:space-between;margin:8px 0 8px;cursor:pointer}
   .loghead span{font-weight:700;font-size:13px;color:var(--ink2)}
   #log{background:var(--tasklog-bg);border:1px solid var(--tasklog-line);border-radius:12px;height:250px;overflow:auto;padding:12px 14px;
-       font-family:var(--mono);font-size:12px;line-height:1.65}
-  #log:empty:after{content:attr(data-empty);color:var(--ink3)}
+       font-family:var(--mono);font-size:12px;line-height:1.65;
+       color:#cbe3ff}   /* 固定浅色: 任务日志框恒为深色底, 正文须用浅色保证日/夜模式都清晰 */
+  #log:empty:after{content:attr(data-empty);color:#5d6f8f}
   #log .ln{color:var(--tasklog-cur);user-select:none}
-  #log .lt{color:var(--tasklog-lt)}
+  #log .lt{color:#8fb6dd}   /* 时间戳: 日间模式也调亮, 避免深蓝灰在深底上不可见 */
+  #log pre{display:inline;white-space:pre-wrap;word-break:break-all;color:#d7e7ff}
   #log .er{color:var(--tasklog-er)}
   #log .ok{color:var(--tasklog-ok)}
-  #log pre{display:inline;white-space:pre-wrap;word-break:break-all}
   .toast{position:fixed;right:20px;bottom:20px;background:var(--tasklog-bg);color:var(--tasklog-in);padding:10px 16px;border-radius:10px;
          font-size:13px;z-index:99;box-shadow:0 10px 30px -8px rgba(2,6,23,.5);opacity:0;transform:translateY(8px);
          transition:.25s;max-width:420px}
@@ -245,6 +251,7 @@
     <div class="spin"></div>
     <div id="taskinfo"><span id="taskkind"></span></div>
     <div id="curfile" class="muted"></div>
+    <div id="progwrap"><div id="progfill"></div><span id="progtext">0%</span></div>
   </div>
 
   <div id="groups"></div>
@@ -881,6 +888,12 @@ async function poll(){
       $('#curfile').textContent=act
         ?(t('curPrefix')+' '+esc(act.filename.split('/').pop())+' · '+fmt(act.size)+(rate>0?' · '+fmt(rate)+'/s':''))
         :'…';
+      // 进度条: 用所有文件的 已下载/目标大小 聚合计算整体百分比
+      let got=0,total=0;
+      t.downloads.forEach(d=>{got+=d.size||0;total+=(d.total||0)});
+      const pf=$('#progfill'),pt=$('#progtext');
+      if(pf)pf.style.setProperty('--w',(total>0?Math.min(100,got/total*100):0)+'%');
+      if(pt)pt.textContent=(total>0?Math.round(got/total*100):0)+'%';
     } else $('#curfile').textContent='';
     // 拉日志
     fetchLogs();
@@ -889,6 +902,8 @@ async function poll(){
   prev={};
   if(POLL){clearInterval(POLL);POLL=null}
   bar.classList.remove('show');
+  const _pf=$('#progfill');if(_pf)_pf.style.setProperty('--w','0%');
+  const _pt=$('#progtext');if(_pt)_pt.textContent='0%';
   fetchLogs();
   if(wasRunning)loadDistros();   // 任务结束,刷新本地磁盘状态
 }
