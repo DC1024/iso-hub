@@ -29,6 +29,24 @@
 
 默认数据源为**清华 TUNA 镜像站**（国内速度快）。支持的版本策略见上游 `sources_config.json`。
 
+## Docker Hub 镜像
+
+已发布到 Docker Hub，可直接拉取运行（镜像由 GitHub Actions 在每次 push 到 `master` 时自动构建并推送）：
+
+```bash
+docker pull dcchendockeruser/iso-hub:latest
+
+# 运行（把 8899 换成你想要的宿主机端口，./data 为 ISO 数据目录）
+docker run -d --name iso-hub \
+  -p 8899:8080 \
+  -v "$PWD/data:/data" \
+  dcchendockeruser/iso-hub:latest
+```
+
+- 仓库地址：https://hub.docker.com/r/dcchendockeruser/iso-hub
+- 通过 GitHub Actions 构建（workflow：`.github/workflows/docker-push.yml`），每次 push 到 `master` 自动重建并推送 `latest` 标签。
+- 推荐用源码 `docker compose up -d --build` 方式以获得完整功能（含 SMB/WebDAV 共享容器）；Docker Hub 镜像为单容器版，不含共享容器。
+
 ## 快速开始
 
 ```bash
