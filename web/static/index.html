@@ -1419,14 +1419,27 @@ async function checkLoginGate(){
 async function gateLogin(){
   const u=$('#gate-user').value.trim(),p=$('#gate-pass').value;
   const e=$('#gate-err');
-  if(!u||!p){if(e)e.textContent=t('loginFailed');return}
+  const btn=$('#btn-gate-login');
+  if(!u||!p){if(e){e.style.color='#f85149';e.textContent=t('loginFailed')}return}
+  if(btn)btn.disabled=true;
+  if(e){e.style.color='var(--muted,#8b949e)';e.textContent='...'}
   try{
     const r=await jpost('/api/user/login',{username:u,password:p});
-    if(r.s!==200||!r.j||!r.j.ok){if(e)e.textContent=(r.j&&r.j.error)||t('loginFailed');return}
+    if(r.s!==200||!r.j||!r.j.ok){
+      if(e){e.style.color='#f85149';e.textContent=(r.j&&r.j.error)||t('loginFailed')}
+      if(btn)btn.disabled=false;return;
+    }
     UTOKEN=r.j.token||'';localStorage.setItem('iso_hub_user',UTOKEN);
-    closeGate();toast(t('loginOk'));
-    location.reload(); // 重新加载主界面(此时已认证)
-  }catch(err){if(e)e.textContent=t('loginFailed')}
+    // 先向后端确认会话有效, 再关闭遮罩并刷新, 避免"闪回登录界面"
+    const me=await jget('/api/user/me');
+    if(me&&me.j&&me.j.authenticated){
+      closeGate();toast(t('loginOk'));
+      location.reload();
+    }else{
+      if(e){e.style.color='#f85149';e.textContent=t('loginFailed')}
+      if(btn)btn.disabled=false;
+    }
+  }catch(err){if(e){e.style.color='#f85149';e.textContent=t('loginFailed')}if(btn)btn.disabled=false}
 }
 $('#gate-pass').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
 $('#gate-user').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
