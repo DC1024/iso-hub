@@ -174,6 +174,27 @@
 </style>
 </head>
 <body>
+<!-- 强制登录遮罩 (ISO_HUB_REQUIRE_LOGIN=1 时显示) -->
+<div id="login-gate" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg,#0d1117);display:none;align-items:center;justify-content:center">
+  <div style="background:var(--panel,#161b22);border:1px solid var(--border,#30363d);border-radius:12px;padding:28px 30px;max-width:360px;width:92%;box-shadow:0 8px 40px rgba(0,0,0,.4)">
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:26px;font-weight:700;letter-spacing:.5px" data-i18n="loginGateTitle">🔐 需要登录</div>
+      <div style="margin-top:6px;color:var(--muted,#8b949e);font-size:13px" data-i18n="loginGateSub">请输入管理员账号以继续访问</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <label data-i18n="loginUser" style="font-size:13px;color:var(--muted,#8b949e)">用户名</label>
+        <input type="text" id="gate-user" class="inp" autocomplete="username" style="padding:9px 12px">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <label data-i18n="loginPass" style="font-size:13px;color:var(--muted,#8b949e)">密码</label>
+        <input type="password" id="gate-pass" class="inp" autocomplete="current-password" style="padding:9px 12px">
+      </div>
+      <div id="gate-err" style="color:#f85149;font-size:13px;min-height:18px"></div>
+      <button class="btn-s" id="btn-gate-login" style="padding:10px;font-size:15px" onclick="gateLogin()" data-i18n="login">🔑 登录</button>
+    </div>
+  </div>
+</div>
 <div class="wrap">
   <header>
     <div class="brand">
@@ -555,6 +576,9 @@ const I18N={
   'loginUser':{zh:'用户名:',en:'Username:'},
   'loginPass':{zh:'密码:',en:'Password:'},
   'loginFailed':{zh:'登录失败',en:'Login failed'},
+  'loginGateTitle':{zh:'🔐 需要登录',en:'🔐 Login required'},
+  'loginGateSub':{zh:'请输入管理员账号以继续访问',en:'Enter admin credentials to continue'},
+  'loginOk':{zh:'登录成功',en:'Logged in'},
   'oldPwd':{zh:'当前密码',en:'Current password'},
   'newPwd':{zh:'新密码',en:'New password'},
   'enterNewPwd':{zh:'请输入新密码',en:'Enter a new password'},
@@ -720,7 +744,8 @@ function applyLang(){
 let TOKEN=localStorage.getItem('iso_hub_token')||'';
 let UTOKEN=localStorage.getItem('iso_hub_user')||'';   // 登录会话 token
 const authH=()=>{const t=UTOKEN||TOKEN;return t?{'X-Auth-Token':t}:{}};
-function askToken(){const t=prompt(t('askToken'));if(t){TOKEN=t.trim();localStorage.setItem('iso_hub_token',TOKEN);return true}return false}
+let GATE_OPEN=false; // 强制登录遮罩是否打开(打开时静默返回401, 不弹token prompt)
+function askToken(){if(GATE_OPEN)return false;const t=prompt(t('askToken'));if(t){TOKEN=t.trim();localStorage.setItem('iso_hub_token',TOKEN);return true}return false}
 async function jget(u){let r=await fetch(u,{headers:authH()});if(r.status===401){if(!askToken())return{};r=await fetch(u,{headers:authH()})}return r.json()}
 async function jpost(u,b){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{})});if(r.status===401){if(!askToken())return{s:401,j:{error:'unauthorized'}};r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{})})}return{s:r.status,j:await r.json()}}
 
@@ -1375,6 +1400,38 @@ async function saveShareCred2(proto){
   toast(proto.toUpperCase()+' '+t('credSaved'));
   loadShares();
 }
+
+/* ---------- 强制登录门禁 (ISO_HUB_REQUIRE_LOGIN=1 时生效) ---------- */
+function openGate(){
+  GATE_OPEN=true;const g=$('#login-gate');if(g){g.style.display='flex';const u=$('#gate-user');if(u){u.value='';setTimeout(()=>u.focus(),50)}}
+  const e=$('#gate-err');if(e)e.textContent='';
+}
+function closeGate(){
+  GATE_OPEN=false;const g=$('#login-gate');if(g)g.style.display='none';
+}
+async function checkLoginGate(){
+  try{
+    const r=await jget('/api/user/me');
+    if(r.j&&r.j.authenticated){closeGate();return true;}
+  }catch(e){}
+  openGate();return false;
+}
+async function gateLogin(){
+  const u=$('#gate-user').value.trim(),p=$('#gate-pass').value;
+  const e=$('#gate-err');
+  if(!u||!p){if(e)e.textContent=t('loginFailed');return}
+  try{
+    const r=await jpost('/api/user/login',{username:u,password:p});
+    if(r.s!==200||!r.j||!r.j.ok){if(e)e.textContent=(r.j&&r.j.error)||t('loginFailed');return}
+    UTOKEN=r.j.token||'';localStorage.setItem('iso_hub_user',UTOKEN);
+    closeGate();toast(t('loginOk'));
+    location.reload(); // 重新加载主界面(此时已认证)
+  }catch(err){if(e)e.textContent=t('loginFailed')}
+}
+$('#gate-pass').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
+$('#gate-user').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
+// 页面加载即检查: 强制登录开启时未登录显示遮罩
+if(typeof checkLoginGate==='function')checkLoginGate();
 </script>
 </body>
 </html>
