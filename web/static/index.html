@@ -734,6 +734,12 @@ function applyLang(){
   document.querySelectorAll('[data-i18n]').forEach(el=>{
     const k=el.dataset.i18n;const v=t(k);
     if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'){if(el.dataset.i18nPh!==undefined)el.placeholder=v;else el.value=v}
+    else if(el.querySelector('input,button,select,textarea')){
+      // 含表单控件(如 <label>用户名 <input></label>)时, 仅替换首个文本节点, 保留 innerHTML 里的 input/button
+      const t0=el.firstChild;
+      if(t0&&t0.nodeType===3) t0.nodeValue=v;
+      else el.insertBefore(document.createTextNode(v), el.firstChild);
+    }
     else el.innerHTML=v;
   });
   // 刷新动态内容
