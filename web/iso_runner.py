@@ -10,9 +10,37 @@ ISO Hub - 选择部分发行版/版本下载的辅助 runner。
 import argparse
 import json
 import sys
+import types
 from pathlib import Path
 
 import requests
+
+# 在上游 download_linux 被 import 之前 mock 掉 tqdm。
+# 上游用 tqdm 的 \r(回车) 覆盖式进度条输出(无换行), 会阻塞后端按行读取子进程 stdout,
+# 导致日志/状态不实时刷新(进度条卡 0%)、停止任务后才一次性 flush。这里用无输出的 stub 替换,
+# 前端进度条靠后端跑文件 stat(size/total) 实现, 不依赖 tqdm 的细粒度进度。
+_tqdm_stub = types.ModuleType("tqdm")
+
+
+class _NoopTqdm:
+    def __init__(self, *a, **k):
+        pass
+
+    def update(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a, **k):
+        pass
+
+    def close(self):
+        pass
+
+
+_tqdm_stub.tqdm = lambda *a, **k: _NoopTqdm()
+sys.modules["tqdm"] = _tqdm_stub
 
 
 def _head_target_size(url: str, headers: dict) -> int:
