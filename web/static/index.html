@@ -1430,16 +1430,18 @@ async function gateLogin(){
       if(btn)btn.disabled=false;return;
     }
     UTOKEN=r.j.token||'';localStorage.setItem('iso_hub_user',UTOKEN);
-    // 先向后端确认会话有效, 再关闭遮罩并刷新, 避免"闪回登录界面"
-    const me=await jget('/api/user/me');
-    if(me&&me.j&&me.j.authenticated){
-      closeGate();toast(t('loginOk'));
-      location.reload();
-    }else{
-      if(e){e.style.color='#f85149';e.textContent=t('loginFailed')}
-      if(btn)btn.disabled=false;
-    }
-  }catch(err){if(e){e.style.color='#f85149';e.textContent=t('loginFailed')}if(btn)btn.disabled=false}
+    // 成功: 直接关闭遮罩并手动刷新界面数据, 不整页 reload(避免 checkLoginGate 时序竞态导致闪回/误报失败)
+    closeGate();
+    toast(t('loginOk'));
+    // 刷新登录状态与主数据, 等效于整页加载
+    try{loadUserState()}catch(_){}
+    try{loadDistros()}catch(_){}
+    try{startPoll&&startPoll(true)}catch(_){}
+    try{switchTab('mirror')}catch(_){}
+  }catch(err){
+    if(e){e.style.color='#f85149';e.textContent=t('loginFailed')}
+    if(btn)btn.disabled=false;
+  }
 }
 $('#gate-pass').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
 $('#gate-user').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
