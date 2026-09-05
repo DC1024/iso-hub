@@ -760,8 +760,8 @@ let UTOKEN=localStorage.getItem('iso_hub_user')||'';   // 登录会话 token
 const authH=()=>{const t=UTOKEN||TOKEN;return t?{'X-Auth-Token':t}:{}};
 let GATE_OPEN=false; // 强制登录遮罩是否打开(打开时静默返回401, 不弹token prompt)
 function askToken(){return false} // 认证改为登录会话(REQUIRE_LOGIN)后, 不再用 ISO_HUB_TOKEN prompt; 401 交由上层提示"请先登录"
-async function jget(u){let r=await fetch(u,{headers:authH()});if(r.status===401){if(!askToken())return{};r=await fetch(u,{headers:authH()})}return r.json()}
-async function jpost(u,b){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{})});if(r.status===401){if(!askToken())return{s:401,j:{error:t('pleaseLogin')}};r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{})})}return{s:r.status,j:await r.json()}}
+async function jget(u){let r=await fetch(u,{headers:authH(),cache:'no-store'});if(r.status===401){if(!askToken())return{};r=await fetch(u,{headers:authH(),cache:'no-store'})}return r.json()}
+async function jpost(u,b){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'});if(r.status===401){if(!askToken())return{s:401,j:{error:t('pleaseLogin')}};r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'})}return{s:r.status,j:await r.json()}}
 
 /* ---------- 数据渲染 ---------- */
 async function loadDistros(){
@@ -865,17 +865,17 @@ function startPoll(force){
   POLL=setInterval(poll,1000);
 }
 async function poll(){
+  try{
   const s=await jget('/api/state');
   const wasRunning=RUNNING;
-  RUNNING=s.running;
-  $('#btnStop').disabled=!RUNNING;
-  $('#btnMeta').disabled=RUNNING;
-  $('#btnDown').disabled=RUNNING;
+  RUNNING=!!(s&&s.running);
+  const _bs=$('#btnStop'),_bm=$('#btnMeta'),_bd=$('#btnDown');
+  if(_bs)_bs.disabled=!RUNNING; if(_bm)_bm.disabled=RUNNING; if(_bd)_bd.disabled=RUNNING;
   const bar=$('#taskbar');
-  if(RUNNING){
+  if(RUNNING&&s&&s.task){
     bar.classList.add('show');
     const t=s.task;
-    $('#taskkind').textContent='['+(t.kind==='meta'?t('taskMeta'):t('taskDownload'))+'] '+t.title;
+    const tk=$('#taskkind');if(tk)tk.textContent='['+(t.kind==='meta'?t('taskMeta'):t('taskDownload'))+'] '+t.title;
     if(t.downloads&&t.downloads.length){
       const now=Date.now();
       let act=null;
@@ -885,16 +885,18 @@ async function poll(){
       let rate=0;
       if(act&&p&&now>p.t)rate=(act.size-p.s)/((now-p.t)/1000);
       prev={};t.downloads.forEach(d=>{prev[d.path]={t:now,s:d.size}});
-      $('#curfile').textContent=act
+      const cf=$('#curfile');
+      if(cf)cf.textContent=act
         ?(t('curPrefix')+' '+esc(act.filename.split('/').pop())+' · '+fmt(act.size)+(rate>0?' · '+fmt(rate)+'/s':''))
         :'…';
       // 进度条: 用所有文件的 已下载/目标大小 聚合计算整体百分比
       let got=0,total=0;
       t.downloads.forEach(d=>{got+=d.size||0;total+=(d.total||0)});
       const pf=$('#progfill'),pt=$('#progtext');
-      if(pf)pf.style.setProperty('--w',(total>0?Math.min(100,got/total*100):0)+'%');
-      if(pt)pt.textContent=(total>0?Math.round(got/total*100):0)+'%';
-    } else $('#curfile').textContent='';
+      const pct=(total>0?Math.min(100,got/total*100):0);
+      if(pf)pf.style.setProperty('--w',pct+'%');
+      if(pt)pt.textContent=(total>0?Math.round(pct):0)+'%';
+    } else {const cf=$('#curfile');if(cf)cf.textContent='';}
     // 拉日志
     fetchLogs();
     return;
@@ -906,12 +908,15 @@ async function poll(){
   const _pt=$('#progtext');if(_pt)_pt.textContent='0%';
   fetchLogs();
   if(wasRunning)loadDistros();   // 任务结束,刷新本地磁盘状态
+  }catch(e){ /* 单次轮询出错不中断循环, 下一轮继续 */ }
 }
 async function fetchLogs(){
-  const r=await jget('/api/logs?after='+AFTER);
-  AFTER=r.after;
-  if(!r.lines.length)return;
-  const box=$('#log');const autos=box.scrollTop+box.clientHeight>=box.scrollHeight-30;
+  let r;
+  try{ r=await jget('/api/logs?after='+AFTER); }catch(e){ return; }
+  if(!r||!Array.isArray(r.lines)||!r.lines.length)return;
+  AFTER=r.after||AFTER;
+  const box=$('#log');if(!box)return;
+  const autos=box.scrollTop+box.clientHeight>=box.scrollHeight-30;
   r.lines.forEach(x=>{
     const d=document.createElement('div');
     const cls=x.l.startsWith('[任务')||x.l.startsWith('>>>')?'ok':(/失败|错误|✗|WARN|error|Error/i.test(x.l)?'er':'');
