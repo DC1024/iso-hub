@@ -39,30 +39,32 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Sync README to Docker Hub overview
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          HUB_PAT: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           python3 - <<'PYEOF'
-          import json, urllib.request, urllib.error
-          import base64, os
-          # docker login 已把凭据写入 ~/.docker/config.json，auth 是 base64(username:PAT)
-          cfg = json.load(open(os.path.expanduser("~/.docker/config.json")))
-          auth = None
-          for k, v in cfg.get("auths", {}).items():
-              if v.get("auth"):
-                  auth = v["auth"]; break
-          if not auth:
-              raise SystemExit("no docker auth found")
-          # 解码出用户名用于 URL，密码(PAT)用于 Basic auth
-          user, pw = base64.b64decode(auth).decode().split(":", 1)
+          import json, os, urllib.request, urllib.error
+          user = os.environ["HUB_USER"]
+          pat  = os.environ["HUB_PAT"]
           repo = "dcchendockeruser/iso-hub"
+          # 1) 用 PAT 登录换取 JWT 会话令牌
+          login = urllib.request.Request(
+              "https://hub.docker.com/v2/users/login/",
+              data=json.dumps({"username": user, "password": pat}).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(login) as r:
+              jwt = json.loads(r.read().decode())["token"]
+          # 2) 用 JWT 更新 full_description
           desc = open("README.md", encoding="utf-8").read()
-          basic = base64.b64encode(f"{user}:{pw}".encode()).decode()
           req = urllib.request.Request(
               f"https://hub.docker.com/v2/repositories/{repo}/",
               data=json.dumps({"full_description": desc}).encode(),
               method="PATCH",
               headers={
                   "Content-Type": "application/json",
-                  "Authorization": f"Basic {basic}",
+                  "Authorization": f"JWT {jwt}",
               },
           )
           try:
