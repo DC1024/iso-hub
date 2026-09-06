@@ -20,9 +20,11 @@ services:
       - TZ=Asia/Shanghai
       # 需要鉴权时在宿主机同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
+      # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
+      - ISO_HUB_REQUIRE_LOGIN=${ISO_HUB_REQUIRE_LOGIN:-1}
       # 订阅自动同步间隔(秒),默认 86400=每天;设 0 关闭自动调度,仅手动/定时调用
       - ISO_HUB_SYNC_INTERVAL=${ISO_HUB_SYNC_INTERVAL:-86400}
-      # 网络共享默认凭据(可在网页「网络共享」Tab 修改, 改后写入 ./data/settings.json 覆盖此处)
+      # 网络共享默认凭据(可在网页「设置→共享设置」修改, 改后写入 ./data/settings.json 覆盖此处)
       - SAMBA_USER=${SAMBA_USER:-iso}
       - SAMBA_PASS=${SAMBA_PASS:-iso123}
       - WEBDAV_USER=${WEBDAV_USER:-iso}
