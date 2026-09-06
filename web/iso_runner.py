@@ -70,24 +70,40 @@ def _pick_candidates(strategy: str, entry: dict, headers: dict):
     cs_urls = entry.get("checksum_urls") or []
     cs = cs_urls + [None] * (len(urls) - len(cs_urls))  # 校验和不足的镜像补 None
 
+    # 用户手动指定的源URL(entry.pin): 存在且是候选之一 → 强制移到最前
+    pin = (entry.get("pin") or "").strip()
+    if pin and pin in urls:
+        i = urls.index(pin)
+        urls = [urls[i]] + urls[:i] + urls[i + 1:]
+        cs = [cs[i]] + cs[:i] + cs[i + 1:]
+
     if strategy != "B":
-        # 策略 A: 固定优先级, 保持配置顺序
+        # 策略 A: 固定优先级(配置顺序, pin 已置顶)
         return list(zip(urls, cs))
 
     # 策略 B: HEAD 实测各候选源, 选最快可达源
+    # 若用户手动指定了源(pin 已置顶), 只要它可达就优先使用, 不参与速度排序
+    pin = (entry.get("pin") or "").strip()
     scored = []
+    pinned_ok = None
     for u, c in zip(urls, cs):
         try:
             t0 = time.monotonic()
             r = requests.head(u, headers=headers, timeout=8, allow_redirects=True)
             dt = time.monotonic() - t0
             if r.status_code < 400:
-                scored.append((dt, u, c))
+                if u == pin:
+                    pinned_ok = (u, c)   # 用户指定的源可达, 直接置顶
+                else:
+                    scored.append((dt, u, c))
                 print(f"  [策略B] 可达 {dt*1000:.0f}ms  {u}")
             else:
                 print(f"  [策略B] HTTP {r.status_code} 跳过  {u}")
         except Exception:  # noqa: BLE001
             print(f"  [策略B] 不可达 跳过  {u}")
+    if pinned_ok:
+        rest = [x for x in sorted(scored, key=lambda x: x[0])]
+        return [pinned_ok] + [(u, c) for _, u, c in rest]
     if scored:
         scored.sort(key=lambda x: x[0])
         return [(u, c) for _, u, c in scored]
@@ -159,9 +175,11 @@ def main() -> None:
     downloader.cleanup_distribution_dir = lambda *a, **k: None
 
     all_entries = downloader.distributions.get("distributions", [])
+    pinmap = {e.get("distribution"): e.get("pin") or "" for e in selected}
     wanted = {(e.get("distribution"), e.get("download_url")) for e in selected}
     subset = [
-        e for e in all_entries if (e.get("distribution"), e.get("download_url")) in wanted
+        {**e, "pin": pinmap.get(e.get("distribution")) or ""}
+        for e in all_entries if (e.get("distribution"), e.get("download_url")) in wanted
     ]
 
     if not subset:

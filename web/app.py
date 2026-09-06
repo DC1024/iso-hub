@@ -217,7 +217,9 @@ def build_distros() -> dict:
                 "type": typ,
                 "filename": fname,
                 "download_url": url,
+                "download_urls": e.get("download_urls", []),
                 "checksum_url": e.get("checksum_url", ""),
+                "checksum_urls": e.get("checksum_urls", []),
                 "checksum": e.get("checksum", ""),
                 "local_size": local["size"] if local else 0,
                 "local_mtime": int(local["mtime"]) if local else 0,
@@ -291,6 +293,16 @@ def save_settings_all(data: dict) -> None:
     cur = load_settings_all()
     cur.update(data)
     SETTINGS_JSON.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_source_strategy() -> str:
+    """读取全局选源策略(A 固定优先级 / B 实测选最快)。默认 A, 可被环境变量覆盖。"""
+    return (load_settings_all().get("source_strategy") or
+            os.environ.get("ISO_HUB_SOURCE_STRATEGY", "A")).upper()
+
+
+def save_source_strategy(s: str) -> None:
+    save_settings_all({"source_strategy": s.upper()})
 
 
 def load_protected() -> list:
@@ -805,12 +817,21 @@ def api_download():
     if not entries:
         return jsonify({"error": "没有选择任何条目"}), 400
     # 重新从当前清单校验，防止提交伪造数据
+    # 前端每条目传 {distribution, download_url}; download_url 是用户选定的源URL
+    # (可为主源 download_url, 也可为 download_urls 里的某个镜像), 据此匹配对应条目
     cur = load_json()
     wanted = {(e.get("distribution"), e.get("download_url")) for e in entries}
-    matched = [e for e in cur.get("distributions", []) if (e["distribution"], e["download_url"]) in wanted]
+    cand_index = {}   # (distribution, 任意候选url) -> entry
+    for e in cur.get("distributions", []):
+        cand_index[(e["distribution"], e["download_url"])] = e
+        for c in e.get("download_urls", []):
+            cand_index[(e["distribution"], c)] = e
+    matched = [cand_index[w] for w in wanted if w in cand_index]
     if not matched:
         return jsonify({"error": "所选条目不在当前发行版清单中，请先刷新列表"}), 400
 
+    # 用户对某个文件手动指定的源URL(不存在则空 = 跟随全局策略自动选)
+    chosen = {e.get("distribution"): e.get("download_url", "") for e in entries}
     download_payload = []
     seen = set()
     for e in matched:
@@ -821,7 +842,8 @@ def api_download():
             download_payload.append({"filename": fname, "path": path})
 
     select_json = json.dumps(
-        [{"distribution": e["distribution"], "download_url": e["download_url"]} for e in matched],
+        [{"distribution": e["distribution"], "download_url": e["download_url"],
+          "pin": chosen.get(e["distribution"]) or ""} for e in matched],
         ensure_ascii=False,
     )
     cmd = [
@@ -829,7 +851,7 @@ def api_download():
         "--json-file", str(JSON_FILE),
         "--download-dir", str(DATA_DIR),
         "--select", select_json,
-        "--strategy", os.environ.get("ISO_HUB_SOURCE_STRATEGY", "A"),
+        "--strategy", load_source_strategy(),
     ]
     names = sorted({e["distribution"] for e in matched})
     ok = start_task("download", f"下载: {'、'.join(names)}（{len(matched)} 个文件）", cmd, download_payload)
@@ -856,6 +878,22 @@ def api_update_meta():
 @app.get("/api/custom-sources")
 def api_custom_sources():
     return jsonify({"sources": load_custom_sources()})
+
+
+@app.get("/api/source-strategy")
+def api_source_strategy_get():
+    return jsonify({"strategy": load_source_strategy()})
+
+
+@app.post("/api/source-strategy")
+def api_source_strategy_set():
+    body = request.get_json(force=True, silent=True) or {}
+    s = (body.get("strategy") or "A").strip().upper()
+    if s not in ("A", "B"):
+        return jsonify({"error": "strategy 只能是 A 或 B"}), 400
+    save_source_strategy(s)
+    log(f"[设置] 选源策略改为 {s}")
+    return jsonify({"ok": True, "strategy": s})
 
 
 @app.post("/api/custom-sources")
