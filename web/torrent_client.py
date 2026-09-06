@@ -27,6 +27,11 @@ try:
 except Exception:  # noqa: BLE001
     requests = None  # type: ignore
 
+try:
+    import http.cookiejar as _cj
+except Exception:  # noqa: BLE001
+    _cj = None  # type: ignore
+
 
 def qb_config() -> Dict[str, str]:
     """从 settings.json + 环境变量读取 qBittorrent 连接配置。"""
@@ -61,18 +66,23 @@ class QBClient:
         self.password = password or cfg["QB_PASS"]
         self._sid: Optional[str] = None
         self._login_failures = 0
+        self._logged_in = False
+        # 会话保持: requests 用 Session, urllib 用 cookie jar
+        # (qBittorrent 的 session cookie 名是 QBT_SID_<端口>, 手工拼 Cookie 头不可靠)
+        self._sess = requests.Session() if requests is not None else None
+        self._jar = _cj.CookieJar() if _cj is not None else None
+        self._opener = (urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self._jar)) if self._jar is not None else None)
 
     # ---- 底层请求 ----
     def _request(self, method: str, path: str, data: Optional[Dict] = None,
                  timeout: float = 15) -> Tuple[int, Any]:
         uri = f"{self.url}{path}"
-        headers = {}
-        if self._sid:
-            headers["Cookie"] = f"SID={self._sid}"
+        headers = {"Referer": self.url + "/", "Origin": self.url}
         try:
-            if requests is not None:
-                resp = requests.request(method, uri, data=data, headers=headers,
-                                        timeout=timeout, verify=False)
+            if self._sess is not None:
+                resp = self._sess.request(method, uri, data=data, headers=headers,
+                                          timeout=timeout, verify=False)
                 try:
                     j = resp.json()
                 except Exception:  # noqa: BLE001
@@ -80,41 +90,45 @@ class QBClient:
                 return resp.status_code, j
             body = urllib.parse.urlencode(data or {}).encode() if data else None
             req = urllib.request.Request(uri, data=body, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            opener = self._opener or urllib.request.build_opener()
+            with opener.open(req, timeout=timeout) as r:
                 ct = r.headers.get("Content-Type", "")
                 raw = r.read()
                 try:
                     return r.status, json.loads(raw) if "json" in ct else raw.decode(errors="replace")
                 except Exception:  # noqa: BLE001
                     return r.status, raw.decode(errors="replace")
+        except urllib.error.HTTPError as e:  # 4xx/5xx 也带 body, 尽量读出
+            try:
+                raw = e.read().decode(errors="replace")
+            except Exception:  # noqa: BLE001
+                raw = ""
+            return e.code, raw or f"HTTP {e.code}"
         except Exception as e:  # noqa: BLE001
             return 0, f"连接失败: {e}"
 
     def login(self) -> bool:
-        """登录拿 SID cookie。失败返回 False。"""
+        """登录拿会话 cookie。
+
+        注意: qBittorrent 4.6+/5.x 登录成功返回 **204 No Content**(旧版返回 200 "Ok."),
+        两种都要接受; 会话靠 cookie jar / Session 自动维持, 不要手工拼 Cookie 头。
+        """
         code, text = self._request("POST", "/api/v2/auth/login",
                                    {"username": self.user, "password": self.password})
-        if code == 200 and isinstance(text, str) and text.strip() == "Ok.":
-            self._sid = self._sid or self._session_cookie()
+        ok = code in (200, 204) and (not isinstance(text, str)
+                                     or text.strip() in ("", "Ok.")
+                                     or "Forbidden" not in text)
+        self._logged_in = bool(ok)
+        if ok:
+            self._sid = "ok"  # 仅作为"已登录"标记, 真正的凭证在 cookie 里
             self._login_failures = 0
-            return True
-        self._login_failures += 1
-        return False
-
-    def _session_cookie(self) -> Optional[str]:
-        # requests 会记录 cookie; 用 urllib 时从响应头拿(简单场景直接再试一次)
-        if requests is not None:
-            try:
-                s = requests.Session()
-                s.post(f"{self.url}/api/v2/auth/login",
-                       data={"username": self.user, "password": self.password}, timeout=15)
-                return s.cookies.get("SID")
-            except Exception:  # noqa: BLE001
-                return None
-        return None
+        else:
+            self._login_failures += 1
+            self._sid = None
+        return bool(ok)
 
     def _ensure_login(self) -> bool:
-        return self.login() if self._sid is None else True
+        return True if self._logged_in else self.login()
 
     def version(self) -> Optional[str]:
         self._ensure_login()
@@ -139,7 +153,17 @@ class QBClient:
             data["category"] = category
         data["autoTMM"] = "false"
         code, t = self._request("POST", "/api/v2/torrents/add", data)
-        if code == 200 and (t in ("Ok.", "") or str(t) in ("Ok.", "")):
+        # 旧版 200 "Ok."; qBittorrent 5.x 异步接受返回 **202** + JSON
+        if code not in (200, 202):
+            return {"ok": False, "error": f"HTTP {code}: {str(t)[:300]}"}
+        # 5.x 返回: {"added_torrent_ids": [...], "failure_count": 0,
+        #           "pending_count": 1, "success_count": 0}
+        # pending_count>0 表示正在拉取种子/元数据, 属正常接受
+        if isinstance(t, dict):
+            if int(t.get("failure_count") or 0) == 0:
+                return {"ok": True, "detail": t}
+            return {"ok": False, "error": str(t)[:300]}
+        if str(t).strip() in ("Ok.", ""):
             return {"ok": True}
         return {"ok": False, "error": str(t)[:300]}
 
@@ -152,17 +176,22 @@ class QBClient:
             arr = [x for x in arr if tag in (x.get("tags") or "").split(",")]
         return arr
 
+    @staticmethod
+    def _ok(code: int) -> bool:
+        """qBittorrent 写操作成功码: 旧版 200, 5.x 可能 202(异步)/204。"""
+        return code in (200, 202, 204)
+
     def set_category(self, hashes: List[str], category: str) -> bool:
         self._ensure_login()
         code, _ = self._request("POST", "/api/v2/torrents/setCategory",
                                 {"hashes": "|".join(hashes), "category": category})
-        return code == 200
+        return self._ok(code)
 
     def set_tags(self, hashes: List[str], tags: str) -> bool:
         self._ensure_login()
         code, _ = self._request("POST", "/api/v2/torrents/addTags",
                                 {"hashes": "|".join(hashes), "tags": tags})
-        return code == 200
+        return self._ok(code)
 
     def delete_torrents(self, hashes: List[str], delete_files: bool = False) -> bool:
         """删除种子; delete_files=True 同时删已下载文件。"""
@@ -170,7 +199,7 @@ class QBClient:
         code, _ = self._request("POST", "/api/v2/torrents/delete",
                                 {"hashes": "|".join(hashes),
                                  "deleteFiles": "true" if delete_files else "false"})
-        return code == 200
+        return self._ok(code)
 
 
 def distro_name_from_torrent(name: str) -> Tuple[str, str]:

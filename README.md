@@ -366,7 +366,13 @@ samba / webdav 的完整定义已包含在 [方式 1 的 compose 示例](#1-使�
   2. **手动粘贴**：粘贴任意磁力链接（`magnet:?xt=...`）或 `.torrent` 文件 URL 到输入框，可手动指定发行版名（决定落盘目录）。
   3. **自加 RSS 源**：可添加任意 RSS/Atom 种子源 URL，解析其中的种子条目供选择下载。
 - **落盘目录**：iso-hub 会尽量从种子文件名推断发行版，保存到 `/data/<type>/<发行版>/`；推断不出则存 `/data/_torrents/`。两个目录都会被 `disk_inventory()` 扫描，前端「已下载」标记、过期清理、订阅同步、删除操作对**种子下载与直链下载一视同仁**。
-- **侧容器**：compose 会额外启动 `qbittorrent`（`lscr.io/linuxserver/qbittorrent`），挂载 `./data`（下载目录）、`./qb-config`（配置）、`./qb-downloads`（默认下载目录）。iso-hub 通过内网 `http://qbittorrent:8080` 调用其 Web API 发起下载/查询/删除。WebUI 地址 `http://<服务器IP>:8090`（默认 `admin/adminadmin`，**首次登录务必改密，并同步改 `.env` 的 `QB_PASS`**）。
+- **侧容器**：compose 会额外启动 `qbittorrent`（`lscr.io/linuxserver/qbittorrent`），挂载 `./data`（下载目录）、`./qb-config`（配置）、`./qb-downloads`（默认下载目录）。iso-hub 通过内网 `http://qbittorrent:8080` 调用其 Web API 发起下载/查询/删除。WebUI 地址 `http://<服务器IP>:8090`。
+- **⚠️ 首次使用需设置 WebUI 密码**：qBittorrent 4.6+/5.x **不再使用默认 `adminadmin`**，首次启动会随机生成临时密码（只在容器日志里出现一次），导致 iso-hub 连不上。用仓库附带的助手脚本设置一个固定密码：
+  ```bash
+  python3 scripts/qb_set_password.py --host <服务器IP> --user ubuntu --pw <SSH密码> --qbpass 你的密码
+  # 然后把 .env 的 QB_PASS 改成同一个密码, 再 docker compose up -d
+  ```
+  该脚本会停掉 qb 容器 → 把 PBKDF2 哈希写进 `./qb-config/qBittorrent/qBittorrent.conf` → 重启。设置一次即可持久生效。
 - 支持在 qBittorrent WebUI 里自行管理种子；iso-hub 网页只负责「发起/查看/删除」，实时进度与传输速率也会回显到 iso-hub 的种子页。
 
 > 说明：`qbittorrent` 镜像来自 Docker Hub（`lscr.io/linuxserver/qbittorrent`），国内拉取可能较慢；可给该服务单独配 Docker Hub 加速器。
