@@ -14,10 +14,14 @@ services:
     volumes:
       # 所有 ISO 与发行版清单持久化到宿主机 ./data
       - ./data:/data
+      # webdav 凭据配置目录: 与 webdav 容器共享(网页改密码后主容器改写此文件)
+      - ./webdav-config:/webdav-config
       # 挂载 docker.sock 以便网页端控制 SMB/WebDAV sidecar 的启停
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - TZ=Asia/Shanghai
+      # webdav 配置文件路径(宿主机 ./webdav-config/webdav.yml 挂到容器内 /webdav-config/)
+      - WEBDAV_CONF=${WEBDAV_CONF:-/webdav-config/webdav.yml}
       # 需要鉴权时在宿主机同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
       # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁

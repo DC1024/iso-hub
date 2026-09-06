@@ -1,5 +1,8 @@
 # WebDAV 配置 (hacdias/webdav)
-# 此文件挂载到容器 /config.yml, 主容器可在网页改密码后重写此文件+restart 生效
+# 此文件所在目录 ./webdav-config 同时挂给 iso-hub(:/webdav-config) 与 webdav(:/config),
+# 主容器在网页改密码后重写此文件并 restart webdav 容器即生效。
+# 注: 早期版本用单文件 bind (./data/webdav.yml:/config.yml), 在部分内核/Docker 组合上
+#     runc 会报 "not a directory", 故改为目录挂载。
 # 注意: 凭据明文存放, 仅内网使用
 address: 0.0.0.0
 port: 6065

@@ -534,11 +534,20 @@ def _recreate_samba(username: str, password: str) -> bool:
         return False
 
 
+def _webdav_conf_path() -> Path:
+    """webdav 配置文件路径。
+
+    默认 /data/webdav.yml(旧版单文件 bind); 新版 compose 把 ./webdav-config 同时挂给
+    iso-hub(/webdav-config) 与 webdav(/config), 并用 WEBDAV_CONF 指向后者,
+    以规避 LinuxServer/runc 在部分内核上单文件 bind 报 "not a directory" 的问题。
+    """
+    return Path(os.environ.get("WEBDAV_CONF") or str(DATA_DIR / "webdav.yml"))
+
+
 def _apply_webdav_creds(username: str, password: str) -> bool:
-    """webdav 凭据在挂载的 webdav.yml 里(主容器可写 /data/webdav.yml),
-    改写文件 + 重启容器即生效, 无需重建。"""
+    """webdav 凭据在挂载的 webdav.yml 里, 改写文件 + 重启容器即生效, 无需重建。"""
     try:
-        cfg_path = DATA_DIR / "webdav.yml"
+        cfg_path = _webdav_conf_path()
         if not cfg_path.exists():
             log(f"[共享] webdav 配置文件缺失: {cfg_path}")
             return False
