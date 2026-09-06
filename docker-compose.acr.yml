@@ -1,0 +1,86 @@
+# 从阿里云 ACR 拉取预构建镜像部署 —— 无需本地构建、无需 docker login（仓库已设为公开）
+#
+# 用法（在服务器上）:
+#   mkdir -p /opt/iso-hub/data && cd /opt/iso-hub
+#   docker compose -f docker-compose.acr.yml pull
+#   docker compose -f docker-compose.acr.yml up -d
+#
+# 升级:
+#   docker compose -f docker-compose.acr.yml pull && docker compose -f docker-compose.acr.yml up -d
+#
+# 说明: 镜像由 .github/workflows/aliyun-acr.yml 自动构建推送
+#   - push master  -> latest
+#   - 打 tag v1.0.6 -> 1.0.6 + latest
+# 若要锁定版本, 把下面的 :latest 改成 :1.0.6 之类具体版本号
+
+services:
+  iso-hub:
+    image: registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:latest
+    container_name: iso-hub
+    restart: unless-stopped
+    ports:
+      # 左侧可改: 例如 "8099:8080" 或 "127.0.0.1:8080:8080"(仅本机访问)
+      - "${ISO_HUB_PORT:-8899}:8080"
+    volumes:
+      # 所有 ISO 与发行版清单持久化到宿主机 ./data
+      - ./data:/data
+      # 挂载 docker.sock 以便网页端控制 SMB/WebDAV sidecar 的启停
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=Asia/Shanghai
+      # 需要鉴权时在宿主机同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
+      - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
+      # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
+      - ISO_HUB_REQUIRE_LOGIN=${ISO_HUB_REQUIRE_LOGIN:-1}
+      # 订阅自动同步间隔(秒),默认 86400=每天;设 0 关闭自动调度,仅手动/定时调用
+      - ISO_HUB_SYNC_INTERVAL=${ISO_HUB_SYNC_INTERVAL:-86400}
+      # 网络共享默认凭据(可在网页「设置→共享设置」修改, 改后写入 ./data/settings.json 覆盖此处)
+      - SAMBA_USER=${SAMBA_USER:-iso}
+      - SAMBA_PASS=${SAMBA_PASS:-iso123}
+      - WEBDAV_USER=${WEBDAV_USER:-iso}
+      - WEBDAV_PASS=${WEBDAV_PASS:-iso123}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u;u.urlopen('http://127.0.0.1:8080/api/health',timeout=4)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+# ---------- 网络共享 sidecar（可选，默认不启动）----------
+# 下面两个 sidecar 镜像来自 Docker Hub，国内服务器可能拉取慢或失败，
+# 且本文件主要用途是「快速验证阿里云主镜像」，故默认注释。
+# 如需共享，取消注释后执行:
+#   docker compose -f docker-compose.acr.yml up -d
+#
+#  samba:
+#    image: dperson/samba:latest
+#    container_name: iso-hub-samba
+#    restart: unless-stopped
+#    ports:
+#      - "${SAMBA_PORT:-1445}:445"
+#      - "${SAMBA_NETBIOS:-1137}:137/udp"
+#      - "${SAMBA_138:-1138}:138/udp"
+#      - "${SAMBA_139:-1139}:139"
+#    volumes:
+#      - ./data:/srv/iso:ro
+#    environment:
+#      - TZ=Asia/Shanghai
+#      - USERID=${SAMBA_UID:-0}
+#      - GROUPID=${SAMBA_GID:-0}
+#    command: >-
+#      -p
+#      -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
+#      -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
+#
+#  webdav:
+#    image: hacdias/webdav:latest
+#    container_name: iso-hub-webdav
+#    restart: unless-stopped
+#    ports:
+#      - "${WEBDAV_PORT:-8081}:6065"
+#    volumes:
+#      - ./data:/data:ro
+#      - ./data/webdav.yml:/config.yml:ro
+#    environment:
+#      - TZ=Asia/Shanghai
+#    command: ["-c", "/config.yml"]
