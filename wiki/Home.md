@@ -4,6 +4,7 @@
 >
 > 项目源码 / 完整 README：<https://github.com/DC1024/iso-hub>
 > Docker Hub 镜像：<https://hub.docker.com/r/dcchendockeruser/iso-hub>
+> 阿里云 ACR 镜像（国内推荐）：`registry.cn-hangzhou.aliyuncs.com/dcchen/isohub`（公开仓库，无需登录）
 
 ## 文档目录
 
@@ -42,7 +43,7 @@ docker compose up -d --build
 
 ## 版本里程碑（用于核对前端是否为最新）
 
-标题右上角的绿色徽章（如 `1.0.4`）是**前端版本号**，刷新后显示。用它判断你加载的是不是最新界面：
+标题右上角的绿色徽章（如 `1.0.6`）是**前端版本号**，刷新后显示。用它判断你加载的是不是最新界面：
 
 - **1.0.1** — 修复 tqdm 阻塞日志（日志只在停止任务后刷出的问题）
 - **1.0.2** — 修复进度条卡 0% + 日志不刷新的**变量遮蔽根因**（彻底修复）
