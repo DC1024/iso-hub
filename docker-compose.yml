@@ -73,10 +73,10 @@ services:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
       - ./data:/data:ro             # 只读共享
-      - ./data/webdav.yml:/config.yml:ro   # 凭据配置(主容器可改写此文件+restart 实现改密码)
+      - ./webdav-config:/config     # 凭据配置目录(挂载目录避免单文件 bind 的坑; 配置文件 webdav.yml 在此目录内)
     environment:
       - TZ=Asia/Shanghai
-    command: ["-c", "/config.yml"]
+    command: ["-c", "/config/webdav.yml"]
 
   # ---------- 种子下载 sidecar: qBittorrent (BitTorrent 下载) ----------
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
