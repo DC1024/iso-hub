@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</title>
+<meta name="description" content="ISO Hub —— 对 Sowevo/iso_download 的网页化封装，自动追踪清华镜像站元数据、选择性下载、SHA256 校验、内置 SMB/WebDAV 共享。网页上搞定 Linux 发行版 ISO 的更新与分发。" />
+<style>
+  :root{
+    --bg:#070b16; --bg2:#0b1222; --panel:rgba(255,255,255,.045);
+    --panel-brd:rgba(120,170,255,.16); --txt:#e7eefb; --muted:#94a3b8;
+    --cyan:#22d3ee; --blue:#3b82f6; --grad:linear-gradient(120deg,#22d3ee,#3b82f6 60%,#8b5cf6);
+    --r:16px; --maxw:1120px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--txt);line-height:1.6;overflow-x:hidden}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px}
+  .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .eyebrow{font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan);font-weight:600}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:12px 22px;border-radius:999px;font-weight:600;
+    font-size:15px;cursor:pointer;border:1px solid transparent;transition:.25s;white-space:nowrap}
+  .btn.primary{background:var(--grad);color:#04121f;box-shadow:0 8px 30px rgba(59,130,246,.35)}
+  .btn.primary:hover{transform:translateY(-2px);box-shadow:0 12px 38px rgba(59,130,246,.5)}
+  .btn.ghost{background:var(--panel);border-color:var(--panel-brd);color:var(--txt)}
+  .btn.ghost:hover{border-color:var(--cyan);color:var(--cyan)}
+  section{padding:84px 0;position:relative}
+  .sec-head{text-align:center;max-width:720px;margin:0 auto 48px}
+  .sec-head h2{font-size:clamp(26px,4vw,38px);margin:10px 0 12px;letter-spacing:-.5px}
+  .sec-head p{color:var(--muted);font-size:16px}
+
+  /* nav */
+  header{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);
+    background:rgba(7,11,22,.72);border-bottom:1px solid rgba(255,255,255,.06)}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px}
+  .logo{width:30px;height:30px;border-radius:9px;background:var(--grad);display:grid;place-items:center;
+    font-weight:800;color:#04121f;font-size:15px;box-shadow:0 4px 16px rgba(34,211,238,.4)}
+  .nav-links{display:flex;gap:26px;font-size:14px;color:var(--muted)}
+  .nav-links a:hover{color:var(--txt)}
+  .nav-cta{display:flex;gap:12px;align-items:center}
+  .burger{display:none;flex-direction:column;gap:5px;cursor:pointer;background:none;border:0;padding:6px}
+  .burger span{width:22px;height:2px;background:var(--txt);border-radius:2px;transition:.3s}
+  .mobile-menu{display:none;flex-direction:column;gap:4px;padding:10px 22px 18px;border-bottom:1px solid rgba(255,255,255,.06)}
+  .mobile-menu a{padding:10px 0;color:var(--muted);border-bottom:1px solid rgba(255,255,255,.05)}
+
+  /* hero */
+  .hero{padding:96px 0 70px;text-align:center;
+    background:radial-gradient(1100px 460px at 50% -8%,rgba(59,130,246,.22),transparent 60%),
+               radial-gradient(700px 360px at 80% 10%,rgba(34,211,238,.12),transparent 60%)}
+  .hero h1{font-size:clamp(34px,6.4vw,62px);line-height:1.08;letter-spacing:-1.5px;margin:16px 0 18px}
+  .hero p.lead{max-width:660px;margin:0 auto;color:var(--muted);font-size:18px}
+  .hero-cta{display:flex;gap:14px;justify-content:center;margin:30px 0 12px;flex-wrap:wrap}
+  .stats{display:flex;gap:30px;justify-content:center;flex-wrap:wrap;margin-top:42px}
+  .stat{text-align:center}
+  .stat b{display:block;font-size:30px;font-weight:800;background:var(--grad);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .stat span{font-size:13px;color:var(--muted)}
+
+  /* grid */
+  .grid{display:grid;gap:18px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .card{background:var(--panel);border:1px solid var(--panel-brd);border-radius:var(--r);padding:22px;
+    transition:.28s;position:relative;overflow:hidden}
+  .card:hover{transform:translateY(-4px);border-color:rgba(34,211,238,.5);
+    box-shadow:0 14px 40px rgba(2,8,23,.5)}
+  .card .ic{width:42px;height:42px;border-radius:11px;display:grid;place-items:center;font-size:20px;
+    background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.3);margin-bottom:14px}
+  .card h3{font-size:17px;margin-bottom:7px}
+  .card p{font-size:14px;color:var(--muted)}
+
+  /* architecture */
+  .arch{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:14px}
+  .node{background:linear-gradient(180deg,rgba(59,130,246,.08),rgba(34,211,238,.04));
+    border:1px solid var(--panel-brd);border-radius:14px;padding:20px;text-align:center}
+  .node .t{font-weight:700;font-size:16px}
+  .node .sub{font-size:12px;color:var(--cyan);margin:4px 0 10px}
+  .node ul{list-style:none;text-align:left;font-size:13px;color:var(--muted)}
+  .node li{padding:3px 0;border-bottom:1px dashed rgba(255,255,255,.07)}
+  .flow{display:flex;justify-content:center;gap:10px;margin:22px 0;color:var(--muted);font-size:13px;flex-wrap:wrap}
+  .flow b{color:var(--cyan)}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
+  .chip{font-size:12px;padding:6px 12px;border-radius:999px;background:var(--panel);
+    border:1px solid var(--panel-brd);color:var(--muted)}
+
+  /* distros */
+  .tags{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:8px}
+  .tag{font-size:13px;padding:8px 14px;border-radius:999px;background:var(--panel);
+    border:1px solid var(--panel-brd)}
+  .tag:hover{border-color:var(--cyan);color:var(--cyan)}
+  .mirrors{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:28px}
+
+  /* showcase */
+  .console{background:#060a14;border:1px solid var(--panel-brd);border-radius:14px;overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.5);max-width:880px;margin:0 auto}
+  .con-bar{display:flex;gap:7px;padding:12px 14px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.07)}
+  .con-bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .con-bar .r{background:#ff5f57}.con-bar .y{background:#febc2e}.con-bar .g{background:#28c840}
+  .con-body{padding:18px;font-family:"SFMono-Regular",Consolas,Menlo,monospace;font-size:13px;line-height:1.7;
+    color:#c7d2e0;min-height:230px}
+  .con-body .p{color:var(--cyan)}.con-body .ok{color:#28c840}.con-body .dim{color:#5b6b82}
+  .con-body .hl{color:#fbbf24}
+
+  /* quickstart */
+  .steps{counter-reset:s;display:grid;gap:14px;max-width:760px;margin:0 auto}
+  .step{display:flex;gap:16px;align-items:flex-start;background:var(--panel);border:1px solid var(--panel-brd);
+    border-radius:14px;padding:18px}
+  .step::before{counter-increment:s;content:counter(s);flex:0 0 34px;width:34px;height:34px;border-radius:50%;
+    display:grid;place-items:center;font-weight:800;color:#04121f;background:var(--grad)}
+  .step h4{font-size:15px;margin-bottom:6px}
+  .step p{font-size:13px;color:var(--muted)}
+  .code{position:relative;background:#060a14;border:1px solid var(--panel-brd);border-radius:12px;
+    padding:16px 18px;font-family:"SFMono-Regular",Consolas,Menlo,monospace;font-size:13px;color:#d6e2f2;
+    overflow:auto;margin-top:8px}
+  .code .c{color:#5b6b82}.code .k{color:#22d3ee}
+  .copy{position:absolute;top:10px;right:10px;font-size:12px;padding:5px 11px;border-radius:8px;cursor:pointer;
+    background:rgba(255,255,255,.07);border:1px solid var(--panel-brd);color:var(--muted)}
+  .copy:hover{color:var(--cyan);border-color:var(--cyan)}
+
+  /* faq */
+  .faq{max-width:780px;margin:0 auto;display:grid;gap:12px}
+  details{background:var(--panel);border:1px solid var(--panel-brd);border-radius:14px;padding:0 18px}
+  summary{padding:16px 0;cursor:pointer;font-weight:600;list-style:none;display:flex;justify-content:space-between;
+    align-items:center}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"+";font-size:20px;color:var(--cyan);transition:.3s}
+  details[open] summary::after{transform:rotate(45deg)}
+  details p{padding:0 0 16px;color:var(--muted);font-size:14px}
+
+  footer{border-top:1px solid rgba(255,255,255,.07);padding:40px 0;color:var(--muted);font-size:13px}
+  .foot{display:flex;justify-content:space-between;flex-wrap:wrap;gap:16px;align-items:center}
+  .reveal{opacity:0;transform:translateY(24px);transition:.7s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(max-width:860px){
+    .g3,.arch,.mirrors,.g2{grid-template-columns:1fr}
+    .nav-links{display:none}.nav-cta .ghost{display:none}.burger{display:flex}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <div class="brand"><span class="logo">IS</span> ISO&nbsp;Hub</div>
+    <nav class="nav-links">
+      <a href="#features">功能</a>
+      <a href="#arch">架构</a>
+      <a href="#distros">发行版</a>
+      <a href="#start">快速开始</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener">GitHub</a>
+      <a class="btn primary" href="#start">立即部署</a>
+    </div>
+    <button class="burger" aria-label="menu"><span></span><span></span><span></span></button>
+  </div>
+  <div class="mobile-menu">
+    <a href="#features">功能</a><a href="#arch">架构</a><a href="#distros">发行版</a>
+    <a href="#start">快速开始</a><a href="#faq">FAQ</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <span class="eyebrow">Web ISO Updater · Docker Ready</span>
+    <h1>网页上的 <span class="grad">Linux 发行版 ISO</span><br>自动更新器</h1>
+    <p class="lead">ISO Hub 是对 Sowevo/iso_download 命令行工具的网页化封装。自动追踪清华镜像站元数据、按需选择性下载、SHA256 校验、内置 SMB / WebDAV 共享——在浏览器里搞定 ISO 的更新与分发。</p>
+    <div class="hero-cta">
+      <a class="btn primary" href="#start">🚀 一键部署</a>
+      <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener">在 GitHub 查看</a>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>3</b><span>容器化服务</span></div>
+      <div class="stat"><b>12+</b><span>主流发行版</span></div>
+      <div class="stat"><b>SHA256</b><span>下载校验</span></div>
+      <div class="stat"><b>清华源</b><span>元数据加速</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Features</span>
+      <h2>为「追 ISO」这件麻烦事而生的能力</h2>
+      <p>从清单浏览到下载校验，再到局域网共享，一条龙在网页里完成。</p>
+    </div>
+    <div class="grid g3">
+      <div class="card reveal"><div class="ic">📋</div><h3>发行版清单</h3><p>聚合主流 Linux 发行版及其版本、架构、镜像变体，统一浏览。</p></div>
+      <div class="card reveal"><div class="ic">⬇️</div><h3>选择性下载</h3><p>按版本 / 架构 / 变体勾选，只拉你真正需要的那几个 ISO。</p></div>
+      <div class="card reveal"><div class="ic">✅</div><h3>SHA256 校验</h3><p>下载后自动校验哈希，确保镜像完整、未被篡改。</p></div>
+      <div class="card reveal"><div class="ic">🐉</div><h3>清华元数据</h3><p>基于清华镜像站元数据自动刷新，国内访问快、延迟低。</p></div>
+      <div class="card reveal"><div class="ic">🔧</div><h3>自定义镜像源</h3><p>支持配置自有镜像源，适配内网或特定区域加速。</p></div>
+      <div class="card reveal"><div class="ic">🛡️</div><h3>镜像保护</h3><p>防止重复拉取、保护磁盘与带宽，已存在的版本智能跳过。</p></div>
+      <div class="card reveal"><div class="ic">⭐</div><h3>收藏订阅</h3><p>收藏常用发行版，变更时同步提醒，追新不掉队。</p></div>
+      <div class="card reveal"><div class="ic">🔐</div><h3>单管理员</h3><p>内置单管理员登录，轻量鉴权，适合家庭 / 小团队自建。</p></div>
+      <div class="card reveal"><div class="ic">⏰</div><h3>定时任务</h3><p>按计划自动检查并更新元数据，无需人工值守。</p></div>
+      <div class="card reveal"><div class="ic">🌐</div><h3>中英文界面</h3><p>内置双语界面，中英切换无障碍。</p></div>
+      <div class="card reveal"><div class="ic">🗂️</div><h3>SMB 共享</h3><p>内置 Samba 容器，下载的 ISO 直接通过 SMB 在局域网共享。</p></div>
+      <div class="card reveal"><div class="ic">🌍</div><h3>WebDAV 共享</h3><p>同时提供 WebDAV，方便挂载为网络磁盘跨平台取用。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="arch" style="background:linear-gradient(180deg,transparent,rgba(59,130,246,.05),transparent)">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Architecture</span>
+      <h2>三容器，一套 Docker Compose 拉起</h2>
+      <p>Web 服务 + SMB + WebDAV，持久化数据独立挂载，健康检查内置。</p>
+    </div>
+    <div class="arch">
+      <div class="node reveal"><div class="t">iso-hub</div><div class="sub">Flask · Python 3.12</div>
+        <ul><li>Web UI / API</li><li>元数据刷新</li><li>下载 & 校验</li><li>定时任务</li></ul></div>
+      <div class="node reveal"><div class="t">samba</div><div class="sub">SMB 共享</div>
+        <ul><li>局域网文件共享</li><li>独立数据卷</li><li>只读 / 读写</li></ul></div>
+      <div class="node reveal"><div class="t">webdav</div><div class="sub">WebDAV 共享</div>
+        <ul><li>挂载为网盘</li><li>跨平台取用</li><li>Basic Auth</li></ul></div>
+    </div>
+    <div class="flow reveal">浏览器 <b>→</b> iso-hub(Web) <b>→</b> 清华镜像站(元数据/ISO) <b>→</b> 落盘 <b>→</b> SMB / WebDAV 共享</div>
+    <div class="meta reveal">
+      <span class="chip">端口 · 可配置</span><span class="chip">持久化 · 挂载卷</span>
+      <span class="chip">健康检查 · 内置</span><span class="chip">镜像 · Docker Hub</span>
+      <span class="chip">栈 · Flask + Docker</span>
+    </div>
+  </div>
+</section>
+
+<section id="distros">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Distributions</span>
+      <h2>覆盖你常装的那些发行版</h2>
+      <p>持续扩充中，以下为已支持 / 计划支持的代表。</p>
+    </div>
+    <div class="tags reveal">
+      <span class="tag">Ubuntu</span><span class="tag">Debian</span><span class="tag">Arch Linux</span>
+      <span class="tag">Rocky Linux</span><span class="tag">AlmaLinux</span><span class="tag">Fedora</span>
+      <span class="tag">openSUSE</span><span class="tag">CentOS</span><span class="tag">Kali</span>
+      <span class="tag">Linux Mint</span><span class="tag">Manjaro</span><span class="tag">EndeavourOS</span>
+    </div>
+    <div class="mirrors">
+      <div class="card reveal"><div class="ic">🐉</div><h3>清华 TUNA</h3><p>默认元数据源，国内低延迟、更新及时。</p></div>
+      <div class="card reveal"><div class="ic">🏫</div><h3>中科大 USTC</h3><p>可切换的备用镜像源，提升可用性。</p></div>
+      <div class="card reveal"><div class="ic">🛰️</div><h3>自定义源</h3><p>自建 / 内网镜像源随意接入。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="showcase" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.04),transparent)">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Console</span>
+      <h2>简洁的控制台体验</h2>
+      <p>勾选 → 下载 → 校验 → 共享，流程一目了然。</p>
+    </div>
+    <div class="console reveal">
+      <div class="con-bar"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="con-body">
+<span class="dim"># 刷新元数据</span>
+<span class="p">iso-hub</span> &gt; sync --source tuna
+<span class="ok">✔</span> 元数据已更新 · 142 个发行版版本
+
+<span class="dim"># 选择下载</span>
+<span class="p">iso-hub</span> &gt; download ubuntu 24.04 desktop amd64
+<span class="hl">⠋</span> 下载中 … <span class="dim">5.8 GB / 5.8 GB</span>
+<span class="ok">✔</span> 下载完成
+
+<span class="dim"># 校验</span>
+<span class="p">iso-hub</span> &gt; verify ubuntu-24.04-desktop-amd64.iso
+<span class="ok">✔</span> SHA256 匹配 · 镜像完整
+
+<span class="dim"># 共享</span>
+<span class="p">iso-hub</span> &gt; share --smb --webdav
+<span class="ok">✔</span> SMB  //iso-hub/isos  ·  WebDAV https://host:8081
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Quick Start</span>
+      <h2>四步跑起来</h2>
+      <p>有 Docker 就能装，无需编译。</p>
+    </div>
+    <div class="steps">
+      <div class="step reveal"><div><h4>获取配置</h4><p>克隆仓库并准备环境变量。</p>
+        <div class="code"><span class="c"># 克隆</span>
+git clone https://github.com/DC1024/iso-hub
+<span class="c"># 准备 .env</span>
+cp .env.example .env</div></div></div>
+      <div class="step reveal"><div><h4>配置端口与路径</h4><p>编辑 .env，设置 Web 端口、SMB / WebDAV 端口及数据挂载目录。</p>
+        <div class="code"><span class="c"># .env 关键项</span>
+WEB_PORT=<span class="k">8080</span>
+SMB_PORT=<span class="k">445</span>
+WEBDAV_PORT=<span class="k">8081</span>
+DATA_DIR=<span class="k">/mnt/iso</span></div></div></div>
+      <div class="step reveal"><div><h4>启动</h4><p>一条命令拉起三容器。</p>
+        <div class="code"><span class="c"># 启动全部服务</span>
+docker compose up -d</div></div></div>
+      <div class="step reveal"><div><h4>打开网页</h4><p>浏览器访问 <b>http://&lt;你的IP&gt;:8080</b>，登录后开始追 ISO。</p>
+        <div class="code"><span class="c"># 默认访问地址</span>
+http://localhost:8080</div></div></div>
+    </div>
+    <div class="code reveal" style="max-width:760px;margin:22px auto 0">
+<span class="c"># 一行部署（示意）</span>
+git clone https://github.com/DC1024/iso-hub &amp;&amp; cd iso-hub &amp;&amp; cp .env.example .env &amp;&amp; docker compose up -d
+      <button class="copy" data-copy>复制</button>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">FAQ</span>
+      <h2>常见问题</h2>
+    </div>
+    <div class="faq">
+      <details class="reveal"><summary>ISO Hub 和 iso_download 是什么关系？</summary>
+        <p>ISO Hub 是 Sowevo/iso_download 命令行工具的网页封装：把原本在终端里执行的「查元数据 / 选版本 / 下载 / 校验」搬到了浏览器，并补上了 SMB / WebDAV 共享。</p></details>
+      <details class="reveal"><summary>需要自己编译吗？</summary>
+        <p>不需要。官方以 Docker 镜像分发，docker compose up -d 即可运行，全程无需本地编译。</p></details>
+      <details class="reveal"><summary>元数据从哪来？国内访问快吗？</summary>
+        <p>默认基于清华镜像站(TUNA)的元数据，国内访问延迟低、更新及时；也可切换到中科大等其它源，或接入自定义镜像源。</p></details>
+      <details class="reveal"><summary>下载的 ISO 怎么取用？</summary>
+        <p>落盘后通过内置的 SMB（局域网共享）与 WebDAV（可挂载为网盘）直接分发，跨平台都能访问。</p></details>
+      <details class="reveal"><summary>支持哪些发行版？</summary>
+        <p>覆盖 Ubuntu / Debian / Arch / Rocky / Alma / Fedora / openSUSE / CentOS / Kali 等主流发行版，并持续扩充。</p></details>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <div>© <span id="yr"></span> ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</div>
+    <div>基于 <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" style="color:var(--cyan)">DC1024/iso-hub</a> · Flask + Docker</div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('yr').textContent = new Date().getFullYear();
+  // 移动端菜单
+  const burger = document.querySelector('.burger'), mm = document.querySelector('.mobile-menu');
+  burger && burger.addEventListener('click', () => mm.style.display = mm.style.display === 'flex' ? 'none' : 'flex');
+  mm && mm.querySelectorAll('a').forEach(a => a.addEventListener('click', () => mm.style.display = 'none'));
+  // 滚动入场
+  const io = new IntersectionObserver((es) => es.forEach(e => { if (e.isIntersecting) e.target.classList.add('in'); }), { threshold: .12 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+  // 复制按钮
+  document.querySelectorAll('.copy').forEach(b => b.addEventListener('click', () => {
+    const code = b.closest('.code').innerText.replace('复制', '').trim();
+    navigator.clipboard && navigator.clipboard.writeText(code);
+    const t = b.textContent; b.textContent = '已复制'; setTimeout(() => b.textContent = t, 1400);
+  }));
+</script>
+</body>
+</html>
