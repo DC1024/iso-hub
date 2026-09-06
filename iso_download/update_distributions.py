@@ -95,6 +95,55 @@ def format_template(template: str, context: Dict[str, str]) -> str:
         raise SourceBuilderError(f"Missing placeholder {exc} in context {context}")
 
 
+def _attach_mirrors(
+    source: Dict,
+    entry: Dict,
+    ctx: Dict[str, str],
+    download_template: Optional[str],
+    checksum_template: Optional[str],
+    sub_key: str = "sub_listing_url",
+) -> Dict:
+    """为 entry 生成多源候选 download_urls / checksum_urls（含默认主源）。
+
+    mirrors: 可选镜像对象列表；每个镜像可覆盖 listing_url、download_template、
+    checksum_template、sub_listing_template。缺省字段继承 source 默认值。
+    flat_listing 类无 download_template 时，用 urljoin(mirror 的 listing/sub, 文件名)。
+    """
+    mirrors = source.get("mirrors") or []
+    if not mirrors:
+        return entry
+    base = source.get("listing_url", "")
+    dl_urls = [entry.get("download_url")]
+    cs_urls = [entry["checksum_url"]] if entry.get("checksum_url") else []
+    for m in mirrors:
+        mctx = {**ctx, "listing_url": m.get("listing_url", base)}
+        if sub_key and m.get("sub_listing_template"):
+            mctx[sub_key] = format_template(m["sub_listing_template"], mctx)
+        # 下载候选
+        m_dl_tmpl = m.get("download_template") or download_template
+        if m_dl_tmpl:
+            m_dl = format_template(m_dl_tmpl, mctx)
+        else:
+            base_url = mctx.get(sub_key) or mctx["listing_url"]
+            fname = entry["download_url"].rstrip("/").rsplit("/", 1)[-1]
+            m_dl = urljoin(base_url, fname)
+        if m_dl and m_dl not in dl_urls:
+            dl_urls.append(m_dl)
+        # 校验和候选
+        m_cs_tmpl = m.get("checksum_template") or checksum_template
+        if m_cs_tmpl:
+            try:
+                m_cs = format_template(m_cs_tmpl, mctx)
+            except SourceBuilderError:
+                m_cs = None
+            if m_cs and m_cs not in cs_urls:
+                cs_urls.append(m_cs)
+    entry["download_urls"] = dl_urls
+    if cs_urls:
+        entry["checksum_urls"] = cs_urls
+    return entry
+
+
 def get_primary_match(match: re.Match) -> Tuple[str, Dict[str, str]]:
     groups = {k: v for k, v in match.groupdict().items() if v is not None}
     if "value" in groups:
@@ -146,15 +195,15 @@ def build_from_dated_directory(source: Dict) -> List[Dict]:
         checksum_url = (
             format_template(checksum_template, full_context) if checksum_template else ""
         )
-        entries.append(
-            {
-                "distribution": source["distribution"],
-                "type": source["type"],
-                "download_url": download_url,
-                "checksum_url": checksum_url,
-                "checksum": source.get("checksum", ""),
-            }
-        )
+        entry = {
+            "distribution": source["distribution"],
+            "type": source["type"],
+            "download_url": download_url,
+            "checksum_url": checksum_url,
+            "checksum": source.get("checksum", ""),
+        }
+        _attach_mirrors(source, entry, full_context, download_template, checksum_template)
+        entries.append(entry)
     return entries
 
 
@@ -189,15 +238,15 @@ def build_from_flat_listing(source: Dict) -> List[Dict]:
         checksum_url = (
             format_template(checksum_template, context) if checksum_template else ""
         )
-        entries.append(
-            {
-                "distribution": source["distribution"],
-                "type": source["type"],
-                "download_url": download_url,
-                "checksum_url": checksum_url,
-                "checksum": source.get("checksum", ""),
-            }
-        )
+        entry = {
+            "distribution": source["distribution"],
+            "type": source["type"],
+            "download_url": download_url,
+            "checksum_url": checksum_url,
+            "checksum": source.get("checksum", ""),
+        }
+        _attach_mirrors(source, entry, context, download_template, checksum_template)
+        entries.append(entry)
     return entries
 
 
@@ -216,15 +265,15 @@ def build_from_static(source: Dict) -> List[Dict]:
         checksum_url = (
             format_template(checksum_template, context) if checksum_template else ""
         )
-        entries.append(
-            {
-                "distribution": source["distribution"],
-                "type": source["type"],
-                "download_url": download_url,
-                "checksum_url": checksum_url,
-                "checksum": source.get("checksum", ""),
-            }
-        )
+        entry = {
+            "distribution": source["distribution"],
+            "type": source["type"],
+            "download_url": download_url,
+            "checksum_url": checksum_url,
+            "checksum": source.get("checksum", ""),
+        }
+        _attach_mirrors(source, entry, context, download_template, checksum_template)
+        entries.append(entry)
     return entries
 
 
@@ -281,15 +330,17 @@ def build_from_versioned_flat_listing(source: Dict) -> List[Dict]:
                     if checksum_template
                     else ""
                 )
-                entries.append(
-                    {
-                        "distribution": source["distribution"],
-                        "type": source["type"],
-                        "download_url": download_url,
-                        "checksum_url": checksum_url,
-                        "checksum": source.get("checksum", ""),
-                    }
+                entry = {
+                    "distribution": source["distribution"],
+                    "type": source["type"],
+                    "download_url": download_url,
+                    "checksum_url": checksum_url,
+                    "checksum": source.get("checksum", ""),
+                }
+                _attach_mirrors(
+                    source, entry, entry_context, download_template, checksum_template
                 )
+                entries.append(entry)
         except Exception as exc:
             per_version_failures.append(f"{version}: {exc}")
             print(

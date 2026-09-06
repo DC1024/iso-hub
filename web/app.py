@@ -829,6 +829,7 @@ def api_download():
         "--json-file", str(JSON_FILE),
         "--download-dir", str(DATA_DIR),
         "--select", select_json,
+        "--strategy", os.environ.get("ISO_HUB_SOURCE_STRATEGY", "A"),
     ]
     names = sorted({e["distribution"] for e in matched})
     ok = start_task("download", f"下载: {'、'.join(names)}（{len(matched)} 个文件）", cmd, download_payload)

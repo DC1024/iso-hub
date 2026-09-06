@@ -8,7 +8,24 @@
       "version_regex": "href=\\\"(?P<value>\\d{4}\\.\\d{2}\\.\\d{2})/\\\"",
       "max_entries": 3,
       "download_template": "{listing_url}{version}/archlinux-{version}-x86_64.iso",
-      "checksum_template": "{listing_url}{version}/sha256sums.txt"
+      "checksum_template": "{listing_url}{version}/sha256sums.txt",
+      "mirrors": [
+        {
+          "listing_url": "https://mirrors.ustc.edu.cn/archlinux/iso/",
+          "download_template": "{listing_url}{version}/archlinux-{version}-x86_64.iso",
+          "checksum_template": "{listing_url}{version}/sha256sums.txt"
+        },
+        {
+          "listing_url": "https://mirrors.aliyun.com/archlinux/iso/",
+          "download_template": "{listing_url}{version}/archlinux-{version}-x86_64.iso",
+          "checksum_template": "{listing_url}{version}/sha256sums.txt"
+        },
+        {
+          "listing_url": "https://mirrors.edge.kernel.org/archlinux/iso/",
+          "download_template": "{listing_url}{version}/archlinux-{version}-x86_64.iso",
+          "checksum_template": "{listing_url}{version}/sha256sums.txt"
+        }
+      ]
     },
     {
       "distribution": "CentOS",
@@ -18,7 +35,19 @@
         "7.9.2009"
       ],
       "download_template": "https://mirrors.tuna.tsinghua.edu.cn/centos-vault/{version}/isos/x86_64/CentOS-7-x86_64-Everything-2009.iso",
-      "checksum_template": "https://mirrors.tuna.tsinghua.edu.cn/centos-vault/{version}/isos/x86_64/sha256sum.txt"
+      "checksum_template": "https://mirrors.tuna.tsinghua.edu.cn/centos-vault/{version}/isos/x86_64/sha256sum.txt",
+      "mirrors": [
+        {
+          "listing_url": "https://mirrors.aliyun.com/centos-vault/",
+          "download_template": "https://mirrors.aliyun.com/centos-vault/{version}/isos/x86_64/CentOS-7-x86_64-Everything-2009.iso",
+          "checksum_template": "https://mirrors.aliyun.com/centos-vault/{version}/isos/x86_64/sha256sum.txt"
+        },
+        {
+          "listing_url": "https://vault.centos.org/",
+          "download_template": "https://vault.centos.org/{version}/isos/x86_64/CentOS-7-x86_64-Everything-2009.iso",
+          "checksum_template": "https://vault.centos.org/{version}/isos/x86_64/sha256sum.txt"
+        }
+      ]
     },
     {
       "distribution": "Deepin",
@@ -29,6 +58,18 @@
       "max_entries": 3,
       "download_template": "{listing_url}{version}/amd64/deepin-desktop-community-{version}-amd64.iso",
       "checksum_template": "{listing_url}{version}/amd64/SHA256SUMS",
+      "mirrors": [
+        {
+          "listing_url": "https://mirrors.ustc.edu.cn/deepin-cd/",
+          "download_template": "{listing_url}{version}/amd64/deepin-desktop-community-{version}-amd64.iso",
+          "checksum_template": "{listing_url}{version}/amd64/SHA256SUMS"
+        },
+        {
+          "listing_url": "https://mirrors.aliyun.com/deepin-cd/",
+          "download_template": "{listing_url}{version}/amd64/deepin-desktop-community-{version}-amd64.iso",
+          "checksum_template": "{listing_url}{version}/amd64/SHA256SUMS"
+        }
+      ],
       "overrides": [
         {
           "pattern": "^20\\.",
@@ -46,7 +87,24 @@
       "max_entries": 3,
       "sub_listing_template": "{listing_url}{version}/Everything/x86_64/iso/",
       "artifact_regex": "href=\\\"(?P<value>Fedora-Everything-netinst-x86_64-(?P<release>[\\d.-]+)\\.iso)\\\"",
-      "checksum_template": "{sub_listing_url}Fedora-Everything-{release}-x86_64-CHECKSUM"
+      "checksum_template": "{sub_listing_url}Fedora-Everything-{release}-x86_64-CHECKSUM",
+      "mirrors": [
+        {
+          "listing_url": "https://mirrors.ustc.edu.cn/fedora/releases/",
+          "sub_listing_template": "{listing_url}{version}/Everything/x86_64/iso/",
+          "checksum_template": "{sub_listing_url}Fedora-Everything-{release}-x86_64-CHECKSUM"
+        },
+        {
+          "listing_url": "https://mirrors.cloud.tencent.com/fedora/releases/",
+          "sub_listing_template": "{listing_url}{version}/Everything/x86_64/iso/",
+          "checksum_template": "{sub_listing_url}Fedora-Everything-{release}-x86_64-CHECKSUM"
+        },
+        {
+          "listing_url": "https://mirrors.aliyun.com/fedora/releases/",
+          "sub_listing_template": "{listing_url}{version}/Everything/x86_64/iso/",
+          "checksum_template": "{sub_listing_url}Fedora-Everything-{release}-x86_64-CHECKSUM"
+        }
+      ]
     },
     {
       "distribution": "Fedora",
@@ -57,7 +115,24 @@
       "max_entries": 3,
       "sub_listing_template": "{listing_url}{version}/Workstation/x86_64/iso/",
       "artifact_regex": "href=\\\"(?P<value>Fedora-Workstation-Live-(?:x86_64-)?(?P<release>[\\d.-]+)(?:\\.x86_64)?\\.iso)\\\"",
-      "checksum_template": "{sub_listing_url}Fedora-Workstation-{release}-x86_64-CHECKSUM"
+      "checksum_template": "{sub_listing_url}Fedora-Workstation-{release}-x86_64-CHECKSUM",
+      "mirrors": [
+        {
+          "listing_url": "https://mirrors.ustc.edu.cn/fedora/releases/",
+          "sub_listing_template": "{listing_url}{version}/Workstation/x86_64/iso/",
+          "checksum_template": "{sub_listing_url}Fedora-Workstation-{release}-x86_64-CHECKSUM"
+        },
+        {
+          "listing_url": "https://mirrors.cloud.tencent.com/fedora/releases/",
+          "sub_listing_template": "{listing_url}{version}/Workstation/x86_64/iso/",
+          "checksum_template": "{sub_listing_url}Fedora-Workstation-{release}-x86_64-CHECKSUM"
+        },
+        {
+          "listing_url": "https://mirrors.aliyun.com/fedora/releases/",
+          "sub_listing_template": "{listing_url}{version}/Workstation/x86_64/iso/",
+          "checksum_template": "{sub_listing_url}Fedora-Workstation-{release}-x86_64-CHECKSUM"
+        }
+      ]
     },
     {
       "distribution": "Proxmox",
@@ -66,7 +141,21 @@
       "listing_url": "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/",
       "artifact_regex": "href=\\\"(?P<value>proxmox-ve_[\\d.]+-\\d\\.iso)\\\"",
       "max_entries": 3,
-      "checksum_template": "{listing_url}SHA256SUMS"
+      "checksum_template": "{listing_url}SHA256SUMS",
+      "mirrors": [
+        {
+          "listing_url": "https://mirrors.ustc.edu.cn/proxmox/iso/",
+          "checksum_template": "{listing_url}SHA256SUMS"
+        },
+        {
+          "listing_url": "https://mirrors.aliyun.com/proxmox/iso/",
+          "checksum_template": "{listing_url}SHA256SUMS"
+        },
+        {
+          "listing_url": "https://download.proxmox.com/iso/",
+          "checksum_template": "{listing_url}SHA256SUMS"
+        }
+      ]
     },
     {
       "distribution": "Ubuntu",
@@ -76,7 +165,29 @@
       "version_regex": "href=\\\"(?P<value>\\d+(?:\\.\\d+)*)/\\\"",
       "max_entries": 3,
       "download_template": "{listing_url}{version}/ubuntu-{version}-desktop-amd64.iso",
-      "checksum_template": "{listing_url}{version}/SHA256SUMS"
+      "checksum_template": "{listing_url}{version}/SHA256SUMS",
+      "mirrors": [
+        {
+          "listing_url": "https://mirrors.ustc.edu.cn/ubuntu-releases/",
+          "download_template": "{listing_url}{version}/ubuntu-{version}-desktop-amd64.iso",
+          "checksum_template": "{listing_url}{version}/SHA256SUMS"
+        },
+        {
+          "listing_url": "https://mirrors.aliyun.com/ubuntu-releases/",
+          "download_template": "{listing_url}{version}/ubuntu-{version}-desktop-amd64.iso",
+          "checksum_template": "{listing_url}{version}/SHA256SUMS"
+        },
+        {
+          "listing_url": "https://mirrors.163.com/ubuntu-releases/",
+          "download_template": "{listing_url}{version}/ubuntu-{version}-desktop-amd64.iso",
+          "checksum_template": "{listing_url}{version}/SHA256SUMS"
+        },
+        {
+          "listing_url": "https://cdimage.ubuntu.com/ubuntu-releases/",
+          "download_template": "{listing_url}{version}/ubuntu-{version}-desktop-amd64.iso",
+          "checksum_template": "{listing_url}{version}/SHA256SUMS"
+        }
+      ]
     },
     {
       "distribution": "Ubuntu",
@@ -86,7 +197,29 @@
       "version_regex": "href=\\\"(?P<value>\\d+(?:\\.\\d+)*)/\\\"",
       "max_entries": 3,
       "download_template": "{listing_url}{version}/ubuntu-{version}-live-server-amd64.iso",
-      "checksum_template": "{listing_url}{version}/SHA256SUMS"
+      "checksum_template": "{listing_url}{version}/SHA256SUMS",
+      "mirrors": [
+        {
+          "listing_url": "https://mirrors.ustc.edu.cn/ubuntu-releases/",
+          "download_template": "{listing_url}{version}/ubuntu-{version}-live-server-amd64.iso",
+          "checksum_template": "{listing_url}{version}/SHA256SUMS"
+        },
+        {
+          "listing_url": "https://mirrors.aliyun.com/ubuntu-releases/",
+          "download_template": "{listing_url}{version}/ubuntu-{version}-live-server-amd64.iso",
+          "checksum_template": "{listing_url}{version}/SHA256SUMS"
+        },
+        {
+          "listing_url": "https://mirrors.163.com/ubuntu-releases/",
+          "download_template": "{listing_url}{version}/ubuntu-{version}-live-server-amd64.iso",
+          "checksum_template": "{listing_url}{version}/SHA256SUMS"
+        },
+        {
+          "listing_url": "https://cdimage.ubuntu.com/ubuntu-releases/",
+          "download_template": "{listing_url}{version}/ubuntu-{version}-live-server-amd64.iso",
+          "checksum_template": "{listing_url}{version}/SHA256SUMS"
+        }
+      ]
     }
   ]
 }

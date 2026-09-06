@@ -24,6 +24,7 @@ services:
       - ISO_HUB_REQUIRE_LOGIN=${ISO_HUB_REQUIRE_LOGIN:-1}
       # 订阅自动同步间隔(秒),默认 86400=每天;设 0 关闭自动调度,仅手动/定时调用
       - ISO_HUB_SYNC_INTERVAL=${ISO_HUB_SYNC_INTERVAL:-86400}
+      - ISO_HUB_SOURCE_STRATEGY=${ISO_HUB_SOURCE_STRATEGY:-A}
       # 网络共享默认凭据(可在网页「设置→共享设置」修改, 改后写入 ./data/settings.json 覆盖此处)
       - SAMBA_USER=${SAMBA_USER:-iso}
       - SAMBA_PASS=${SAMBA_PASS:-iso123}

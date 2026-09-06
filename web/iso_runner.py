@@ -10,6 +10,7 @@ ISO Hub - 选择部分发行版/版本下载的辅助 runner。
 import argparse
 import json
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -54,12 +55,96 @@ def _head_target_size(url: str, headers: dict) -> int:
     return 0
 
 
+def _pick_candidates(strategy: str, entry: dict, headers: dict):
+    """根据选源策略, 返回有序的 [(url, checksum_url), ...] 候选列表。
+
+    策略 A（固定优先级）: 保持 sources_config.json 里 mirrors 的配置顺序
+      （清华在前, 官方源兜底）, 不额外请求。
+    策略 B（实测选优）: 对每个候选源发 HEAD 探测, 按响应耗时排序,
+      最快可达源排最前; 若全部探测失败, 回退到配置顺序。
+
+    候选列表来源: entry 的 download_urls/checksum_urls（由 update_distributions.py
+    按各镜像模板生成）。无多源时退化为单一 download_url。
+    """
+    urls = entry.get("download_urls") or [entry["download_url"]]
+    cs_urls = entry.get("checksum_urls") or []
+    cs = cs_urls + [None] * (len(urls) - len(cs_urls))  # 校验和不足的镜像补 None
+
+    if strategy != "B":
+        # 策略 A: 固定优先级, 保持配置顺序
+        return list(zip(urls, cs))
+
+    # 策略 B: HEAD 实测各候选源, 选最快可达源
+    scored = []
+    for u, c in zip(urls, cs):
+        try:
+            t0 = time.monotonic()
+            r = requests.head(u, headers=headers, timeout=8, allow_redirects=True)
+            dt = time.monotonic() - t0
+            if r.status_code < 400:
+                scored.append((dt, u, c))
+                print(f"  [策略B] 可达 {dt*1000:.0f}ms  {u}")
+            else:
+                print(f"  [策略B] HTTP {r.status_code} 跳过  {u}")
+        except Exception:  # noqa: BLE001
+            print(f"  [策略B] 不可达 跳过  {u}")
+    if scored:
+        scored.sort(key=lambda x: x[0])
+        return [(u, c) for _, u, c in scored]
+    return list(zip(urls, cs))
+
+
+def _download_file_with_failover(downloader, target_dist: dict, candidates, filename: str,
+                                 dist_dir, filepath) -> tuple:
+    """逐个候选源下载同一文件, 失败/校验失败自动切换下一候选源。
+
+    返回 (成功与否, 实际使用的下载URL)。全部候选失败返回 (False, None)。
+    """
+    last_err = None
+    for idx, (url, checksum_url) in enumerate(candidates):
+        # 清除上一候选留下的不完整文件
+        if filepath.exists():
+            try:
+                filepath.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+        print(f"  候选源 {idx + 1}/{len(candidates)}: {url}")
+        try:
+            resp = requests.get(url, headers=downloader.headers, stream=True, timeout=60)
+            resp.raise_for_status()
+            total = int(resp.headers.get("content-length", 0))
+            with open(filepath, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            if total and filepath.stat().st_size != total:
+                raise Exception(f"大小不匹配: 期望 {total}B, 实际 {filepath.stat().st_size}B")
+            # 校验和优先跟随当前候选源自身; 无则回退 entry 存储值
+            success, msg = downloader.verify_checksum_smart(
+                filepath, checksum_url, target_dist.get("checksum")
+            )
+            if success:
+                print(f"  ✓ {msg}")
+                return True, url
+            raise Exception(f"校验和验证失败: {msg}")
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            print(f"  ✗ 候选源失败, 尝试下一源: {e}")
+    if last_err is not None:
+        print(f"  ✗ 该文件所有候选源均失败: {last_err}")
+    return False, None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ISO Hub selective download runner")
     parser.add_argument("--json-file", required=True, help="distributions.json path")
     parser.add_argument("--download-dir", required=True, help="ISO download dir")
     parser.add_argument(
         "--select", required=True, help='JSON array of {"distribution","download_url"}'
+    )
+    parser.add_argument(
+        "--strategy", default="A", choices=["A", "B"],
+        help="多源选源策略: A=固定优先级(配置顺序, 默认), B=实测选最快可达源",
     )
     args = parser.parse_args()
 
@@ -93,19 +178,41 @@ def main() -> None:
     for name in names:
         group = [e for e in subset if e["distribution"] == name]
         downloader.distributions = {"distributions": group}
-        print(f"\n{'='*60}\n>>> 任务组: {name}")
-        # 预先 HEAD 探测每个目标文件的总大小, 供 UI 显示下载进度条
+        print(f"\n{'='*60}\n>>> 任务组: {name}（选源策略: {'A 固定优先级' if args.strategy == 'A' else 'B 实测选优'}）")
+
         for entry in group:
             fname = entry["download_url"].rstrip("/").rsplit("/", 1)[-1]
-            target_path = Path(downloader.download_dir) / entry["type"] / entry["distribution"] / fname
-            total = _head_target_size(entry["download_url"], downloader.headers)
+            dist_dir = Path(downloader.download_dir) / entry["type"] / entry["distribution"]
+            dist_dir.mkdir(parents=True, exist_ok=True)
+            filepath = dist_dir / fname
+
+            # 依据策略选出有序候选源列表
+            candidates = _pick_candidates(args.strategy, entry, downloader.headers)
+            primary = candidates[0][0] if candidates else entry["download_url"]
+
+            # 预先 HEAD 探测默认源的目标文件大小, 供 UI 显示下载进度条
+            total = _head_target_size(primary, downloader.headers)
             # 标记行由后端拦截收集, 不写入任务日志
-            print(f"#TARGET {target_path} {total}")
+            print(f"#TARGET {filepath} {total}")
             if total:
                 print(f"  目标大小: {total/1024/1024:.1f} MiB")
-        ok = downloader.download_distribution(name, verify_checksum=True)
-        if not ok:
-            failed = True
+
+            if filepath.exists():
+                print(f"文件已存在: {filepath}")
+                ok, msg = downloader.verify_checksum_smart(
+                    filepath, entry.get("checksum_url"), entry.get("checksum")
+                )
+                if ok:
+                    print(f"✓ {msg}")
+                    continue
+                print(f"✗ {msg}")
+                print("校验和验证失败, 将重新下载")
+
+            ok, used_url = _download_file_with_failover(
+                downloader, entry, candidates, fname, dist_dir, filepath
+            )
+            if not ok:
+                failed = True
 
     if failed:
         sys.exit(1)

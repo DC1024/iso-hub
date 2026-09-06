@@ -382,9 +382,22 @@ samba / webdav 的完整定义已包含在 [方式 1 的 compose 示例](#1-使�
 ## 工作原理（对应上游两个脚本）
 
 1. **元数据刷新** → 运行 `update_distributions.py --config sources_config.json --output /data/distributions.json --pretty`：
-   请求清华镜像站目录 → 正则提取版本目录 → 组合下载/校验 URL → 排序写入清单（每组保留最新 N 个版本）。
+   请求镜像站目录 → 正则提取版本目录 → 组合下载/校验 URL → 排序写入清单（每组保留最新 N 个版本）。
 2. **选择性下载** → 本项目自带 `web/iso_runner.py`：复用上游 `LinuxDistributionDownloader`，但只下载所选条目、
    **禁用自动清理**（避免误删同组未选文件），下载完做 SHA256 校验；校验失败自动删文件重下。
+
+## 多源下载（负载均衡 + 故障转移）
+
+每个发行版可配置**多个候选镜像站**（国内多个 + 末尾官方兜底），下载时自动分散流量、单点故障自愈。
+
+- **配置**：在 `iso_download/sources_config.json` 的每个 source 里加 `mirrors` 列表（数组，元素为镜像对象，可覆盖 `listing_url` 及 `download_template`/`checksum_template`；省略的字段继承 source 默认值）。未配置 `mirrors` 的 source 保持单源行为，向后兼容。
+- **生成**：`update_distributions.py` 会为每个条目生成 `download_urls` / `checksum_urls`（各镜像模板拼接后的候选列表）。
+- **选源策略**（`ISO_HUB_SOURCE_STRATEGY` 环境变量，默认 `A`）：
+  - `A` **固定优先级**：按 `mirrors` 配置顺序（国内清华在前、官方源兜底），不额外请求。
+  - `B` **实测选优**：下载前对每个候选源发 HEAD 探测，按响应耗时排序选最快可达源，并自动剔除不可达源。
+- **故障转移**：下载中途失败 / 校验和不匹配，自动切换到下一个候选源重试；全部失败才报错。
+
+> 注：`update_distributions.py` 属上游脚本目录，升级上游脚本（见下）会覆盖它，需重新应用本项目的多源生成补丁。
 
 ## 升级上游脚本
 
@@ -392,6 +405,8 @@ samba / webdav 的完整定义已包含在 [方式 1 的 compose 示例](#1-使�
 # 在 iso-hub 目录内
 rm -rf iso_download && git clone --depth 1 https://github.com/Sowevo/iso_download.git iso_download
 # (国内无法直连 GitHub 时, 可下载加速镜像 zip: ghfast.top / gh-proxy.com / ghproxy.net 前缀)
+# 注意: 升级会覆盖 iso_download/ 内的多源补丁与 sources_config.json,
+#        升级后需重新应用 update_distributions.py 的下载_urls 生成补丁, 并放回 sources_config.json 里的 mirrors 配置
 docker compose up -d --build
 ```
 
