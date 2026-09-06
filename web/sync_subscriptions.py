@@ -41,6 +41,9 @@ def main() -> None:
     repo_dir = Path(__file__).resolve().parent.parent / "iso_download"
     sys.path.insert(0, str(repo_dir))
 
+    # 复用上游下载器（必须在使用前导入，路径已加入 sys.path）
+    from download_linux import LinuxDistributionDownloader  # noqa: E402
+
     # 可选: 先刷新官方源元数据
     if args.update_first:
         print(">>> 步骤1/3 刷新官方源清单元数据 ...", flush=True)
