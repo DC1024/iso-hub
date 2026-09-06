@@ -1,7 +1,6 @@
 # ISO Hub · 网页版 Linux 发行版 ISO 自动更新器
 
-> **项目源码 / 完整文档：** <https://github.com/DC1024/iso-hub>
-
+> **项目源码 / 完整文档：** <https://github.com/DC1024/iso-hub> 　·　
 > **Docker Hub 镜像：** <https://hub.docker.com/r/dcchendockeruser/iso-hub>
 
 把上游 [Sowevo/iso_download](https://github.com/Sowevo/iso_download)（纯 CLI）封装成
@@ -33,9 +32,27 @@
 
 默认数据源为**清华 TUNA 镜像站**（国内速度快）。支持的版本策略见上游 `sources_config.json`。
 
-## Docker Hub 镜像
+## 部署方式
 
-已发布到 Docker Hub，可直接拉取运行（镜像由 GitHub Actions 在每次 push 到 `master` 时自动构建并推送）：
+三种方式任选其一：
+
+| 方式 | 适合场景 | 含 SMB/WebDAV 共享 |
+|---|---|---|
+| **1.2 阿里云源** | **国内服务器（推荐）**：拉取快、公开仓库无需登录 | ❌ 单容器 |
+| 1.1 Docker Hub 源 | 海外服务器 | ❌ 单容器 |
+| 2. 源码构建 | 需要网络共享 / 想改代码 | ✅ 三容器 |
+
+---
+
+## 1. 使用 Docker 部署
+
+直接拉取现成镜像，**无需本地构建**。以下两种镜像源内容相同，按网络情况任选其一。
+
+### 1.1 Docker Hub 源部署方式
+
+已发布到 Docker Hub（镜像由 GitHub Actions 在每次 push 到 `master` 时自动构建并推送）。
+
+**docker run 方式：**
 
 ```bash
 docker pull dcchendockeruser/iso-hub:latest
@@ -44,14 +61,53 @@ docker pull dcchendockeruser/iso-hub:latest
 docker run -d --name iso-hub \
   -p 8899:8080 \
   -v "$PWD/data:/data" \
+  -e TZ=Asia/Shanghai \
   dcchendockeruser/iso-hub:latest
 ```
 
-- 仓库地址：https://hub.docker.com/r/dcchendockeruser/iso-hub
-- 通过 GitHub Actions 构建（workflow：`.github/workflows/docker-push.yml`），每次 push 到 `master` 自动重建并推送 `latest` 标签。
-- 推荐用源码 `docker compose up -d --build` 方式以获得完整功能（含 SMB/WebDAV 共享容器）；Docker Hub 镜像为单容器版，不含共享容器。
+**docker compose 方式**（保存为 `docker-compose.yml`）：
 
-## 阿里云 ACR 镜像部署（国内推荐）
+```yaml
+services:
+  iso-hub:
+    image: dcchendockeruser/iso-hub:latest    # Docker Hub 源
+    container_name: iso-hub
+    restart: unless-stopped
+    ports:
+      # 左侧可改宿主端口, 例如 "8099:8080" 或 "127.0.0.1:8080:8080"(仅本机访问)
+      - "${ISO_HUB_PORT:-8899}:8080"
+    volumes:
+      # 所有 ISO 与发行版清单持久化到宿主机 ./data
+      - ./data:/data
+    environment:
+      - TZ=Asia/Shanghai
+      # 需要鉴权时在同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
+      - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
+      # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
+      - ISO_HUB_REQUIRE_LOGIN=${ISO_HUB_REQUIRE_LOGIN:-1}
+      # 订阅自动同步间隔(秒), 86400=每天; 0=关闭自动调度
+      - ISO_HUB_SYNC_INTERVAL=${ISO_HUB_SYNC_INTERVAL:-86400}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u;u.urlopen('http://127.0.0.1:8080/api/health',timeout=4)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+```
+
+```bash
+mkdir -p /opt/iso-hub/data && cd /opt/iso-hub
+docker compose pull
+docker compose up -d
+```
+
+打开 `http://<服务器IP>:8899` 即可使用。
+
+- 仓库地址：https://hub.docker.com/r/dcchendockeruser/iso-hub
+- 构建 workflow：`.github/workflows/docker-push.yml`，每次 push 到 `master` 自动重建并推送 `latest` 标签。
+- 镜像为**单容器版**，不含 SMB/WebDAV 共享容器；需要共享请用 [方式 2 源码构建](#2-使用源码构建部署含-smbwebdav-共享)。
+
+### 1.2 阿里云 ACR 源部署方式（国内推荐）
 
 国内服务器从 Docker Hub 拉取经常超时或失败，因此镜像同时推送到 **阿里云容器镜像服务（华东1·杭州）**。
 该仓库已设为**公开**，**无需 `docker login`** 即可直接拉取，国内速度明显更快。
@@ -59,8 +115,10 @@ docker run -d --name iso-hub \
 | 项目 | 值 |
 |---|---|
 | 镜像地址 | `registry.cn-hangzhou.aliyuncs.com/dcchen/isohub` |
+| 可用标签 | `latest`（push master 时构建）；`1.0.6` 这类版本号（打 `v1.0.6` tag 时构建） |
+| 构建方式 | GitHub Actions（workflow：`.github/workflows/aliyun-acr.yml`）自动构建推送 |
 
-### 方式一：docker compose（推荐）
+#### 方式一：docker compose（推荐）
 
 新建目录，把下面内容保存为 `docker-compose.yml`：
 
@@ -107,7 +165,7 @@ docker compose up -d         # 启动
 
 > 非 root 用户且不在 docker 组时，命令前加 `sudo`。
 
-### 方式二：docker run
+#### 方式二：docker run
 
 ```bash
 docker pull registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:latest
@@ -119,22 +177,24 @@ docker run -d --name iso-hub \
   registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:latest
 ```
 
-### 升级
+#### 升级
 
 ```bash
 cd /opt/iso-hub
 docker compose pull && docker compose up -d
 ```
 
-### 说明
+#### 说明
 
+- 想锁定版本，把 `latest` 换成具体版本号，如 `registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:1.0.6`。
 - 公网部署请确认防火墙放行 `8899`（或改用 80 等已放行端口）。
 - 该镜像为**单容器版**，不含 SMB/WebDAV 共享容器；如需网络共享请用下方源码方式部署（见「网络共享 (SMB / WebDAV)」）。
 - 仓库内另附 `docker-compose.acr.yml`，与本示例等价，可直接 `docker compose -f docker-compose.acr.yml up -d`。
 
-## 快速开始
+## 2. 使用源码构建部署（含 SMB/WebDAV 共享）
 
-以下为**源码构建**方式（含 SMB/WebDAV 共享容器）。若只想快速跑起来，请用上面的阿里云镜像方式。
+需要网络共享（SMB/WebDAV）或想改代码时用这种方式，会构建 iso-hub 主服务 + samba + webdav **三个容器**。
+若只想快速跑起来，请用上面的 [方式 1 Docker 部署](#1-使用-docker-部署)。
 
 ```bash
 git clone 本项目  # 或直接拷贝 iso-hub/ 目录到服务器
@@ -148,7 +208,7 @@ docker compose up -d --build
 打开 `http://<服务器IP>:8899` 即可使用。**首次登录后建议先点右上角「抓取最新版本元数据」**，
 将内置样例清单刷新为当前镜像站上的最新版本列表。
 
-### 常用命令
+#### 常用命令
 
 ```bash
 docker compose logs -f iso-hub   # 看服务日志
