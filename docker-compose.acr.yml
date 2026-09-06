@@ -8,10 +8,13 @@
 # 升级:
 #   docker compose -f docker-compose.acr.yml pull && docker compose -f docker-compose.acr.yml up -d
 #
-# 说明: 镜像由 .github/workflows/aliyun-acr.yml 自动构建推送
+# 说明: 主镜像 iso-hub 由 .github/workflows/aliyun-acr.yml 自动构建推送
 #   - push master  -> latest
 #   - 打 tag v1.0.6 -> 1.0.6 + latest
 # 若要锁定版本, 把下面的 :latest 改成 :1.0.6 之类具体版本号
+#
+# 说明: samba / webdav 两个 sidecar 镜像来自 Docker Hub(dperson/samba、hacdias/webdav),
+#       国内拉取可能较慢; 若拉不动可给 Docker 配置国内镜像加速源后再 pull。
 
 services:
   iso-hub:
@@ -46,41 +49,39 @@ services:
       retries: 3
       start_period: 15s
 
-# ---------- 网络共享 sidecar（可选，默认不启动）----------
-# 下面两个 sidecar 镜像来自 Docker Hub，国内服务器可能拉取慢或失败，
-# 且本文件主要用途是「快速验证阿里云主镜像」，故默认注释。
-# 如需共享，取消注释后执行:
-#   docker compose -f docker-compose.acr.yml up -d
-#
-#  samba:
-#    image: dperson/samba:latest
-#    container_name: iso-hub-samba
-#    restart: unless-stopped
-#    ports:
-#      - "${SAMBA_PORT:-1445}:445"
-#      - "${SAMBA_NETBIOS:-1137}:137/udp"
-#      - "${SAMBA_138:-1138}:138/udp"
-#      - "${SAMBA_139:-1139}:139"
-#    volumes:
-#      - ./data:/srv/iso:ro
-#    environment:
-#      - TZ=Asia/Shanghai
-#      - USERID=${SAMBA_UID:-0}
-#      - GROUPID=${SAMBA_GID:-0}
-#    command: >-
-#      -p
-#      -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
-#      -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
-#
-#  webdav:
-#    image: hacdias/webdav:latest
-#    container_name: iso-hub-webdav
-#    restart: unless-stopped
-#    ports:
-#      - "${WEBDAV_PORT:-8081}:6065"
-#    volumes:
-#      - ./data:/data:ro
-#      - ./data/webdav.yml:/config.yml:ro
-#    environment:
-#      - TZ=Asia/Shanghai
-#    command: ["-c", "/config.yml"]
+  # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
+  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso   (账号 iso / 密码 iso123)
+  # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
+  samba:
+    image: dperson/samba:latest
+    container_name: iso-hub-samba
+    restart: unless-stopped
+    ports:
+      - "${SAMBA_PORT:-1445}:445"
+      - "${SAMBA_NETBIOS:-1137}:137/udp"
+      - "${SAMBA_138:-1138}:138/udp"
+      - "${SAMBA_139:-1139}:139"
+    volumes:
+      - ./data:/srv/iso:ro          # 只读共享,ISO 不会被误改
+    environment:
+      - TZ=Asia/Shanghai
+      - USERID=${SAMBA_UID:-0}
+      - GROUPID=${SAMBA_GID:-0}
+    command: >-
+      -p
+      -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
+      -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
+
+  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav   (账号 iso / 密码 iso123)
+  webdav:
+    image: hacdias/webdav:latest
+    container_name: iso-hub-webdav
+    restart: unless-stopped
+    ports:
+      - "${WEBDAV_PORT:-8081}:6065"
+    volumes:
+      - ./data:/data:ro             # 只读共享
+      - ./data/webdav.yml:/config.yml:ro   # 凭据配置(主容器可改写此文件+restart 实现改密码)
+    environment:
+      - TZ=Asia/Shanghai
+    command: ["-c", "/config.yml"]
