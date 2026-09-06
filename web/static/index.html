@@ -14,7 +14,7 @@
     --mono:"Cascadia Code","JetBrains Mono",Consolas,"SF Mono",monospace;
     --shadow:0 1px 2px rgba(15,23,42,.05),0 8px 24px -12px rgba(37,99,235,.18);
     --btn-s-bg:#fff; --tasklog-bg:#0b1220; --tasklog-line:#1e3a5f;
-    --tasklog-in:#cbe3ff; --tasklog-cur:#9fb9d8; --tasklog-lt:#4f6d94; --tasklog-er:#ff9d9d; --tasklog-ok:#7ee2b8;
+    --tasklog-in:#cbe3ff; --tasklog-cur:#9fb9d8; --tasklog-lt:#4f6d94; --tasklog-er:#ff9d9d; --tasklog-ok:#7ee2b8; --tasklog-warn:#ffc65c;
   }
   html[data-theme="dark"]{
     --bg:#0b1220; --panel:#111a2e; --ink:#e6edf7; --ink2:#a7b8d4; --ink3:#5d6f8f;
@@ -24,7 +24,7 @@
     --straybg:#241b0c; --strayline:#4a3a1a; --fname:#dbe6f5;
     --shadow:0 1px 2px rgba(2,6,23,.5),0 10px 28px -14px rgba(0,0,0,.7);
     --btn-s-bg:#152238; --tasklog-bg:#060b16; --tasklog-line:#14233f;
-    --tasklog-in:#cbe3ff; --tasklog-cur:#8fa9c9; --tasklog-lt:#4f6d94; --tasklog-er:#ff9d9d; --tasklog-ok:#7ee2b8;
+    --tasklog-in:#cbe3ff; --tasklog-cur:#8fa9c9; --tasklog-lt:#4f6d94; --tasklog-er:#ff9d9d; --tasklog-ok:#7ee2b8; --tasklog-warn:#ffc65c;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--ink);font:14px/1.55 "PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
@@ -172,6 +172,12 @@
   #log pre{display:inline;white-space:pre-wrap;word-break:break-all;color:#d7e7ff}
   #log .er{color:var(--tasklog-er)}
   #log .ok{color:var(--tasklog-ok)}
+  #log .warn{color:var(--tasklog-warn)}
+  .logflt{display:flex;gap:4px;align-items:center}
+  .logflt select{background:var(--tasklog-bg);color:var(--tasklog-in);border:1px solid var(--tasklog-line);border-radius:6px;
+                 font-size:11px;padding:2px 6px;cursor:pointer}
+  .logflt select option{background:#0b1220;color:#cbe3ff}
+  .loghead .muted{font-size:11.5px;cursor:pointer;font-weight:600}
   .toast{position:fixed;right:20px;bottom:20px;background:var(--tasklog-bg);color:var(--tasklog-in);padding:10px 16px;border-radius:10px;
          font-size:13px;z-index:99;box-shadow:0 10px 30px -8px rgba(2,6,23,.5);opacity:0;transform:translateY(8px);
          transition:.25s;max-width:420px}
@@ -259,7 +265,17 @@
   <div class="empty" id="empty" style="display:none" data-i18n="emptyHint">暂无数据 —— 点击右上角「抓取最新版本元数据」或「刷新列表」</div>
 
   <div class="loghead" onclick="toggleLog()">
-    <span data-i18n="taskLogTitle">▾ 任务日志（实时）</span><span class="muted" data-i18n="clear">清除</span>
+    <span data-i18n="taskLogTitle">▾ 任务日志（实时）</span>
+    <span class="logflt" onclick="event.stopPropagation()">
+      <select id="logflt" onchange="setLogFilter(this.value)" data-i18n-placeholder="">
+        <option value="all" data-i18n="logAll">全部</option>
+        <option value="er" data-i18n="logErr">错误</option>
+        <option value="warn" data-i18n="logWarn">警告</option>
+        <option value="ok" data-i18n="logOk">成功</option>
+        <option value="info" data-i18n="logInfo">信息</option>
+      </select>
+      <span class="muted" data-i18n="clear">清除</span>
+    </span>
   </div>
   <div id="log"></div>
   </div><!-- /panel-mirror -->
@@ -464,10 +480,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
-let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={};
+let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.0.5';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
-const VERSION_TAG='1.0.5';
+const APP_VERSION='1.0.6';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
+const VERSION_TAG='1.0.6';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -506,6 +522,11 @@ const I18N={
   'filterAll':{zh:'全部',en:'All'},
   'filterDownloaded':{zh:'已下载',en:'Downloaded'},
   'filterNotDownloaded':{zh:'未下载',en:'Not Downloaded'},
+  'logAll':{zh:'全部',en:'All'},
+  'logErr':{zh:'错误',en:'Error'},
+  'logWarn':{zh:'警告',en:'Warn'},
+  'logOk':{zh:'成功',en:'OK'},
+  'logInfo':{zh:'信息',en:'Info'},
   'filterFav':{zh:'已收藏',en:'Favorited'},
   'filterBy':{zh:'筛选:',en:'Filter:'},
   'favGroup':{zh:'收藏',en:'Favorite'},
@@ -886,16 +907,38 @@ async function fetchLogs(){
   const autos=box.scrollTop+box.clientHeight>=box.scrollHeight-30;
   r.lines.forEach(x=>{
     const d=document.createElement('div');
-    const cls=x.l.startsWith('[任务')||x.l.startsWith('>>>')?'ok':(/失败|错误|✗|WARN|error|Error/i.test(x.l)?'er':'');
+    const cls=classifyLine(x.l);
+    d.dataset.lvl=cls;
+    d.style.display=(LOGF==='all'||cls===LOGF)?'':'none';
     d.innerHTML=`<span class="lt">${time2str(x.t)}</span> <pre class="${cls}">${esc(x.l)}</pre>`;
     box.appendChild(d);
   });
   if(box.children.length>1500){[...box.children].slice(0,300).forEach(n=>n.remove())}
   if(autos)box.scrollTop=box.scrollHeight;
 }
+// 行分类: ok=任务开始/结束/大标题; warn=警告/跳过; er=错误; 其余=信息
+function classifyLine(s){
+  if(/^\[任务|^>>>/.test(s))return 'ok';
+  if(/WARN|警告|Skipping|跳过/.test(s))return 'warn';   // 先判警告, 避免"404 Client Error"等URL里的 Error 误判为错误
+  if(/失败|错误|✗|\berror\b|Error|Exception|Traceback/.test(s))return 'er';
+  return 'info';
+}
+// 日志等级筛选: all/er/warn/ok/info
+function setLogFilter(v){
+  LOGF=v;
+  localStorage.setItem('iso_hub_logflt',v);
+  applyLogFilter();
+}
+function applyLogFilter(){
+  const box=$('#log');if(!box)return;
+  [...box.children].forEach(d=>{
+    d.style.display=(LOGF==='all'||d.dataset.lvl===LOGF)?'':'none';
+  });
+}
 function toggleLog(){const l=$('#log');l.style.display=l.style.display==='none'?'':'none';const h=document.querySelector('.loghead span');if(l.style.display==='none')h.textContent='▸ '+t('taskLogTitle');else h.textContent='▾ '+t('taskLogTitle')}
 
 refreshProtected();   // 先加载受保护名单, 再渲染列表以显示🔒状态
+(function(){const s=$('#logflt');if(s){s.value=LOGF;}applyLogFilter();})();
 loadDistros();
 startPoll();
 setInterval(()=>{if(!RUNNING&&!document.hidden)loadDistros()},30000);
