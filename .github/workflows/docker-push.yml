@@ -1,11 +1,20 @@
 # ISO Hub - 构建并推送到 Docker Hub
-# 触发: 推送到 main 分支 / 手动运行(Workflow dispatch)
+# 触发: 推送到 master 分支 / 打 v* tag / 手动运行(Workflow dispatch)
+#   - push 到 master      -> 只推 latest
+#   - 打 v* tag (如 v1.0.8) -> 推 1.0.8 和 latest 两个 tag
+#   - 手动 workflow_dispatch -> 推 latest（可指定版本）
 name: Build & Push Docker Hub
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: '镜像版本 tag（留空则只推 latest）'
+        required: false
+        default: ''
   push:
     branches: [master]
+    tags: ['v*']
 
 jobs:
   build-and-push:
@@ -23,6 +32,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      # 解析要推送的镜像 tag 列表（逗号分隔）
+      - name: Resolve image tags
+        id: ver
+        run: |
+          IMAGE="dcchendockeruser/iso-hub"
+          TAGS="${IMAGE}:latest"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # v1.0.8 -> 1.0.8 （去掉 v 前缀）
+            VER="${GITHUB_REF_NAME#v}"
+            TAGS="${TAGS},${IMAGE}:${VER}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            VER="${{ github.event.inputs.version }}"
+            TAGS="${TAGS},${IMAGE}:${VER}"
+          fi
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
       - name: Login to Docker Hub
         uses: docker/login-action@v4
         with:
@@ -34,7 +59,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: dcchendockeruser/iso-hub:latest
+          tags: ${{ steps.ver.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
