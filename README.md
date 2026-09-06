@@ -36,11 +36,11 @@
 
 三种方式任选其一：
 
-| 方式 | 适合场景 | 含 SMB/WebDAV 共享 |
+| 方式 | 适合场景 | 共享 sidecar |
 |---|---|---|
-| **1.2 阿里云源** | **国内服务器（推荐）**：拉取快、公开仓库无需登录 | ❌ 单容器 |
-| 1.1 Docker Hub 源 | 海外服务器 | ❌ 单容器 |
-| 2. 源码构建 | 需要网络共享 / 想改代码 | ✅ 三容器 |
+| **1.2 阿里云源** | **国内服务器（推荐）**：拉取快、公开仓库无需登录 | ✅ iso-hub 走阿里云，samba/webdav 走 Docker Hub |
+| 1.1 Docker Hub 源 | 海外服务器 | ✅ 三容器均从 Docker Hub 拉取 |
+| 2. 源码构建 | 需要改代码 / 自定义网络共享镜像 | ✅ 三容器本地构建 |
 
 ---
 
@@ -65,7 +65,7 @@ docker run -d --name iso-hub \
   dcchendockeruser/iso-hub:latest
 ```
 
-**docker compose 方式**（保存为 `docker-compose.yml`）：
+**docker compose 方式**（保存为 `docker-compose.yml`，含 SMB/WebDAV 共享，三个容器）**：
 
 ```yaml
 services:
@@ -79,6 +79,8 @@ services:
     volumes:
       # 所有 ISO 与发行版清单持久化到宿主机 ./data
       - ./data:/data
+      # 挂载 docker.sock 以便网页端控制 SMB/WebDAV 共享容器(不需要可删除此行)
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - TZ=Asia/Shanghai
       # 需要鉴权时在同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
@@ -93,6 +95,43 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
+  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso   (账号 iso / 密码 iso123)
+  # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
+  samba:
+    image: dperson/samba:latest
+    container_name: iso-hub-samba
+    restart: unless-stopped
+    ports:
+      - "${SAMBA_PORT:-1445}:445"
+      - "${SAMBA_NETBIOS:-1137}:137/udp"
+      - "${SAMBA_138:-1138}:138/udp"
+      - "${SAMBA_139:-1139}:139"
+    volumes:
+      - ./data:/srv/iso:ro          # 只读共享,ISO 不会被误改
+    environment:
+      - TZ=Asia/Shanghai
+      - USERID=${SAMBA_UID:-0}
+      - GROUPID=${SAMBA_GID:-0}
+    command: >-
+      -p
+      -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
+      -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
+
+  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav   (账号 iso / 密码 iso123)
+  webdav:
+    image: hacdias/webdav:latest
+    container_name: iso-hub-webdav
+    restart: unless-stopped
+    ports:
+      - "${WEBDAV_PORT:-8081}:6065"
+    volumes:
+      - ./data:/data:ro             # 只读共享
+      - ./data/webdav.yml:/config.yml:ro   # 凭据配置(主容器可改写此文件+restart 实现改密码)
+    environment:
+      - TZ=Asia/Shanghai
+    command: ["-c", "/config.yml"]
 ```
 
 ```bash
@@ -101,11 +140,11 @@ docker compose pull
 docker compose up -d
 ```
 
-打开 `http://<服务器IP>:8899` 即可使用。
+打开 `http://<服务器IP>:8899` 即可使用。SMB 共享地址 `smb://<服务器IP>:1445/iso`，WebDAV `http://<服务器IP>:8081/dav`（账号 `iso` / 密码 `iso123`）。
 
 - 仓库地址：https://hub.docker.com/r/dcchendockeruser/iso-hub
 - 构建 workflow：`.github/workflows/docker-push.yml`，每次 push 到 `master` 自动重建并推送 `latest` 标签。
-- 镜像为**单容器版**，不含 SMB/WebDAV 共享容器；需要共享请用 [方式 2 源码构建](#2-使用源码构建部署含-smbwebdav-共享)。
+- iso-hub 主镜像为**单容器**，上面的 samba / webdav 是**独立 sidecar 容器**，与本项目的源码构建版一致。
 
 ### 1.2 阿里云 ACR 源部署方式（国内推荐）
 
@@ -120,7 +159,7 @@ docker compose up -d
 
 #### 方式一：docker compose（推荐）
 
-新建目录，把下面内容保存为 `docker-compose.yml`：
+新建目录，把下面内容保存为 `docker-compose.yml`（含 SMB/WebDAV 共享，三个容器）：
 
 ```yaml
 services:
@@ -151,17 +190,55 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
+  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso   (账号 iso / 密码 iso123)
+  # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
+  samba:
+    image: dperson/samba:latest
+    container_name: iso-hub-samba
+    restart: unless-stopped
+    ports:
+      - "${SAMBA_PORT:-1445}:445"
+      - "${SAMBA_NETBIOS:-1137}:137/udp"
+      - "${SAMBA_138:-1138}:138/udp"
+      - "${SAMBA_139:-1139}:139"
+    volumes:
+      - ./data:/srv/iso:ro          # 只读共享,ISO 不会被误改
+    environment:
+      - TZ=Asia/Shanghai
+      - USERID=${SAMBA_UID:-0}
+      - GROUPID=${SAMBA_GID:-0}
+    command: >-
+      -p
+      -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
+      -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
+
+  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav   (账号 iso / 密码 iso123)
+  webdav:
+    image: hacdias/webdav:latest
+    container_name: iso-hub-webdav
+    restart: unless-stopped
+    ports:
+      - "${WEBDAV_PORT:-8081}:6065"
+    volumes:
+      - ./data:/data:ro             # 只读共享
+      - ./data/webdav.yml:/config.yml:ro   # 凭据配置(主容器可改写此文件+restart 实现改密码)
+    environment:
+      - TZ=Asia/Shanghai
+    command: ["-c", "/config.yml"]
 ```
 
 启动：
 
 ```bash
 mkdir -p /opt/iso-hub/data && cd /opt/iso-hub
-docker compose pull          # 从阿里云拉取镜像
+docker compose pull          # 从阿里云拉取 iso-hub, 从 Docker Hub 拉取 samba/webdav
 docker compose up -d         # 启动
 ```
 
 打开 `http://<服务器IP>:8899` 即可使用。**首次登录后建议先点右上角「抓取最新版本元数据」**。
+SMB 共享地址 `smb://<服务器IP>:1445/iso`，WebDAV `http://<服务器IP>:8081/dav`（账号 `iso` / 密码 `iso123`）。
 
 > 非 root 用户且不在 docker 组时，命令前加 `sudo`。
 
@@ -188,7 +265,8 @@ docker compose pull && docker compose up -d
 
 - 想锁定版本，把 `latest` 换成具体版本号，如 `registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:1.0.6`。
 - 公网部署请确认防火墙放行 `8899`（或改用 80 等已放行端口）。
-- 该镜像为**单容器版**，不含 SMB/WebDAV 共享容器；如需网络共享请用下方源码方式部署（见「网络共享 (SMB / WebDAV)」）。
+- iso-hub 主镜像为**单容器**，上面的 samba / webdav 是**独立 sidecar 容器**，与本项目的源码构建版一致。
+- 注意：`samba` / `webdav` 两个镜像来自 Docker Hub（`dperson/samba`、`hacdias/webdav`），国内拉取可能较慢；只有 iso-hub 主镜像走阿里云。若这两个也拉不动，可改用 [方式 2 源码构建](#2-使用源码构建部署含-smbwebdav-共享) 或给 sidecar 配 Docker Hub 加速。
 - 仓库内另附 `docker-compose.acr.yml`，与本示例等价，可直接 `docker compose -f docker-compose.acr.yml up -d`。
 
 ## 2. 使用源码构建部署（含 SMB/WebDAV 共享）
