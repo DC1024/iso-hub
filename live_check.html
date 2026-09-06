@@ -220,7 +220,7 @@
       <div class="card reveal"><div class="ic">⏰</div><h3 data-i18n="feat9">定时任务</h3><p data-i18n="feat9d">按计划自动检查并更新元数据，无需人工值守。</p></div>
       <div class="card reveal"><div class="ic">🌐</div><h3 data-i18n="feat10">中英文界面</h3><p data-i18n="feat10d">内置双语界面，中英切换无障碍。</p></div>
       <div class="card reveal"><div class="ic">🗂️</div><h3 data-i18n="feat11">SMB/WebDAV 网络共享</h3><p data-i18n="feat11d">内置 Samba 与 WebDAV 容器，下载的 ISO 既可通过 SMB 在局域网共享，也可挂载为网络磁盘跨平台取用。</p></div>
-      <div class="card reveal"><div class="ic">🌱</div><h3 data-i18n="feat13">种子下载</h3><p data-i18n="feat13d">解析 DistroWatch 官方种子 RSS，交给内置 qBittorrent 下载，落盘后与直链统一识别、校验。</p></div>
+      <div class="card reveal"><div class="ic">🌱</div><h3 data-i18n="feat13">种子下载</h3><p data-i18n="feat13d">内置解析 DistroWatch 官方种子 RSS 列表（也支持手动粘贴磁力/种子链接与自定义 RSS 源），一键把官方种子交给内置 qBittorrent sidecar 下载，落盘 ./data 后与直链下载统一识别、校验、删除。</p></div>
     </div>
   </div>
 </section>
@@ -312,7 +312,7 @@
       feat9: '定时任务', feat9d: '按计划自动检查并更新元数据，无需人工值守。',
       feat10: '中英文界面', feat10d: '内置双语界面，中英切换无障碍。',
       feat11: 'SMB/WebDAV 网络共享', feat11d: '内置 Samba 与 WebDAV 容器，下载的 ISO 既可通过 SMB 在局域网共享，也可挂载为网络磁盘跨平台取用。',
-      feat13: '种子下载', feat13d: '解析 DistroWatch 官方种子 RSS，交给内置 qBittorrent 下载，落盘后与直链统一识别、校验。',
+      feat13: '种子下载', feat13d: '内置解析 DistroWatch 官方种子 RSS 列表（也支持手动粘贴磁力/种子链接与自定义 RSS 源），一键把官方种子交给内置 qBittorrent sidecar 下载，落盘 ./data 后与直链下载统一识别、校验、删除。',
       arch_h2: '三容器，一套 Docker Compose 拉起',
       arch_p: 'Web 服务 + SMB + WebDAV，持久化数据独立挂载，健康检查内置。',
       arch1_1: 'Web UI / API', arch1_2: '元数据刷新', arch1_3: '下载 & 校验', arch1_4: '定时任务',
@@ -343,7 +343,7 @@
       feat9: 'Scheduled jobs', feat9d: 'Auto-checks and refreshes metadata on a schedule — no manual watch.',
       feat10: 'i18n UI', feat10d: 'Bilingual interface with seamless zh / en switching.',
       feat11: 'SMB/WebDAV share', feat11d: 'Built-in Samba and WebDAV containers — downloaded ISOs are shared over LAN via SMB and mountable as a network drive on any platform.',
-      feat13: 'Torrent download', feat13d: 'Parses the official DistroWatch torrent RSS, hands it to built-in qBittorrent, then verifies alongside direct downloads.',
+      feat13: 'Torrent download', feat13d: 'Parses the official DistroWatch torrent RSS feed (also supports pasting magnet/torrent links and custom RSS sources), hands the official torrents to the built-in qBittorrent sidecar, then unifies identification, verification and deletion with direct downloads under ./data.',
       arch_h2: 'Three containers, one docker compose',
       arch_p: 'Web service + SMB + WebDAV, with isolated persistent volumes and built-in health checks.',
       arch1_1: 'Web UI / API', arch1_2: 'Metadata refresh', arch1_3: 'Download & verify', arch1_4: 'Scheduled jobs',
