@@ -8,7 +8,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</title>
-<meta name="description" content="ISO Hub —— 对 Sowevo/iso_download 的网页化封装，自动追踪清华镜像站元数据、选择性下载、SHA256 校验、内置 SMB/WebDAV 共享。网页上搞定 Linux 发行版 ISO 的更新与分发。" />
+<meta name="description" content="ISO Hub —— 对 Sowevo/iso_download 的网页化封装，自动追踪多镜像站元数据、选择性下载、SHA256 校验、内置 SMB/WebDAV 共享。网页上搞定 Linux 发行版 ISO 的更新与分发。" />
 <style>
   :root{
     --bg:#070b16; --bg2:#0b1222; --panel:rgba(255,255,255,.045);
@@ -170,21 +170,20 @@
     <nav class="nav-links">
       <a href="#features" data-i18n="nav_features">功能</a>
       <a href="#arch" data-i18n="nav_arch">架构</a>
-      <a href="#distros" data-i18n="nav_distros">发行版</a>
-      <a href="#start" data-i18n="nav_start">快速开始</a>
-      <a href="#faq" data-i18n="nav_faq">FAQ</a>
     </nav>
     <div class="nav-cta">
       <button class="btn lang-toggle" id="langToggle" type="button" aria-label="切换语言">中</button>
       <button class="btn theme-toggle" id="themeToggle" type="button" aria-label="切换深浅色">🌙</button>
+      <a class="btn ghost" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener">Wiki</a>
       <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener">GitHub</a>
-      <a class="btn primary" href="#start" data-i18n="cta_deploy">立即部署</a>
+      <a class="btn primary" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="cta_deploy">立即部署</a>
     </div>
     <button class="burger" aria-label="menu"><span></span><span></span><span></span></button>
   </div>
   <div class="mobile-menu">
-    <a href="#features" data-i18n="nav_features">功能</a><a href="#arch" data-i18n="nav_arch">架构</a><a href="#distros" data-i18n="nav_distros">发行版</a>
-    <a href="#start" data-i18n="nav_start">快速开始</a><a href="#faq" data-i18n="nav_faq">FAQ</a>
+    <a href="#features" data-i18n="nav_features">功能</a><a href="#arch" data-i18n="nav_arch">架构</a>
+    <a href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener">Wiki</a>
+    <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener">GitHub</a>
   </div>
 </header>
 
@@ -192,16 +191,16 @@
   <div class="wrap">
     <span class="eyebrow">Web ISO Updater · Docker Ready</span>
     <h1 data-i18n="hero_h1">网页上的 <span class="grad">Linux 发行版 ISO</span><br>自动更新器</h1>
-    <p class="lead" data-i18n="hero_lead">ISO Hub 是对 Sowevo/iso_download 命令行工具的网页化封装。自动追踪清华镜像站元数据、按需选择性下载、SHA256 校验、内置 SMB / WebDAV 共享——在浏览器里搞定 ISO 的更新与分发。</p>
+    <p class="lead" data-i18n="hero_lead">ISO Hub 是对 Sowevo/iso_download 命令行工具的网页化封装。自动追踪多镜像站元数据、按需选择性下载、SHA256 校验、内置 SMB / WebDAV 共享——在浏览器里搞定 ISO 的更新与分发。</p>
     <div class="hero-cta">
-      <a class="btn primary" href="#start" data-i18n="hero_cta1">🚀 一键部署</a>
+      <a class="btn primary" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="hero_cta1">🚀 一键部署</a>
       <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" data-i18n="hero_cta2">在 GitHub 查看</a>
     </div>
     <div class="stats">
       <div class="stat"><b>3</b><span data-i18n="stat_services">容器化服务</span></div>
       <div class="stat"><b>12+</b><span data-i18n="stat_distros">主流发行版</span></div>
       <div class="stat"><b>SHA256</b><span data-i18n="stat_verify">下载校验</span></div>
-      <div class="stat"><b data-i18n="stat_src">清华源</b><span data-i18n="stat_src_s">元数据加速</span></div>
+      <div class="stat"><b data-i18n="stat_src">多镜像源</b><span data-i18n="stat_src_s">元数据加速</span></div>
     </div>
   </div>
 </section>
@@ -217,7 +216,7 @@
       <div class="card reveal"><div class="ic">📋</div><h3 data-i18n="feat1">发行版清单</h3><p data-i18n="feat1d">聚合主流 Linux 发行版及其版本、架构、镜像变体，统一浏览。</p></div>
       <div class="card reveal"><div class="ic">⬇️</div><h3 data-i18n="feat2">选择性下载</h3><p data-i18n="feat2d">按版本 / 架构 / 变体勾选，只拉你真正需要的那几个 ISO。</p></div>
       <div class="card reveal"><div class="ic">✅</div><h3 data-i18n="feat3">SHA256 校验</h3><p data-i18n="feat3d">下载后自动校验哈希，确保镜像完整、未被篡改。</p></div>
-      <div class="card reveal"><div class="ic">🐉</div><h3 data-i18n="feat4">清华元数据</h3><p data-i18n="feat4d">基于清华镜像站元数据自动刷新，国内访问快、延迟低。</p></div>
+      <div class="card reveal"><div class="ic">🐉</div><h3 data-i18n="feat4">多镜像源</h3><p data-i18n="feat4d">支持清华 TUNA、中科大 USTC 等多镜像源，自动刷新元数据，国内访问快、延迟低。</p></div>
       <div class="card reveal"><div class="ic">🔧</div><h3 data-i18n="feat5">自定义镜像源</h3><p data-i18n="feat5d">支持配置自有镜像源，适配内网或特定区域加速。</p></div>
       <div class="card reveal"><div class="ic">🛡️</div><h3 data-i18n="feat6">镜像保护</h3><p data-i18n="feat6d">防止重复拉取、保护磁盘与带宽，已存在的版本智能跳过。</p></div>
       <div class="card reveal"><div class="ic">⭐</div><h3 data-i18n="feat7">收藏订阅</h3><p data-i18n="feat7d">收藏常用发行版，变更时同步提醒，追新不掉队。</p></div>
@@ -245,7 +244,7 @@
       <div class="node reveal"><div class="t">webdav</div><div class="sub">WebDAV 共享</div>
         <ul><li data-i18n="arch3_1">挂载为网盘</li><li data-i18n="arch3_2">跨平台取用</li><li data-i18n="arch3_3">Basic Auth</li></ul></div>
     </div>
-    <div class="flow reveal" data-i18n="flow">浏览器 <b>→</b> iso-hub(Web) <b>→</b> 清华镜像站(元数据/ISO) <b>→</b> 落盘 <b>→</b> SMB / WebDAV 共享</div>
+    <div class="flow reveal" data-i18n="flow">浏览器 <b>→</b> iso-hub(Web) <b>→</b> 多镜像站(元数据/ISO) <b>→</b> 落盘 <b>→</b> SMB / WebDAV 共享</div>
     <div class="meta reveal">
       <span class="chip" data-i18n="meta1">端口 · 可配置</span><span class="chip" data-i18n="meta2">持久化 · 挂载卷</span>
       <span class="chip" data-i18n="meta3">健康检查 · 内置</span><span class="chip" data-i18n="meta4">镜像 · Docker Hub</span>
@@ -254,114 +253,17 @@
   </div>
 </section>
 
-<section id="distros">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <span class="eyebrow">Distributions</span>
-      <h2 data-i18n="dist_h2">覆盖你常装的那些发行版</h2>
-      <p data-i18n="dist_p">持续扩充中，以下为已支持 / 计划支持的代表。</p>
-    </div>
-    <div class="tags reveal">
-      <span class="tag">Ubuntu</span><span class="tag">Debian</span><span class="tag">Arch Linux</span>
-      <span class="tag">Rocky Linux</span><span class="tag">AlmaLinux</span><span class="tag">Fedora</span>
-      <span class="tag">openSUSE</span><span class="tag">CentOS</span><span class="tag">Kali</span>
-      <span class="tag">Linux Mint</span><span class="tag">Manjaro</span><span class="tag">EndeavourOS</span>
-    </div>
-    <div class="mirrors">
-      <div class="card reveal"><div class="ic">🐉</div><h3 data-i18n="mir1_t">清华 TUNA</h3><p data-i18n="mir1_d">默认元数据源，国内低延迟、更新及时。</p></div>
-      <div class="card reveal"><div class="ic">🏫</div><h3 data-i18n="mir2_t">中科大 USTC</h3><p data-i18n="mir2_d">可切换的备用镜像源，提升可用性。</p></div>
-      <div class="card reveal"><div class="ic">🛰️</div><h3 data-i18n="mir3_t">自定义源</h3><p data-i18n="mir3_d">自建 / 内网镜像源随意接入。</p></div>
-    </div>
-  </div>
-</section>
 
-<section id="showcase" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.04),transparent)">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <span class="eyebrow">Console</span>
-      <h2 data-i18n="show_h2">简洁的控制台体验</h2>
-      <p data-i18n="show_p">勾选 → 下载 → 校验 → 共享，流程一目了然。</p>
-    </div>
-    <div class="console reveal">
-      <div class="con-bar"><i class="r"></i><i class="y"></i><i class="g"></i></div>
-      <div class="con-body" data-i18n="con_body"><span class="dim"># 刷新元数据</span>
-<span class="p">iso-hub</span> &gt; sync --source tuna
-<span class="ok">✔</span> 元数据已更新 · 142 个发行版版本
 
-<span class="dim"># 选择下载</span>
-<span class="p">iso-hub</span> &gt; download ubuntu 24.04 desktop amd64
-<span class="hl">⠋</span> 下载中 … <span class="dim">5.8 GB / 5.8 GB</span>
-<span class="ok">✔</span> 下载完成
 
-<span class="dim"># 校验</span>
-<span class="p">iso-hub</span> &gt; verify ubuntu-24.04-desktop-amd64.iso
-<span class="ok">✔</span> SHA256 匹配 · 镜像完整
 
-<span class="dim"># 共享</span>
-<span class="p">iso-hub</span> &gt; share --smb --webdav
-<span class="ok">✔</span> SMB  //iso-hub/isos  ·  WebDAV https://host:8081</div>
-    </div>
-  </div>
-</section>
 
-<section id="start">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <span class="eyebrow">Quick Start</span>
-      <h2 data-i18n="start_h2">四步跑起来</h2>
-      <p data-i18n="start_p">有 Docker 就能装，无需编译。</p>
-    </div>
-    <div class="steps">
-      <div class="step reveal"><div><h4 data-i18n="step1_t">获取配置</h4><p data-i18n="step1_d">克隆仓库并准备环境变量。</p>
-        <div class="code" data-i18n="step1_code"><span class="c"># 克隆</span>
-git clone https://github.com/DC1024/iso-hub
-<span class="c"># 准备 .env</span>
-cp .env.example .env</div></div></div>
-      <div class="step reveal"><div><h4 data-i18n="step2_t">配置端口与路径</h4><p data-i18n="step2_d">编辑 .env，设置 Web 端口、SMB / WebDAV 端口及数据挂载目录。</p>
-        <div class="code" data-i18n="step2_code"><span class="c"># .env 关键项</span>
-WEB_PORT=<span class="k">8080</span>
-SMB_PORT=<span class="k">445</span>
-WEBDAV_PORT=<span class="k">8081</span>
-DATA_DIR=<span class="k">/mnt/iso</span></div></div></div>
-      <div class="step reveal"><div><h4 data-i18n="step3_t">启动</h4><p data-i18n="step3_d">一条命令拉起三容器。</p>
-        <div class="code" data-i18n="step3_code"><span class="c"># 启动全部服务</span>
-docker compose up -d</div></div></div>
-      <div class="step reveal"><div><h4 data-i18n="step4_t">打开网页</h4><p data-i18n="step4_d">浏览器访问 <b>http://&lt;你的IP&gt;:8080</b>，登录后开始追 ISO。</p>
-        <div class="code" data-i18n="step4_code"><span class="c"># 默认访问地址</span>
-http://localhost:8080</div></div></div>
-    </div>
-    <div class="code reveal" style="max-width:760px;margin:22px auto 0"><span class="c" data-i18n="deploy_code_c"># 一行部署（示意）</span>
-git clone https://github.com/DC1024/iso-hub &amp;&amp; cd iso-hub &amp;&amp; cp .env.example .env &amp;&amp; docker compose up -d
-      <button class="copy" data-copy data-i18n="copy_label">复制</button>
-    </div>
-  </div>
-</section>
 
-<section id="faq">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <span class="eyebrow">FAQ</span>
-      <h2 data-i18n="faq_h2">常见问题</h2>
-    </div>
-    <div class="faq">
-      <details class="reveal"><summary data-i18n="faq1_q">ISO Hub 和 iso_download 是什么关系？</summary>
-        <p data-i18n="faq1_a">ISO Hub 是 Sowevo/iso_download 命令行工具的网页封装：把原本在终端里执行的「查元数据 / 选版本 / 下载 / 校验」搬到了浏览器，并补上了 SMB / WebDAV 共享。</p></details>
-      <details class="reveal"><summary data-i18n="faq2_q">需要自己编译吗？</summary>
-        <p data-i18n="faq2_a">不需要。官方以 Docker 镜像分发，docker compose up -d 即可运行，全程无需本地编译。</p></details>
-      <details class="reveal"><summary data-i18n="faq3_q">元数据从哪来？国内访问快吗？</summary>
-        <p data-i18n="faq3_a">默认基于清华镜像站(TUNA)的元数据，国内访问延迟低、更新及时；也可切换到中科大等其它源，或接入自定义镜像源。</p></details>
-      <details class="reveal"><summary data-i18n="faq4_q">下载的 ISO 怎么取用？</summary>
-        <p data-i18n="faq4_a">落盘后通过内置的 SMB（局域网共享）与 WebDAV（可挂载为网盘）直接分发，跨平台都能访问。</p></details>
-      <details class="reveal"><summary data-i18n="faq5_q">支持哪些发行版？</summary>
-        <p data-i18n="faq5_a">覆盖 Ubuntu / Debian / Arch / Rocky / Alma / Fedora / openSUSE / CentOS / Kali 等主流发行版，并持续扩充。</p></details>
-    </div>
-  </div>
-</section>
 
 <footer>
   <div class="wrap foot">
     <div>© <span id="yr"></span> <span data-i18n="footer_main">ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</span></div>
-    <div>基于 <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" style="color:var(--cyan)">DC1024/iso-hub</a> · Flask + Docker</div>
+    <div>基于 <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" style="color:var(--cyan)">DC1024/iso-hub</a> · <a href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" style="color:var(--cyan)">Wiki</a> · Flask + Docker</div>
   </div>
 </footer>
 
@@ -395,19 +297,19 @@ git clone https://github.com/DC1024/iso-hub &amp;&amp; cd iso-hub &amp;&amp; cp 
   const I18N = {
     zh: {
       title: 'ISO Hub · 网页版 Linux 发行版 ISO 自动更新器',
-      desc: 'ISO Hub —— 对 Sowevo/iso_download 的网页化封装，自动追踪清华镜像站元数据、选择性下载、SHA256 校验、内置 SMB/WebDAV 共享。网页上搞定 Linux 发行版 ISO 的更新与分发。',
-      nav_features: '功能', nav_arch: '架构', nav_distros: '发行版', nav_start: '快速开始', nav_faq: 'FAQ',
+      desc: 'ISO Hub —— 对 Sowevo/iso_download 的网页化封装，自动追踪多镜像站元数据、选择性下载、SHA256 校验、内置 SMB/WebDAV 共享。网页上搞定 Linux 发行版 ISO 的更新与分发。',
+      nav_features: '功能', nav_arch: '架构',
       cta_deploy: '立即部署',
       hero_h1: '网页上的 <span class="grad">Linux 发行版 ISO</span><br>自动更新器',
-      hero_lead: 'ISO Hub 是对 Sowevo/iso_download 命令行工具的网页化封装。自动追踪清华镜像站元数据、按需选择性下载、SHA256 校验、内置 SMB / WebDAV 共享——在浏览器里搞定 ISO 的更新与分发。',
+      hero_lead: 'ISO Hub 是对 Sowevo/iso_download 命令行工具的网页化封装。自动追踪多镜像站元数据、按需选择性下载、SHA256 校验、内置 SMB / WebDAV 共享——在浏览器里搞定 ISO 的更新与分发。',
       hero_cta1: '🚀 一键部署', hero_cta2: '在 GitHub 查看',
-      stat_services: '容器化服务', stat_distros: '主流发行版', stat_verify: '下载校验', stat_src_s: '元数据加速', stat_src: '清华源',
+      stat_services: '容器化服务', stat_distros: '主流发行版', stat_verify: '下载校验', stat_src_s: '元数据加速', stat_src: '多镜像源',
       feat_h2: '为「追 ISO」这件麻烦事而生的能力',
       feat_p: '从清单浏览到下载校验，再到局域网共享，一条龙在网页里完成。',
       feat1: '发行版清单', feat1d: '聚合主流 Linux 发行版及其版本、架构、镜像变体，统一浏览。',
       feat2: '选择性下载', feat2d: '按版本 / 架构 / 变体勾选，只拉你真正需要的那几个 ISO。',
       feat3: 'SHA256 校验', feat3d: '下载后自动校验哈希，确保镜像完整、未被篡改。',
-      feat4: '清华元数据', feat4d: '基于清华镜像站元数据自动刷新，国内访问快、延迟低。',
+      feat4: '多镜像源', feat4d: '支持清华 TUNA、中科大 USTC 等多镜像源，自动刷新元数据，国内访问快、延迟低。',
       feat5: '自定义镜像源', feat5d: '支持配置自有镜像源，适配内网或特定区域加速。',
       feat6: '镜像保护', feat6d: '防止重复拉取、保护磁盘与带宽，已存在的版本智能跳过。',
       feat7: '收藏订阅', feat7d: '收藏常用发行版，变更时同步提醒，追新不掉队。',
@@ -421,52 +323,25 @@ git clone https://github.com/DC1024/iso-hub &amp;&amp; cd iso-hub &amp;&amp; cp 
       arch1_1: 'Web UI / API', arch1_2: '元数据刷新', arch1_3: '下载 & 校验', arch1_4: '定时任务',
       arch2_1: '局域网文件共享', arch2_2: '独立数据卷', arch2_3: '只读 / 读写',
       arch3_1: '挂载为网盘', arch3_2: '跨平台取用', arch3_3: 'Basic Auth',
-      flow: '浏览器 <b>→</b> iso-hub(Web) <b>→</b> 清华镜像站(元数据/ISO) <b>→</b> 落盘 <b>→</b> SMB / WebDAV 共享',
+      flow: '浏览器 <b>→</b> iso-hub(Web) <b>→</b> 多镜像站(元数据/ISO) <b>→</b> 落盘 <b>→</b> SMB / WebDAV 共享',
       meta1: '端口 · 可配置', meta2: '持久化 · 挂载卷', meta3: '健康检查 · 内置', meta4: '镜像 · Docker Hub', meta5: '栈 · Flask + Docker',
-      dist_h2: '覆盖你常装的那些发行版', dist_p: '持续扩充中，以下为已支持 / 计划支持的代表。',
-      mir1_t: '清华 TUNA', mir1_d: '默认元数据源，国内低延迟、更新及时。',
-      mir2_t: '中科大 USTC', mir2_d: '可切换的备用镜像源，提升可用性。',
-      mir3_t: '自定义源', mir3_d: '自建 / 内网镜像源随意接入。',
-      show_h2: '简洁的控制台体验', show_p: '勾选 → 下载 → 校验 → 共享，流程一目了然。',
-      con_body: '<span class="dim"># 刷新元数据</span>\n<span class="p">iso-hub</span> &gt; sync --source tuna\n<span class="ok">✔</span> 元数据已更新 · 142 个发行版版本\n\n<span class="dim"># 选择下载</span>\n<span class="p">iso-hub</span> &gt; download ubuntu 24.04 desktop amd64\n<span class="hl">⠋</span> 下载中 … <span class="dim">5.8 GB / 5.8 GB</span>\n<span class="ok">✔</span> 下载完成\n\n<span class="dim"># 校验</span>\n<span class="p">iso-hub</span> &gt; verify ubuntu-24.04-desktop-amd64.iso\n<span class="ok">✔</span> SHA256 匹配 · 镜像完整\n\n<span class="dim"># 共享</span>\n<span class="p">iso-hub</span> &gt; share --smb --webdav\n<span class="ok">✔</span> SMB  //iso-hub/isos  ·  WebDAV https://host:8081',
-      start_h2: '四步跑起来', start_p: '有 Docker 就能装，无需编译。',
-      step1_t: '获取配置', step1_d: '克隆仓库并准备环境变量。',
-      step1_code: '<span class="c"># 克隆</span>\ngit clone https://github.com/DC1024/iso-hub\n<span class="c"># 准备 .env</span>\ncp .env.example .env',
-      step2_t: '配置端口与路径', step2_d: '编辑 .env，设置 Web 端口、SMB / WebDAV 端口及数据挂载目录。',
-      step2_code: '<span class="c"># .env 关键项</span>\nWEB_PORT=<span class="k">8080</span>\nSMB_PORT=<span class="k">445</span>\nWEBDAV_PORT=<span class="k">8081</span>\nDATA_DIR=<span class="k">/mnt/iso</span>',
-      step3_t: '启动', step3_d: '一条命令拉起三容器。',
-      step3_code: '<span class="c"># 启动全部服务</span>\ndocker compose up -d',
-      step4_t: '打开网页', step4_d: '浏览器访问 <b>http://&lt;你的IP&gt;:8080</b>，登录后开始追 ISO。',
-      step4_code: '<span class="c"># 默认访问地址</span>\nhttp://localhost:8080',
-      deploy_code_c: '# 一行部署（示意）', copy_label: '复制',
-      faq_h2: '常见问题',
-      faq1_q: 'ISO Hub 和 iso_download 是什么关系？',
-      faq1_a: 'ISO Hub 是 Sowevo/iso_download 命令行工具的网页封装：把原本在终端里执行的「查元数据 / 选版本 / 下载 / 校验」搬到了浏览器，并补上了 SMB / WebDAV 共享。',
-      faq2_q: '需要自己编译吗？',
-      faq2_a: '不需要。官方以 Docker 镜像分发，docker compose up -d 即可运行，全程无需本地编译。',
-      faq3_q: '元数据从哪来？国内访问快吗？',
-      faq3_a: '默认基于清华镜像站(TUNA)的元数据，国内访问延迟低、更新及时；也可切换到中科大等其它源，或接入自定义镜像源。',
-      faq4_q: '下载的 ISO 怎么取用？',
-      faq4_a: '落盘后通过内置的 SMB（局域网共享）与 WebDAV（可挂载为网盘）直接分发，跨平台都能访问。',
-      faq5_q: '支持哪些发行版？',
-      faq5_a: '覆盖 Ubuntu / Debian / Arch / Rocky / Alma / Fedora / openSUSE / CentOS / Kali 等主流发行版，并持续扩充。',
       footer_main: 'ISO Hub · 网页版 Linux 发行版 ISO 自动更新器'
     },
     en: {
       title: 'ISO Hub · Web-based Linux distro ISO auto-updater',
-      desc: 'ISO Hub —— a web wrapper around Sowevo/iso_download. It auto-tracks TUNA mirror metadata, supports selective downloads, SHA256 verification, and built-in SMB/WebDAV sharing. Manage Linux distro ISO updates and distribution right from your browser.',
-      nav_features: 'Features', nav_arch: 'Architecture', nav_distros: 'Distros', nav_start: 'Quick Start', nav_faq: 'FAQ',
+      desc: 'ISO Hub —— a web wrapper around Sowevo/iso_download. It auto-tracks multiple mirror metadata, supports selective downloads, SHA256 verification, and built-in SMB/WebDAV sharing. Manage Linux distro ISO updates and distribution right from your browser.',
+      nav_features: 'Features', nav_arch: 'Architecture',
       cta_deploy: 'Deploy',
       hero_h1: 'Web-based <span class="grad">Linux distro ISO</span><br>auto-updater',
       hero_lead: 'ISO Hub is a web wrapper for the Sowevo/iso_download CLI. It auto-tracks TUNA mirror metadata, downloads only what you pick, verifies SHA256, and serves built-in SMB / WebDAV sharing — all ISO updates and distribution handled in your browser.',
       hero_cta1: '🚀 Deploy Now', hero_cta2: 'View on GitHub',
-      stat_services: 'Containerized services', stat_distros: 'Major distros', stat_verify: 'Download verify', stat_src_s: 'Mirror metadata', stat_src: 'TUNA',
+      stat_services: 'Containerized services', stat_distros: 'Major distros', stat_verify: 'Download verify', stat_src_s: 'Mirror metadata', stat_src: 'Multi-mirror',
       feat_h2: 'Built for the messy job of chasing ISOs',
       feat_p: 'From browsing the catalog to verifying downloads and sharing over LAN — all in one web page.',
       feat1: 'Distro catalog', feat1d: 'Aggregates major Linux distros with versions, architectures and flavors in one browsable view.',
       feat2: 'Selective download', feat2d: 'Pick by version / arch / flavor — pull only the ISOs you actually need.',
       feat3: 'SHA256 verify', feat3d: 'Hashes are auto-checked after download to guarantee integrity and authenticity.',
-      feat4: 'TUNA metadata', feat4d: 'Auto-refreshed from the TUNA mirror — fast and low-latency in China.',
+      feat4: 'Multi-mirror', feat4d: 'Supports TUNA, USTC and more mirrors, auto-refreshing metadata — fast and low-latency in China.',
       feat5: 'Custom sources', feat5d: 'Configure your own mirror for intranet or regional acceleration.',
       feat6: 'Mirror guard', feat6d: 'Avoids duplicate pulls, saves disk and bandwidth, smart-skips existing versions.',
       feat7: 'Watch & subscribe', feat7d: 'Star your favorites and get notified on changes — never miss an update.',
@@ -480,35 +355,8 @@ git clone https://github.com/DC1024/iso-hub &amp;&amp; cd iso-hub &amp;&amp; cp 
       arch1_1: 'Web UI / API', arch1_2: 'Metadata refresh', arch1_3: 'Download & verify', arch1_4: 'Scheduled jobs',
       arch2_1: 'LAN file sharing', arch2_2: 'Dedicated volume', arch2_3: 'Read-only / read-write',
       arch3_1: 'Mount as drive', arch3_2: 'Cross-platform', arch3_3: 'Basic Auth',
-      flow: 'Browser <b>→</b> iso-hub (Web) <b>→</b> TUNA mirror (metadata/ISO) <b>→</b> disk <b>→</b> SMB / WebDAV share',
+      flow: 'Browser <b>→</b> iso-hub (Web) <b>→</b> mirror sites (metadata/ISO) <b>→</b> disk <b>→</b> SMB / WebDAV share',
       meta1: 'Port · configurable', meta2: 'Persistence · mounted volume', meta3: 'Health check · built-in', meta4: 'Image · Docker Hub', meta5: 'Stack · Flask + Docker',
-      dist_h2: 'The distros you actually install', dist_p: 'Always growing — these are supported / planned highlights.',
-      mir1_t: 'TUNA', mir1_d: 'Default metadata source — low latency and timely in China.',
-      mir2_t: 'USTC', mir2_d: 'A switchable backup mirror for higher availability.',
-      mir3_t: 'Custom source', mir3_d: 'Bring your own self-hosted / intranet mirror.',
-      show_h2: 'A clean console experience', show_p: 'Pick → download → verify → share, all in plain sight.',
-      con_body: '<span class="dim"># refresh metadata</span>\n<span class="p">iso-hub</span> &gt; sync --source tuna\n<span class="ok">✔</span> metadata updated · 142 distro versions\n\n<span class="dim"># select download</span>\n<span class="p">iso-hub</span> &gt; download ubuntu 24.04 desktop amd64\n<span class="hl">⠋</span> downloading … <span class="dim">5.8 GB / 5.8 GB</span>\n<span class="ok">✔</span> download complete\n\n<span class="dim"># verify</span>\n<span class="p">iso-hub</span> &gt; verify ubuntu-24.04-desktop-amd64.iso\n<span class="ok">✔</span> SHA256 matched · image intact\n\n<span class="dim"># share</span>\n<span class="p">iso-hub</span> &gt; share --smb --webdav\n<span class="ok">✔</span> SMB  //iso-hub/isos  ·  WebDAV https://host:8081',
-      start_h2: 'Up and running in 4 steps', start_p: 'Docker is all you need — no compilation.',
-      step1_t: 'Get config', step1_d: 'Clone the repo and prepare env vars.',
-      step1_code: '<span class="c"># clone</span>\ngit clone https://github.com/DC1024/iso-hub\n<span class="c"># prepare .env</span>\ncp .env.example .env',
-      step2_t: 'Configure ports & paths', step2_d: 'Edit .env to set the Web, SMB / WebDAV ports and the data mount dir.',
-      step2_code: '<span class="c"># .env key items</span>\nWEB_PORT=<span class="k">8080</span>\nSMB_PORT=<span class="k">445</span>\nWEBDAV_PORT=<span class="k">8081</span>\nDATA_DIR=<span class="k">/mnt/iso</span>',
-      step3_t: 'Launch', step3_d: 'One command brings up all three containers.',
-      step3_code: '<span class="c"># start all services</span>\ndocker compose up -d',
-      step4_t: 'Open the web UI', step4_d: 'Open <b>http://&lt;your-IP&gt;:8080</b> in a browser, then log in to start chasing ISOs.',
-      step4_code: '<span class="c"># default address</span>\nhttp://localhost:8080',
-      deploy_code_c: '# one-line deploy (demo)', copy_label: 'Copy',
-      faq_h2: 'Common questions',
-      faq1_q: 'What is the relation between ISO Hub and iso_download?',
-      faq1_a: 'ISO Hub is a web wrapper around Sowevo/iso_download: the terminal tasks of querying metadata / picking versions / downloading / verifying move into the browser, plus SMB / WebDAV sharing.',
-      faq2_q: 'Do I need to compile it myself?',
-      faq2_a: 'No. It is distributed as a Docker image — docker compose up -d runs it, no local build needed.',
-      faq3_q: 'Where does metadata come from? Fast in China?',
-      faq3_a: 'By default it uses TUNA mirror metadata — low latency and timely in China. You can switch to USTC or other sources, or plug in a custom mirror.',
-      faq4_q: 'How do I use the downloaded ISOs?',
-      faq4_a: 'After landing on disk they are shared via the built-in SMB (LAN share) and WebDAV (mountable as a drive), accessible cross-platform.',
-      faq5_q: 'Which distros are supported?',
-      faq5_a: 'Covers mainstream distros like Ubuntu / Debian / Arch / Rocky / Alma / Fedora / openSUSE / CentOS / Kali, and growing.',
       footer_main: 'ISO Hub · Web-based Linux distro ISO auto-updater'
     }
   };
