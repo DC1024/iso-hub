@@ -128,7 +128,6 @@ docker compose pull && docker compose up -d
 
 ### 说明
 
-- 想锁定版本，把 `latest` 换成具体版本号，如 `registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:1.0.6`。
 - 公网部署请确认防火墙放行 `8899`（或改用 80 等已放行端口）。
 - 该镜像为**单容器版**，不含 SMB/WebDAV 共享容器；如需网络共享请用下方源码方式部署（见「网络共享 (SMB / WebDAV)」）。
 - 仓库内另附 `docker-compose.acr.yml`，与本示例等价，可直接 `docker compose -f docker-compose.acr.yml up -d`。
