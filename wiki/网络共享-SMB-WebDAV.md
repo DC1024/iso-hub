@@ -37,53 +37,19 @@ ISO Hub 的 compose 会额外启动**两个只读共享容器**，把 `./data` �
   若端口不是 445 而是 1445，Windows 需用 `\\<IP>\iso` 走默认 445；高位端口 1445 更适合 PVE/支持自定义端口的客户端，或临时映射。也可在系统里添加网络位置时指定端口。
 - **WebDAV**：资源管理器「添加网络位置」，地址 `http://<IP>:8081/dav`。
 
-## compose 片段（samba + webdav）
+## 两个共享容器长什么样
 
-```yaml
-  samba:
-    image: dperson/samba:latest
-    container_name: iso-hub-samba
-    restart: unless-stopped
-    ports:
-      - "${SAMBA_PORT:-1445}:445"
-      - "${SAMBA_NETBIOS:-1137}:137/udp"
-      - "${SAMBA_138:-1138}:138/udp"
-      - "${SAMBA_139:-1139}:139"
-    volumes:
-      - ./data:/srv/iso:ro
-    environment:
-      - TZ=Asia/Shanghai
-      - USERID=${SAMBA_UID:-0}
-      - GROUPID=${SAMBA_GID:-0}
-    command: >-
-      -p
-      -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
-      -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
+samba / webdav 的完整定义已包含在 [快速部署](部署-快速开始) 的 docker compose 示例 和仓库根目录 `docker-compose.yml` 里，**无需单独编写**。这里仅列出关键点：
 
-  webdav:
-    image: hacdias/webdav:latest
-    container_name: iso-hub-webdav
-    restart: unless-stopped
-    ports:
-      - "${WEBDAV_PORT:-8081}:6065"
-    volumes:
-      - ./data:/data:ro
-      - ./data/webdav.yml:/config.yml:ro
-    environment:
-      - TZ=Asia/Shanghai
-    command: ["-c", "/config.yml"]
-```
+- `samba`：`dperson/samba` 镜像，映射 `1445(445)/1139(139)/1137(137)/1138(138)` 端口，只读共享 `./data` 为 `/srv/iso`。
+  `command` 的 `-s "iso;/srv/iso;no;no;no;user,pass"` 意思是——共享名 `iso`、路径 `/srv/iso`、只读、仅列共享、不允许访客，可写用户为 `user`。
+  环境变量 `SAMBA_UID/GROUPID`（默认 0=root，映射文件属主）。
+- `webdav`：`hacdias/webdav` 镜像，映射 `8081:6065`，只读共享 `./data` 为 `/data`。
+  账号密码写在 `./data/webdav.yml`（初始来自 `.env` 的 `WEBDAV_USER/PASS`），网页端改密后主容器会重写该文件。
 
-`samba` 的 `-s "iso;/srv/iso;no;no;no;user,pass"` 含义：
+> 若你确实只想**单独部署**共享容器（不跑 iso-hub 主服务），也可以手动把上面的 samba/webdav 两个服务定义从快速部署的 compose 里复制出来用。
 
-| 字段 | 含义 |
-|---|---|
-| `iso` | 共享名 |
-| `/srv/iso` | 容器内路径（映射到宿主机 `./data`） |
-| `no` | 可写？(只读) |
-| `no` | 仅列共享？ |
-| `no` | 允许访客？ |
-| `user,pass` | 可访问的用户 |
+> 无论走 Docker Hub 源还是阿里云 ACR 源部署，iso-hub 主镜像都是**单容器**，samba / webdav 是**独立 sidecar 容器**，与本项目源码构建版一致。
 
 ## 端口冲突说明
 
