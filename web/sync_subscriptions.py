@@ -19,6 +19,7 @@ import json
 import re
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 
@@ -40,6 +41,31 @@ def main() -> None:
     subs = json.loads(args.subscriptions)
     repo_dir = Path(__file__).resolve().parent.parent / "iso_download"
     sys.path.insert(0, str(repo_dir))
+
+    # 在上游 download_linux 被 import 之前 mock 掉 tqdm。
+    # 上游下载器内部用 tqdm 的 \r(回车) 覆盖式进度条输出(无换行),
+    # 后端 _spawn_worker 按行读取子进程 stdout 时会被阻塞, 导致日志/进度不实时刷新。
+    # 这里用无输出的 stub 替换, 前端进度靠后端跑文件 stat(size/total) 实现。
+    _tqdm_stub = types.ModuleType("tqdm")
+
+    class _NoopTqdm:
+        def __init__(self, *a, **k):
+            pass
+
+        def update(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a, **k):
+            pass
+
+        def close(self):
+            pass
+
+    _tqdm_stub.tqdm = lambda *a, **k: _NoopTqdm()
+    sys.modules["tqdm"] = _tqdm_stub
 
     # 复用上游下载器（必须在使用前导入，路径已加入 sys.path）
     from download_linux import LinuxDistributionDownloader  # noqa: E402
