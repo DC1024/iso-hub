@@ -59,8 +59,6 @@ docker run -d --name iso-hub \
 | 项目 | 值 |
 |---|---|
 | 镜像地址 | `registry.cn-hangzhou.aliyuncs.com/dcchen/isohub` |
-| 可用标签 | `latest`（push master 时构建）；`1.0.6` 这类版本号（打 `v1.0.6` tag 时构建） |
-| 构建方式 | GitHub Actions（workflow：`.github/workflows/aliyun-acr.yml`）自动构建推送 |
 
 ### 方式一：docker compose（推荐）
 
