@@ -1,6 +1,7 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
+<script>document.documentElement.dataset.theme=localStorage.getItem('isohub-theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');</script>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</title>
@@ -139,6 +140,22 @@
     .g3,.arch,.mirrors,.g2{grid-template-columns:1fr}
     .nav-links{display:none}.nav-cta .ghost{display:none}.burger{display:flex}
   }
+
+  /* 主题切换按钮 */
+  .theme-toggle{background:var(--panel);border:1px solid var(--panel-brd);color:var(--txt);padding:10px 14px}
+  .theme-toggle:hover{border-color:var(--cyan);color:var(--cyan)}
+
+  /* 浅色（日间）主题 */
+  [data-theme="light"]{
+    --bg:#eef2f8; --bg2:#e6ecf5; --panel:rgba(15,23,42,.04);
+    --panel-brd:rgba(15,23,42,.13); --txt:#0f172a; --muted:#51607a;
+  }
+  [data-theme="light"] header{background:rgba(238,242,248,.82);border-bottom-color:rgba(15,23,42,.1)}
+  [data-theme="light"] .mobile-menu{border-bottom-color:rgba(15,23,42,.1)}
+  [data-theme="light"] footer{border-top-color:rgba(15,23,42,.1)}
+  [data-theme="light"] .hero{background:
+    radial-gradient(1100px 460px at 50% -8%,rgba(59,130,246,.14),transparent 60%),
+    radial-gradient(700px 360px at 80% 10%,rgba(34,211,238,.1),transparent 60%)}
 </style>
 </head>
 <body>
@@ -154,6 +171,7 @@
       <a href="#faq">FAQ</a>
     </nav>
     <div class="nav-cta">
+      <button class="btn theme-toggle" id="themeToggle" type="button" aria-label="切换深浅色">🌙</button>
       <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener">GitHub</a>
       <a class="btn primary" href="#start">立即部署</a>
     </div>
@@ -360,6 +378,16 @@ git clone https://github.com/DC1024/iso-hub &amp;&amp; cd iso-hub &amp;&amp; cp 
     navigator.clipboard && navigator.clipboard.writeText(code);
     const t = b.textContent; b.textContent = '已复制'; setTimeout(() => b.textContent = t, 1400);
   }));
+  // 日夜主题切换
+  const tgl = document.getElementById('themeToggle');
+  const syncIcon = () => { if (tgl) tgl.textContent = document.documentElement.dataset.theme === 'light' ? '☀️' : '🌙'; };
+  if (tgl) tgl.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('isohub-theme', next); } catch (e) {}
+    syncIcon();
+  });
+  syncIcon();
 </script>
 </body>
 </html>
