@@ -327,7 +327,7 @@ data/
 
 ## 网络共享 (SMB / WebDAV)
 
-下载的 ISO 已映射到宿主机 `./data`，compose 额外启动两个共享容器把同一目录暴露给局域网：
+下载的 ISO 已映射到宿主机 `./data`，[方式 1 的 docker compose 示例](#1-使用-docker-部署) 或 [方式 2 源码构建](#2-使用源码构建部署含-smbwebdav-共享) 都会额外启动两个共享容器（`samba` + `webdav`），把同一目录暴露给局域网：
 
 | 协议 | 访问地址 | 账号/密码 |
 |---|---|---|
@@ -341,48 +341,17 @@ data/
 
 > 端口说明：Z4Pro 宿主机**自带 Samba** 已占用 445/139/137/138，故容器版 Samba 映射到高位端口 **1445(445)/1139(139)/1137(137)/1138(138)** 避免冲突。若你部署的机器没跑原生 Samba，可用 `SAMBA_PORT=445` 等环境变量改回标准端口。访问地址里的 `:1445` 也要随端口改动。
 
-### compose 示例（可直接粘贴使用）
+### 两个共享容器长什么样
 
-完整 compose 见仓库根目录 `docker-compose.yml`（含 iso-hub 主服务 + samba + webdav 三个容器）。这里单独列出两个共享容器的片段，方便只想加共享、或单独部署共享时参考：
+samba / webdav 的完整定义已包含在 [方式 1 的 compose 示例](#1-使用-docker-部署) 和仓库根目录 `docker-compose.yml` 里，**无需单独编写**。这里仅列出关键点：
 
-```yaml
-  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso   (账号 iso / 密码 iso123)
-  samba:
-    image: dperson/samba:latest
-    container_name: iso-hub-samba
-    restart: unless-stopped
-    ports:
-      - "${SAMBA_PORT:-1445}:445"
-      - "${SAMBA_NETBIOS:-1137}:137/udp"
-      - "${SAMBA_138:-1138}:138/udp"
-      - "${SAMBA_139:-1139}:139"
-    volumes:
-      - ./data:/srv/iso:ro          # 只读共享,ISO 不会被误改
-    environment:
-      - TZ=Asia/Shanghai
-      - USERID=${SAMBA_UID:-0}
-      - GROUPID=${SAMBA_GID:-0}
-    command: >-
-      -p
-      -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
-      -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
+- `samba`：`dperson/samba` 镜像，映射 `1445(445)/1139(139)/1137(137)/1138(138)` 端口，只读共享 `./data` 为 `/srv/iso`。
+  `command` 的 `-s "iso;/srv/iso;no;no;no;user,pass"` 意思是——共享名 `iso`、路径 `/srv/iso`、只读、仅列共享、不允许访客，可写用户为 `user`。
+  环境变量 `SAMBA_UID/GROUPID`（默认 0=root，映射文件属主）。
+- `webdav`：`hacdias/webdav` 镜像，映射 `8081:6065`，只读共享 `./data` 为 `/data`。
+  账号密码写在 `./data/webdav.yml`（初始来自 `.env` 的 `WEBDAV_USER/PASS`），网页端改密后主容器会重写该文件。
 
-  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav   (账号 iso / 密码 iso123)
-  webdav:
-    image: hacdias/webdav:latest
-    container_name: iso-hub-webdav
-    restart: unless-stopped
-    ports:
-      - "${WEBDAV_PORT:-8081}:6065"
-    volumes:
-      - ./data:/data:ro             # 只读共享
-      - ./data/webdav.yml:/config.yml:ro   # 凭据配置(主容器可改写此文件+restart 实现改密码)
-    environment:
-      - TZ=Asia/Shanghai
-    command: ["-c", "/config.yml"]
-```
-
-> 说明：`samba` 的 `-s "iso;/srv/iso;no;no;no;user,pass"` 意思是——共享名 `iso`、路径 `/srv/iso`、只读、仅列共享、不允许访客，可写用户为 `user`。`.env` 里可配 `SAMBA_UID/GROUPID`（默认 0=root，映射文件属主）。WebDAV 的账号密码写在 `./data/webdav.yml`（初始来自 `.env` 的 `WEBDAV_USER/PASS`），网页端改密后主容器会重写该文件。
+> 若你确实只想**单独部署**共享容器（不跑 iso-hub 主服务），也可以手动把上面的 samba/webdav 两个服务定义从第一部分的 compose 里复制出来用。
 
 ## 自定义源 (官方/镜像站任意直链)
 
