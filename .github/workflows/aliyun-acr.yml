@@ -80,11 +80,17 @@ jobs:
           username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
+      # 注意: 必须关闭 provenance/sbom!
+      # BuildKit v0.32+ 默认附加 OCI attestation(provenance/sbom), 其空配置描述符
+      # 用 application/vnd.oci.empty.v1+json 媒体类型, 阿里云个人版 ACR 不支持,
+      # 否则推送报: denied: unknown manifest class for application/vnd.oci.empty.v1+json
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           tags: ${{ steps.ver.outputs.tags }}
+          provenance: false
+          sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
