@@ -38,6 +38,10 @@ services:
       # 订阅自动同步间隔(秒),默认 86400=每天;设 0 关闭自动调度,仅手动/定时调用
       - ISO_HUB_SYNC_INTERVAL=${ISO_HUB_SYNC_INTERVAL:-86400}
       - ISO_HUB_SOURCE_STRATEGY=${ISO_HUB_SOURCE_STRATEGY:-A}
+      # 种子下载(qBittorrent sidecar)连接配置
+      - QB_URL=${QB_URL:-http://qbittorrent:8080}
+      - QB_USER=${QB_USER:-admin}
+      - QB_PASS=${QB_PASS:-adminadmin}
       # 网络共享默认凭据(可在网页「设置→共享设置」修改, 改后写入 ./data/settings.json 覆盖此处)
       - SAMBA_USER=${SAMBA_USER:-iso}
       - SAMBA_PASS=${SAMBA_PASS:-iso123}
@@ -86,3 +90,23 @@ services:
     environment:
       - TZ=Asia/Shanghai
     command: ["-c", "/config.yml"]
+  # ---------- 种子下载 sidecar: qBittorrent (BitTorrent 下载) ----------
+  # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
+  # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
+  # WebUI: http://<服务器IP>:8090  (默认 admin/adminadmin, 首次登录务必改)
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: iso-hub-qbittorrent
+    restart: unless-stopped
+    ports:
+      - "${QB_PORT:-8090}:8080"
+    volumes:
+      - ./data:/data             # 与主容器共享同一数据卷, 下载的 ISO 主容器可见
+      - ./qb-config:/config      # qBittorrent 配置/日志
+      - ./qb-downloads:/downloads # 默认下载目录(iso-hub 会按发行版设 savepath 到 /data/...)
+    environment:
+      - PUID=${QB_PUID:-0}
+      - PGID=${QB_PGID:-0}
+      - TZ=Asia/Shanghai
+      - WEBUI_PORT=8080
+      - TORRENTING_PORT=6881

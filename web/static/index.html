@@ -236,6 +236,7 @@
     <button class="tab active" data-tab="mirror" onclick="switchTab('mirror')" data-i18n="mirror">📦 镜像列表</button>
     <button class="tab" data-tab="source" onclick="switchTab('source')" data-i18n="source">🔗 自定义源</button>
     <button class="tab" data-tab="subs" onclick="switchTab('subs')" data-i18n="subs">⭐ 订阅同步</button>
+    <button class="tab" data-tab="torrent" onclick="switchTab('torrent')" data-i18n="torrent">🧲 种子下载</button>
     <button class="tab" data-tab="settings" onclick="switchTab('settings')" data-i18n="settings">⚙️ 设置</button>
   </nav>
 
@@ -490,14 +491,61 @@
       <div id="protect-list" style="padding:6px 16px 12px"></div>
     </div>
   </div>
+  <div id="panel-torrent" style="display:none">
+    <div class="card">
+      <div class="card-head">
+        <span class="g-name" data-i18n="torrConn">🧲 种子下载</span>
+        <span class="chip" id="qb-status" data-i18n="torrNoQb">未连接 qBittorrent</span>
+        <span style="flex:1"></span>
+        <button class="btn-s" onclick="loadTorrentInfo()" data-i18n="torrRefresh">🔄 刷新</button>
+      </div>
+    </div>
+    <div class="src-tabs" style="display:flex;gap:8px;margin:10px 0">
+      <button class="src-tab active" data-sub="source" onclick="switchTorr('source')" data-i18n="torrSource">📚 种子源</button>
+      <button class="src-tab" data-sub="running" onclick="switchTorr('running')" data-i18n="torrRunning">⏳ 下载中</button>
+    </div>
+    <div id="torr-source">
+      <div class="card">
+        <div class="card-head"><span class="g-name" data-i18n="torrAddManual">🔗 手动添加</span><span class="chip" id="torr-link-count">0</span></div>
+        <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="tm-url" class="inp" style="flex:1;min-width:240px" placeholder="magnet:?xt=... 或 .torrent 直链" data-i18n="torrManualPh">
+            <input id="tm-dist" class="inp" style="width:160px" placeholder="发行版名(可选,决定落盘目录)" data-i18n="torrManualDist">
+            <button class="btn-p" onclick="torrAddManual()" data-i18n="torrAddBtn">➕ 添加下载</button>
+          </div>
+          <div id="torr-links" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="g-name" data-i18n="torrRss">📡 RSS 源</span><span class="chip" id="torr-rss-count">0</span></div>
+        <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="tr-url" class="inp" style="flex:1;min-width:240px" placeholder="https://.../torrents.xml" data-i18n="torrRssPh">
+            <button class="btn-p" onclick="torrAddRss()" data-i18n="torrRssAdd">➕ 添加 RSS</button>
+          </div>
+          <div id="torr-rss-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="g-name" data-i18n="torrList">📚 官方种子列表</span><span class="chip" id="torr-count">0</span><span class="muted" style="font-size:11px">DistroWatch</span></div>
+        <div id="torr-list" style="padding:10px 16px"></div>
+      </div>
+    </div>
+    <div id="torr-running" style="display:none">
+      <div class="card">
+        <div class="card-head"><span class="g-name" data-i18n="torrRunning">⏳ 下载中</span><span class="chip" id="qb-tcount">0</span></div>
+        <div id="qb-list" style="padding:10px 16px;display:flex;flex-direction:column;gap:10px"></div>
+      </div>
+    </div>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 
 <script>
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.0.8';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
-const VERSION_TAG='1.0.8';
+const APP_VERSION='1.0.9';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
+const VERSION_TAG='1.0.9';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -735,6 +783,35 @@ const I18N={
   'delSchedConfirm':{zh:'删除该定时任务?',en:'Delete this schedule?'},
   'busy':{zh:'已有任务在运行,请稍候',en:'A task is already running, please wait'},
   'syncRunNow':{zh:'立即执行订阅同步',en:'Run subscription sync now'},
+  'torrent':{zh:'🧲 种子下载',en:'🧲 Torrent'},
+  'torrSource':{zh:'📚 种子源',en:'📚 Torrent Sources'},
+  'torrRunning':{zh:'⏳ 下载中',en:'⏳ Running'},
+  'torrConn':{zh:'已连接 qBittorrent',en:'Connected to qBittorrent'},
+  'torrConnDesc':{zh:'通过内置 qBittorrent sidecar 下载官方种子，落盘后与直链下载统一管理',en:'Download official torrents via qBittorrent sidecar; files merge into unified management'},
+  'torrRefresh':{zh:'🔄 刷新',en:'🔄 Refresh'},
+  'torrRescan':{zh:'重新扫描源',en:'Rescan sources'},
+  'torrAddManual':{zh:'🔗 手动添加',en:'🔗 Manual Add'},
+  'torrAddBtn':{zh:'➕ 添加下载',en:'➕ Add Download'},
+  'torrManualPh':{zh:'magnet:?xt=... 或 .torrent 直链',en:'magnet:?xt=... or .torrent URL'},
+  'torrManualDist':{zh:'发行版名(可选,决定落盘目录)',en:'Distro name (optional, sets save dir)'},
+  'torrRss':{zh:'📡 RSS 源',en:'📡 RSS Feeds'},
+  'torrRssAdd':{zh:'➕ 添加 RSS',en:'➕ Add RSS'},
+  'torrRssPh':{zh:'https://.../torrents.xml',en:'https://.../torrents.xml'},
+  'torrRssEmpty':{zh:'暂无自定义 RSS 源 —— 内置已含 DistroWatch 官方源',en:'No custom RSS feeds — built-in DistroWatch included'},
+  'torrList':{zh:'📚 官方种子列表',en:'📚 Official Torrents'},
+  'torrNoQb':{zh:'未连接 qBittorrent(需部署 qbittorrent sidecar)',en:'qBittorrent not connected (deploy qbittorrent sidecar)'},
+  'torrEmpty':{zh:'暂无种子条目 —— 请稍候或检查网络/添加源',en:'No torrent entries yet — wait or add sources'},
+  'torrDownload':{zh:'⬇ 下载',en:'⬇ Download'},
+  'torrAddOk':{zh:'已加入 qBittorrent 下载',en:'Added to qBittorrent'},
+  'torrAddFail':{zh:'加入失败',en:'Add failed'},
+  'torrDel':{zh:'删除种子',en:'Del Torrent'},
+  'torrDelFiles':{zh:'删种子+文件',en:'Del + Files'},
+  'torrProgress':{zh:'进度',en:'Progress'},
+  'torrState':{zh:'状态',en:'State'},
+  'torrLocalHas':{zh:'本地已有',en:'Local'},
+  'torrName':{zh:'名称',en:'Name'},
+  'torrSize':{zh:'大小',en:'Size'},
+  'torrLinkEmpty':{zh:'暂无手动添加的链接',en:'No manual links yet'},
 };
 let LANG_PREF=localStorage.getItem('iso_hub_lang')||'auto'; // 'zh'|'en'|'auto'
 function detectLang(){return (navigator.language||'zh').toLowerCase().startsWith('zh')?'zh':'en'}
@@ -1007,12 +1084,13 @@ function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-th
 /* ---------- Tab 切换 ---------- */
 function switchTab(tab){
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  ['mirror','source','subs','settings'].forEach(p=>{
+  ['mirror','source','subs','settings','torrent'].forEach(p=>{
     document.getElementById('panel-'+p).style.display=(p===tab)?'':'none';
   });
   if(tab==='source')loadCustomSources();
   if(tab==='subs')loadSubs();
   if(tab==='settings')loadSettings();
+  if(tab==='torrent'){loadTorrentSources();loadTorrentInfo();}
 }
 
 /* ---------- 设置面板 ---------- */
@@ -1070,6 +1148,94 @@ async function loadUserState(){
   $('#btn-login').textContent=ok?t('logout'):t('login');
   $('#pwd-form').style.display=ok?'flex':'none';
 }
+
+/* ---------- 种子下载 (qBittorrent + DistroWatch) ---------- */
+function switchTorr(sub){
+  document.querySelectorAll('#panel-torrent .src-tab').forEach(b=>b.classList.toggle('active',b.dataset.sub===sub));
+  document.getElementById('torr-source').style.display=sub==='source'?'':'none';
+  document.getElementById('torr-running').style.display=sub==='running'?'':'none';
+  if(sub==='running')loadTorrentInfo();
+}
+async function loadTorrentSources(){
+  const r=await jget('/api/torrent/sources');
+  if(!r.ok){ const s=document.getElementById('qb-status'); if(s)s.textContent=('⚠ '+(r.error||'err')); return; }
+  const st=document.getElementById('qb-status'); if(st)st.textContent=(r.ok?'🟢 在线':'⚠ 未连接');
+  renderTorrRss(r.user_rss||[]);
+  renderTorrLinks(r.user_links||[]);
+  renderTorrItems(r.items||[]);
+  const c=document.getElementById('torr-count'); if(c)c.textContent=(r.items||[]).length;
+  const rc=document.getElementById('torr-rss-count'); if(rc)rc.textContent=(r.user_rss||[]).length;
+}
+function renderTorrRss(list){
+  const box=document.getElementById('torr-rss-list'); if(!box)return;
+  box.innerHTML=!list.length?('<div class="empty" style="padding:10px 0">'+t('torrRssEmpty')+'</div>')
+    : list.map(u=>'<div class="prot-row" data-p="'+esc(u)+'"><span class="pn" style="font-size:12px;word-break:break-all">'+esc(u)+'</span>'
+      +'<button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="torrRssRemove(\''+esc(u)+'\')">✖</button></div>').join('');
+}
+function renderTorrLinks(list){
+  const box=document.getElementById('torr-links');
+  const cnt=document.getElementById('torr-link-count'); if(cnt)cnt.textContent=list.length;
+  if(box)box.innerHTML=!list.length?('<div class="empty" style="padding:10px 0">'+t('torrLinkEmpty')+'</div>')
+    :list.map(x=>'<div class="prot-row" style="padding:6px 0"><span class="pn" style="font-size:12px;word-break:break-all;flex:1;min-width:0">'+esc(x.url)+'</span>'
+      +'<button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="torrLinkRemove(\''+esc(x.url)+'\')">✖</button></div>').join('');
+}
+function renderTorrItems(items){
+  const box=document.getElementById('torr-list'); if(!box)return;
+  if(!items.length){box.innerHTML='<div class="empty" style="padding:14px 0">'+t('torrEmpty')+'</div>';return;}
+  box.innerHTML=items.map(it=>{
+    const title=it.title||it.url.split('/').pop();
+    return '<div class="prot-row" style="align-items:flex-start"><div style="flex:1;min-width:0">'
+      +'<div class="pn" style="font-size:13px;word-break:break-all">'+esc(title)+'</div>'
+      +(it.pubDate?'<div class="muted" style="font-size:11px">'+esc(it.pubDate)+' · '+esc(it.source||'')+'</div>':'')
+      +'</div>'
+      +'<button class="btn-s" style="padding:4px 12px;font-size:12px" onclick="torrAdd(\''+esc(it.url)+'\',\''+esc((it.title||'').replace(/\.torrent.*$/i,''))+'\')">'+t('torrDownload')+'</button>'
+      +'</div>';
+  }).join('');
+}
+async function loadTorrentInfo(){
+  const st=document.getElementById('qb-status'); const r=await jget('/api/torrent/info');
+  if(!r.ok){ if(st)st.textContent=('⚠ '+(r.error||'未连接')); return; }
+  if(!r.connected){ if(st)st.textContent=('⚠ '+t('torrNoQb')); return; }
+  if(st)st.textContent='🟢 '+t('torrConn');
+  const v=document.getElementById('qb-ver'); if(v)v.textContent=r.version||'';
+  const tc=document.getElementById('qb-tcount'); if(tc)tc.textContent=(r.torrents||[]).length;
+  const box=document.getElementById('qb-list'); if(!box)return;
+  const ts=r.torrents||[];
+  box.innerHTML=!ts.length?('<div class="empty" style="padding:14px 0">暂无正在下载的种子</div>')
+    : ts.map(t=>{
+      const prog=Math.round((t.progress||0)*100);
+      const dl=t.dlspeed||0, up=t.upspeed||0;
+      const stt=(t.state||'').toUpperCase();
+      return '<div class="prot-row" style="align-items:flex-start"><div style="flex:1;min-width:0">'
+        +'<div class="pn" style="font-size:13px">'+esc(t.name||'')+(t.local_has?' <span class="badge ok" style="font-size:10px">'+t('torrLocalHas')+'</span>':'')+'</div>'
+        +'<div class="muted" style="font-size:11px">'+esc(stt)+' · '+prog+'% · ↓'+fmt(dl)+'/s ↑'+fmt(up)+'/s · '+esc((t.save_path||'').replace('/data/','/'))+'</div>'
+        +'<div style="height:6px;background:#16253d;border-radius:4px;margin-top:4px;max-width:320px"><div style="height:6px;width:'+prog+'%;background:var(--brand2);border-radius:4px"></div></div>'
+        +'</div>'
+        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="torrDel(\''+esc(t.hash)+'\',false)">'+t('torrDel')+'</button>'
+        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="torrDel(\''+esc(t.hash)+'\',true)">'+t('torrDelFiles')+'</button>'
+        +'</div>';
+    }).join('');
+}
+async function torrAdd(url,distro){
+  const r=await jpost('/api/torrent/add',{urls:[url],distro:distro||''});
+  toast(r.ok?t('torrAddOk'):(r.error||t('torrAddFail')),!r.ok);
+  if(r.ok){loadTorrentInfo();}
+}
+async function torrAddManual(){
+  const url=($('#tm-url').value||'').trim(); if(!url)return toast('请输入链接','err');
+  const distro=($('#tm-dist').value||'').trim();
+  const r=await jpost('/api/torrent/add',{urls:[url],distro:distro});
+  toast(r.ok?t('torrAddOk'):(r.error||t('torrAddFail')),!r.ok);
+  if(r.ok){$('#tm-url').value='';loadTorrentInfo();}
+}
+async function torrAddRss(){
+  const url=($('#tr-url').value||'').trim(); if(!url)return toast('请输入 RSS 地址','err');
+  const r=await jpost('/api/torrent/rss/add',{url}); toast(r.ok?'RSS 已添加':(r.error||'失败'),!r.ok);
+  if(r.ok){$('#tr-url').value='';loadTorrentSources();}
+}
+async function torrRssRemove(url){await jpost('/api/torrent/rss/remove',{url});loadTorrentSources();}
+async function torrLinkRemove(url){await jpost('/api/torrent/link/remove',{url});loadTorrentSources();}
+async function torrDel(hash,files){await jpost('/api/torrent/delete',{hashes:[hash],delete_files:files});loadTorrentInfo();}
 /* ---------- 定时任务 ---------- */
 const SCH_WEEK_KEYS=['w0','w1','w2','w3','w4','w5','w6'];
 function schedTypeChanged(){

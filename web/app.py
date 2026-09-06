@@ -32,6 +32,14 @@ from collections import deque
 
 from flask import Flask, jsonify, request, send_from_directory
 
+try:  # 种子下载集成(qBittorrent + DistroWatch 源) —— 可选加载
+    from torrent_client import QBClient, qb_config, distro_name_from_torrent, distro_dir  # noqa: PLC0415
+    import distro_torrents as dtorrents  # noqa: PLC0415
+    TORRENT_AVAILABLE = True
+except Exception as e:  # noqa: BLE001
+    TORRENT_AVAILABLE = False
+    _torrent_import_err = str(e)
+
 # --------------------------------------------------------------------------- paths
 BASE_DIR = Path(__file__).resolve().parent
 REPO_DIR = Path(os.environ.get("ISO_REPO_DIR", "/app/iso_download"))
@@ -1241,6 +1249,168 @@ def api_shares_save():
     save_shares(shares)
     log(f"[共享] 设置已保存: SMB={shares['samba']['enabled']} WebDAV={shares['webdav']['enabled']}")
     return jsonify({"ok": True, "shares": {k: {**v, "container": share_container_state(SHARE_CONTAINERS[k])} for k, v in shares.items()}})
+
+
+# --------------------------------------------------------------------------- 种子下载 (qBittorrent + DistroWatch)
+def _qb() -> QBClient:
+    return QBClient()
+
+
+@app.get("/api/torrent/sources")
+def api_torrent_sources():
+    """扫描 DistroWatch 官方种子源 + 用户自加 RSS/链接, 返回可下载的种子列表。"""
+    if not TORRENT_AVAILABLE:
+        return jsonify({"error": "种子模块未加载: " + (_torrent_import_err or "")}), 500
+    try:
+        res = dtorrents.scan_sources()
+        return jsonify({"ok": True, "source": res.get("source"),
+                        "reports": res.get("reports", []),
+                        "items": res.get("items", []),
+                        "user_rss": dtorrents.get_user_rss(),
+                        "user_links": dtorrents.get_user_links()})
+    except Exception as e:  # noqa: BLE001
+        log(f"[种子] 扫描种子源失败: {e!r}")
+        return jsonify({"error": f"扫描种子源失败: {e}"}), 500
+
+
+@app.get("/api/torrent/info")
+def api_torrent_info():
+    """查询 qBittorrent 连接状态 + 传输信息 + 种子列表(含本地是否已存在)."""
+    if not TORRENT_AVAILABLE:
+        return jsonify({"error": "种子模块未加载"}), 500
+    try:
+        qb = _qb()
+        ver = qb.version()
+        if not ver:
+            cfg = qb_config()
+            return jsonify({"ok": False, "error": f"无法连接 qBittorrent ({cfg['QB_URL']}), 请确认已部署 sidecar 且凭据正确",
+                            "config": {k: (cfg[k][:12] + "..." if k == "QB_PASS" else cfg[k]) for k in cfg}}), 200
+        transfer = qb.transfer_info()
+        toks = qb.list_torrents()
+        # 标记本地是否已存在同名文件
+        inv = disk_inventory()
+        names = {f["name"] for fs in inv.values() for f in fs}
+        for t in toks:
+            t["local_has"] = bool(set(t.get("name", "").split()) & names) or any(
+                f in names for f in _torrent_file_names(t))
+        return jsonify({"ok": True, "connected": True, "version": ver,
+                        "transfer": transfer, "torrents": toks})
+    except Exception as e:  # noqa: BLE001
+        log(f"[种子] 查询 qBittorrent 状态失败: {e!r}")
+        return jsonify({"ok": False, "error": f"查询失败: {e}"}), 500
+
+
+def _torrent_file_names(t: dict) -> list:
+    """从 qBittorrent 种子内容字段尽量还原文件名, 用于本地存在性判断。"""
+    n = (t.get("name") or "").strip()
+    if not n:
+        return []
+    # name 可能形如  ubuntu-26.04.1-desktop-amd64.iso 或 目录/文件.iso
+    base = n.rsplit("/", 1)[-1].replace(".torrent", "")
+    # 剥离可能的 hash/扩展
+    return [base] if base else []
+
+
+@app.post("/api/torrent/add")
+def api_torrent_add():
+    """把种子(URL/磁力)交给 qBittorrent 下载。
+    body: {urls:[...], distro?, type?, category?}
+    若能推断发行版, 保存路径设为 /data/<type>/<发行版>/; 否则存 /data/_torrents/。
+    """
+    if not TORRENT_AVAILABLE:
+        return jsonify({"error": "种子模块未加载"}), 500
+    body = request.get_json(force=True, silent=True) or {}
+    urls = [u for u in (body.get("urls") or []) if u and str(u).strip()]
+    if not urls:
+        return jsonify({"error": "未提供任何种子 URL/磁力链接"}), 400
+    urls = [str(u).strip() for u in urls]
+    # 推断保存路径
+    save_path = None
+    distro = (body.get("distro") or "").strip()
+    typ = (body.get("type") or "linux").strip()
+    if not distro:
+        # 从第一个 URL 的文件名推断
+        probe = urls[0].rsplit("/", 1)[-1]
+        dname, dtype = distro_name_from_torrent(probe)
+        if dname:
+            distro, typ = dname, dtype
+    if distro:
+        target = DATA_DIR / typ / distro
+        target.mkdir(parents=True, exist_ok=True)
+        save_path = str(target)
+    else:
+        fallback = DATA_DIR / "_torrents"
+        fallback.mkdir(parents=True, exist_ok=True)
+        save_path = str(fallback)
+    try:
+        qb = _qb()
+        r = qb.add_torrent(urls, save_path=save_path, category=body.get("category") or "iso-hub")
+        if not r.get("ok"):
+            return jsonify({"error": f"qBittorrent 添加失败: {r.get('error')}"}), 502
+        log(f"[种子] 添加 {len(urls)} 个下载, 保存到 {save_path}")
+        return jsonify({"ok": True, "save_path": save_path, "distro": distro, "type": typ})
+    except Exception as e:  # noqa: BLE001
+        log(f"[种子] 添加失败: {e!r}")
+        return jsonify({"error": f"添加失败: {e}"}), 500
+
+
+@app.post("/api/torrent/delete")
+def api_torrent_delete():
+    """从 qBittorrent 删除种子。body: {hashes:[...], delete_files?:bool}"""
+    if not TORRENT_AVAILABLE:
+        return jsonify({"error": "种子模块未加载"}), 500
+    body = request.get_json(force=True, silent=True) or {}
+    hashes = [str(h) for h in (body.get("hashes") or []) if h]
+    if not hashes:
+        return jsonify({"error": "未提供种子 hash"}), 400
+    delete_files = bool(body.get("delete_files"))
+    try:
+        qb = _qb()
+        ok = qb.delete_torrents(hashes, delete_files)
+        log(f"[种子] 删除 {len(hashes)} 个, 同时删文件={delete_files}")
+        return jsonify({"ok": ok})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"删除失败: {e}"}), 500
+
+
+@app.post("/api/torrent/rss/add")
+def api_torrent_rss_add():
+    body = request.get_json(force=True, silent=True) or {}
+    url = (body.get("url") or "").strip()
+    if not url.startswith("http"):
+        return jsonify({"error": "RSS 地址需以 http 开头"}), 400
+    lst = dtorrents.add_user_rss(url)
+    log(f"[种子] 添加 RSS 源: {url}")
+    return jsonify({"ok": True, "user_rss": lst})
+
+
+@app.post("/api/torrent/rss/remove")
+def api_torrent_rss_remove():
+    body = request.get_json(force=True, silent=True) or {}
+    url = (body.get("url") or "").strip()
+    lst = dtorrents.remove_user_rss(url)
+    log(f"[种子] 移除 RSS 源: {url}")
+    return jsonify({"ok": True, "user_rss": lst})
+
+
+@app.post("/api/torrent/link/add")
+def api_torrent_link_add():
+    body = request.get_json(force=True, silent=True) or {}
+    url = (body.get("url") or "").strip()
+    if not url.startswith(("http", "magnet:")):
+        return jsonify({"error": "链接需以 http 或 magnet: 开头"}), 400
+    lst = dtorrents.add_user_link(url, (body.get("distro") or ""))
+    log(f"[种子] 添加手动链接: {url}")
+    return jsonify({"ok": True, "user_links": lst})
+
+
+@app.post("/api/torrent/link/remove")
+def api_torrent_link_remove():
+    body = request.get_json(force=True, silent=True) or {}
+    url = (body.get("url") or "").strip()
+    lst = dtorrents.remove_user_link(url)
+    log(f"[种子] 移除手动链接: {url}")
+    return jsonify({"ok": True, "user_links": lst})
 
 
 if __name__ == "__main__":

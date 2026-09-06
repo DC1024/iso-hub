@@ -24,6 +24,7 @@
 | 🗂 分组折叠 | 每个发行版组头部可折叠/展开版本列表，状态记忆到浏览器 |
 | 🌐 中英双语 | 全界面支持 中文 / English / 自动（跟随系统）三态切换，记忆到本地 |
 | 🧭 多源负载均衡 | 每个版本自动从多个镜像站（清华/中科大/阿里云/网易/腾讯+官方兜底）选源并故障转移；可选「A 固定优先级」或「B 实测选最快」两种全局策略，也可在镜像列表**每行手动指定**某个镜像源 |
+| 🧲 种子下载 | 内置解析 DistroWatch 官方种子 RSS 列表（另支持**手动粘贴磁力/种子链接**与**自加任意 RSS 源**），一键把官方种子交给内置 qBittorrent sidecar 下载，落盘 `./data` 后与直链下载统一识别/校验/删除 |
 | ⚙️ 设置菜单 | 统一面板：用户登录、语言切换、网络共享、定时任务、受保护列表 |
 | 🔍 筛选 + 收藏 | 镜像列表按 全部/已下载/未下载/已收藏 筛选；每行可 ★ 收藏 |
 | 🔒 镜像保护 | 每行可锁定，受保护文件在过期清理/订阅同步时不会被删除 |
@@ -39,9 +40,9 @@
 
 | 方式 | 适合场景 | 共享 sidecar |
 |---|---|---|
-| **1.2 阿里云源** | **国内服务器（推荐）**：拉取快、公开仓库无需登录 | ✅ iso-hub 走阿里云，samba/webdav 走 Docker Hub |
-| 1.1 Docker Hub 源 | 海外服务器 | ✅ 三容器均从 Docker Hub 拉取 |
-| 2. 源码构建 | 需要改代码 / 自定义网络共享镜像 | ✅ 三容器本地构建 |
+| **1.2 阿里云源** | **国内服务器（推荐）**：拉取快、公开仓库无需登录 | ✅ iso-hub 走阿里云，samba/webdav/qbittorrent 走 Docker Hub |
+| 1.1 Docker Hub 源 | 海外服务器 | ✅ 四容器均从 Docker Hub 拉取 |
+| 2. 源码构建 | 需要改代码 / 自定义网络共享镜像 | ✅ 四容器本地构建 |
 
 ---
 
@@ -310,6 +311,8 @@ docker exec iso-hub python /app/iso_download/update_distributions.py --output /d
 | `SAMBA_138` | `1138` | NetBIOS 138/udp 宿主端口 |
 | `SAMBA_139` | `1139` | NetBIOS 139/tcp 宿主端口 |
 | `WEBDAV_PORT`/`WEBDAV_USER`/`WEBDAV_PASS` | `8081`/`iso`/`iso123` | WebDAV 共享端口与凭据 |
+| `QB_PORT` | `8090` | qBittorrent WebUI 宿主端口 |
+| `QB_URL`/`QB_USER`/`QB_PASS` | `http://qbittorrent:8080`/`admin`/`adminadmin` | iso-hub 连 qBittorrent 的地址/账号/密码（默认走 compose 内网；改 QB_PASS 后须与 qBittorrent 实际密码一致） |
 | `TZ` | `Asia/Shanghai` | 时区 |
 
 > 内置**用户登录**（设置面板可设/改管理员密码）。若暴露到公网建议同时配置 `ISO_HUB_TOKEN` 或置于反代（Caddy/Nginx Basic Auth）之后。
@@ -353,6 +356,20 @@ samba / webdav 的完整定义已包含在 [方式 1 的 compose 示例](#1-使�
   账号密码写在 `./data/webdav.yml`（初始来自 `.env` 的 `WEBDAV_USER/PASS`），网页端改密后主容器会重写该文件。
 
 > 若你确实只想**单独部署**共享容器（不跑 iso-hub 主服务），也可以手动把上面的 samba/webdav 两个服务定义从第一部分的 compose 里复制出来用。
+
+## 种子下载 (qBittorrent + DistroWatch 源)
+
+「🧲 种子下载」页让 iso-hub 直接拉取官方种子文件，交给内置的 **qBittorrent sidecar 容器**下载（BitTorrent 协议），下载完成的 ISO 自动落盘到 `./data`，与直链下载统一识别、校验、管理。
+
+- **三种种子来源**（可同时启用，自动去重合并）：
+  1. **内置官方源**：自动解析 [DistroWatch 官方种子 RSS](https://distrowatch.com/news/torrents.xml)，列出最新发行版种子一键点选下载。
+  2. **手动粘贴**：粘贴任意磁力链接（`magnet:?xt=...`）或 `.torrent` 文件 URL 到输入框，可手动指定发行版名（决定落盘目录）。
+  3. **自加 RSS 源**：可添加任意 RSS/Atom 种子源 URL，解析其中的种子条目供选择下载。
+- **落盘目录**：iso-hub 会尽量从种子文件名推断发行版，保存到 `/data/<type>/<发行版>/`；推断不出则存 `/data/_torrents/`。两个目录都会被 `disk_inventory()` 扫描，前端「已下载」标记、过期清理、订阅同步、删除操作对**种子下载与直链下载一视同仁**。
+- **侧容器**：compose 会额外启动 `qbittorrent`（`lscr.io/linuxserver/qbittorrent`），挂载 `./data`（下载目录）、`./qb-config`（配置）、`./qb-downloads`（默认下载目录）。iso-hub 通过内网 `http://qbittorrent:8080` 调用其 Web API 发起下载/查询/删除。WebUI 地址 `http://<服务器IP>:8090`（默认 `admin/adminadmin`，**首次登录务必改密，并同步改 `.env` 的 `QB_PASS`**）。
+- 支持在 qBittorrent WebUI 里自行管理种子；iso-hub 网页只负责「发起/查看/删除」，实时进度与传输速率也会回显到 iso-hub 的种子页。
+
+> 说明：`qbittorrent` 镜像来自 Docker Hub（`lscr.io/linuxserver/qbittorrent`），国内拉取可能较慢；可给该服务单独配 Docker Hub 加速器。
 
 ## 自定义源 (官方/镜像站任意直链)
 
