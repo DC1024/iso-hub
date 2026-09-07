@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
-<head>
+<html lang="zh-CN" data-theme="dark" data-page-node-id="3iYUVzCv0v9wFNUJbhB4lS">
+<head data-page-node-id="nsVae0Tsn3F8KBVGzEcSAp">
 <script>
   document.documentElement.dataset.theme=localStorage.getItem('isohub-theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
   (function(){var l=localStorage.getItem('isohub-lang')||'zh';document.documentElement.dataset.lang=l;document.documentElement.lang=l==='en'?'en':'zh-CN';})();
 </script>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta charset="UTF-8" data-page-node-id="g9AibSUkxyqShTYw3LkjGf" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="jUyWD74Chgpy2q6p1qzthE" />
 <title>ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</title>
-<meta name="description" content="ISO Hub —— 对 Sowevo/iso_download 的网页化封装，自动追踪多镜像站元数据、选择性下载、SHA256 校验、内置 SMB/WebDAV 共享。网页上搞定 Linux 发行版 ISO 的更新与分发。" />
+<meta name="description" content="ISO Hub —— 对 Sowevo/iso_download 的网页化封装，自动追踪多镜像站元数据、选择性下载、SHA256 校验、内置 SMB/WebDAV 共享。网页上搞定 Linux 发行版 ISO 的更新与分发。" data-page-node-id="S3cx97kFiL7YT5CEeV5E9E" />
 <style>
   :root{
     --bg:#070b16; --bg2:#0b1222; --panel:rgba(255,255,255,.045);
@@ -84,11 +84,11 @@
   .node .sub{font-size:12px;color:var(--cyan);margin:4px 0 10px}
   .node ul{list-style:none;text-align:left;font-size:13px;color:var(--muted)}
   .node li{padding:3px 0;border-bottom:1px dashed rgba(255,255,255,.07)}
-  .flow{display:flex;justify-content:center;gap:10px;margin:22px 0;color:var(--muted);font-size:13px;flex-wrap:wrap}
-  .flow b{color:var(--cyan)}
-  .meta{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:18px}
-  .chip{font-size:12px;padding:6px 12px;border-radius:999px;background:var(--panel);
-    border:1px solid var(--panel-brd);color:var(--muted)}
+  .flow{display:flex;justify-content:center;align-items:center;gap:8px;margin:24px 0;color:var(--muted);font-size:13px;flex-wrap:wrap}
+  .flow b{color:var(--cyan);font-weight:600;margin:0 4px}
+  .meta{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:20px}
+  .chip{font-size:12px;padding:8px 16px;border-radius:999px;background:var(--panel);
+    border:1px solid var(--panel-brd);color:var(--muted);display:inline-flex;align-items:center;gap:6px}
 
   /* distros */
   .tags{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:8px}
@@ -162,91 +162,91 @@
     radial-gradient(700px 360px at 80% 10%,rgba(34,211,238,.1),transparent 60%)}
 </style>
 </head>
-<body>
+<body data-page-node-id="oUBCgntcyRqfIe0cmSH5Xx">
 
-<header>
-  <div class="wrap nav">
-    <div class="brand"><span class="logo">IS</span> ISO&nbsp;Hub</div>
-    <div class="nav-cta">
-      <button class="btn lang-toggle" id="langToggle" type="button" aria-label="切换语言">中</button>
-      <button class="btn theme-toggle" id="themeToggle" type="button" aria-label="切换深浅色">🌙</button>
-      <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener">GitHub</a>
-      <a class="btn ghost" href="https://gitee.com/dcchen1565710276/iso-hub" target="_blank" rel="noopener">Gitee</a>
-      <a class="btn primary" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="cta_deploy">Wiki</a>
+<header data-page-node-id="xO2Sqpfuo4q4Yg2w2bSzLV">
+  <div class="wrap nav" data-page-node-id="9Bp5RlLPhvLFbd3WiVHjwt">
+    <div class="brand" data-page-node-id="SJeT13cK0yVqX3gVzim0Tr"><span class="logo" data-page-node-id="PKk4O37fDBMhlYbh8JU8dt">IS</span> ISO&nbsp;Hub</div>
+    <div class="nav-cta" data-page-node-id="mbcTxgB3dihIFBg91wtSZ5">
+      <button class="btn lang-toggle" id="langToggle" type="button" aria-label="切换语言" data-page-node-id="ND0nLPtw3GQsmCLkrYf8L6">中</button>
+      <button class="btn theme-toggle" id="themeToggle" type="button" aria-label="切换深浅色" data-page-node-id="cOErahatv9KpKv2atsKfie">🌙</button>
+      <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" data-page-node-id="UdHUu1qHnQScqF83I8Fkrq">GitHub</a>
+      <a class="btn ghost" href="https://gitee.com/dcchen1565710276/iso-hub" target="_blank" rel="noopener" data-page-node-id="L7NgjBgneNukTrR7CZpzjg">Gitee</a>
+      <a class="btn primary" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="cta_deploy" data-page-node-id="DbzTqCC4Q1wCp406i0fAQl">Wiki</a>
     </div>
-    <button class="burger" aria-label="menu"><span></span><span></span><span></span></button>
+    <button class="burger" aria-label="menu" data-page-node-id="pgTuXJRaTxLRD5yiMSSquH"><span data-page-node-id="hpVkJsgM1MdAieSsA6YKyq"></span><span data-page-node-id="FHQkdNqrBNao2rQKrGHJ8B"></span><span data-page-node-id="as1BOdW5AfEKdZi4vbifPJ"></span></button>
   </div>
-  <div class="mobile-menu">
-    <a href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener">Wiki</a>
-    <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://gitee.com/dcchen1565710276/iso-hub" target="_blank" rel="noopener">Gitee</a>
+  <div class="mobile-menu" data-page-node-id="c3n4lgxNNHP2JWKtWBEJPG">
+    <a href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-page-node-id="kKTE5rm9QeDYeWHztzznxH">Wiki</a>
+    <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" data-page-node-id="DA7ADz5cs6BeCePh3Uh7Bg">GitHub</a>
+    <a href="https://gitee.com/dcchen1565710276/iso-hub" target="_blank" rel="noopener" data-page-node-id="TGFY3OwF04JAEBkSLMOWHc">Gitee</a>
   </div>
 </header>
 
-<section class="hero">
-  <div class="wrap">
-    <span class="eyebrow">Web ISO Updater · Docker Ready</span>
-    <h1 data-i18n="hero_h1">网页上的 <span class="grad">Linux 发行版 ISO</span><br>自动更新器</h1>
-    <p class="lead" data-i18n="hero_lead">ISO Hub 是对 Sowevo/iso_download 命令行工具的网页化封装。自动追踪多镜像站元数据、按需选择性下载、SHA256 校验、内置 SMB / WebDAV 共享——在浏览器里搞定 ISO 的更新与分发。</p>
-    <div class="hero-cta">
-      <a class="btn primary" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="hero_cta1">📚 查看 Wiki</a>
-      <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" data-i18n="hero_cta2">在 GitHub 查看</a>
+<section class="hero" data-page-node-id="OUFvqo7hBYSRFYnYPrHgjp">
+  <div class="wrap" data-page-node-id="L7H9aH8yGwDBgeOXHF82ac">
+    <span class="eyebrow" data-page-node-id="mPDpoeFQpizPGYj12RaI0A">Web ISO Updater · Docker Ready</span>
+    <h1 data-i18n="hero_h1" data-page-node-id="CA5p9ZqEyeLy32D1WxgYT9">网页上的 <span class="grad" data-page-node-id="2W72rYDuPoWxoXemz9TSeg">Linux 发行版 ISO</span><br data-page-node-id="zAlhSRWIgzM9MHcpaOsWsj">自动更新器</h1>
+    <p class="lead" data-i18n="hero_lead" data-page-node-id="Ul3D9Me6fbq4KMd8c1cBZ8">ISO Hub 是对 Sowevo/iso_download 命令行工具的网页化封装。自动追踪多镜像站元数据、按需选择性下载、SHA256 校验、内置 SMB / WebDAV 共享——在浏览器里搞定 ISO 的更新与分发。</p>
+    <div class="hero-cta" data-page-node-id="DZ1kKTm1SU0opGAh7efErc">
+      <a class="btn primary" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="hero_cta1" data-page-node-id="z8bJjqBiULABG3i8AHT6Ws">📚 查看 Wiki</a>
+      <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" data-i18n="hero_cta2" data-page-node-id="0BtK6QcRLvAWCmseF0CKMB">在 GitHub 查看</a>
     </div>
-    <div class="stats">
-      <div class="stat"><b>3</b><span data-i18n="stat_services">容器化服务</span></div>
-      <div class="stat"><b>12+</b><span data-i18n="stat_distros">主流发行版</span></div>
-      <div class="stat"><b>SHA256</b><span data-i18n="stat_verify">下载校验</span></div>
-      <div class="stat"><b data-i18n="stat_src">多镜像源</b><span data-i18n="stat_src_s">元数据加速</span></div>
-    </div>
-  </div>
-</section>
-
-<section id="features">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <span class="eyebrow">Features</span>
-      <h2 data-i18n="feat_h2">为「追 ISO」这件麻烦事而生的能力</h2>
-      <p data-i18n="feat_p">从清单浏览到下载校验，再到局域网共享，一条龙在网页里完成。</p>
-    </div>
-    <div class="grid g3">
-      <div class="card reveal"><div class="ic">📋</div><h3 data-i18n="feat1">发行版清单</h3><p data-i18n="feat1d">聚合主流 Linux 发行版及其版本、架构、镜像变体，统一浏览。</p></div>
-      <div class="card reveal"><div class="ic">⬇️</div><h3 data-i18n="feat2">选择性下载</h3><p data-i18n="feat2d">按版本 / 架构 / 变体勾选，只拉你真正需要的那几个 ISO。</p></div>
-      <div class="card reveal"><div class="ic">✅</div><h3 data-i18n="feat3">SHA256 校验</h3><p data-i18n="feat3d">下载后自动校验哈希，确保镜像完整、未被篡改。</p></div>
-      <div class="card reveal"><div class="ic">🐉</div><h3 data-i18n="feat4">多镜像源</h3><p data-i18n="feat4d">支持清华 TUNA、中科大 USTC 等多镜像源，自动刷新元数据，国内访问快、延迟低。</p></div>
-      <div class="card reveal"><div class="ic">🔧</div><h3 data-i18n="feat5">自定义镜像源</h3><p data-i18n="feat5d">支持配置自有镜像源，适配内网或特定区域加速。</p></div>
-      <div class="card reveal"><div class="ic">🛡️</div><h3 data-i18n="feat6">镜像保护</h3><p data-i18n="feat6d">防止重复拉取、保护磁盘与带宽，已存在的版本智能跳过。</p></div>
-      <div class="card reveal"><div class="ic">⭐</div><h3 data-i18n="feat7">收藏订阅</h3><p data-i18n="feat7d">收藏常用发行版，变更时同步提醒，追新不掉队。</p></div>
-      <div class="card reveal"><div class="ic">🔐</div><h3 data-i18n="feat8">单管理员</h3><p data-i18n="feat8d">内置单管理员登录，轻量鉴权，适合家庭 / 小团队自建。</p></div>
-      <div class="card reveal"><div class="ic">⏰</div><h3 data-i18n="feat9">定时任务</h3><p data-i18n="feat9d">按计划自动检查并更新元数据，无需人工值守。</p></div>
-      <div class="card reveal"><div class="ic">🌐</div><h3 data-i18n="feat10">中英文界面</h3><p data-i18n="feat10d">内置双语界面，中英切换无障碍。</p></div>
-      <div class="card reveal"><div class="ic">🗂️</div><h3 data-i18n="feat11">SMB/WebDAV 网络共享</h3><p data-i18n="feat11d">内置 Samba 与 WebDAV 容器，下载的 ISO 既可通过 SMB 在局域网共享，也可挂载为网络磁盘跨平台取用。</p></div>
-      <div class="card reveal"><div class="ic">🌱</div><h3 data-i18n="feat13">种子下载</h3><p data-i18n="feat13d">解析 DistroWatch 官方种子 RSS，交给内置 qBittorrent 下载，落盘后与直链统一识别、校验。</p></div>
+    <div class="stats" data-page-node-id="MGZBgWm5MSolACOtifbfXy">
+      <div class="stat" data-page-node-id="0aXtpRdajs8O61UIIKfdwP"><b data-page-node-id="RmgjoP7kTzXNCCm7xvKrfh">3</b><span data-i18n="stat_services" data-page-node-id="YazjdJ5iCx0qkyCYO395sM">容器化服务</span></div>
+      <div class="stat" data-page-node-id="IGfL0IZxE58B7H38U1jQ18"><b data-page-node-id="DOA9qBqK3O8koHJN5Y8T7H">12+</b><span data-i18n="stat_distros" data-page-node-id="bqHHBkbKrMsPCm7h156alo">主流发行版</span></div>
+      <div class="stat" data-page-node-id="ZB4tpKbZNEbgOOAuI7Ac57"><b data-page-node-id="NzbgtFdhHGEAGMFavX1dtf">SHA256</b><span data-i18n="stat_verify" data-page-node-id="Bm1wbAMTXZMLgWn485eCLJ">下载校验</span></div>
+      <div class="stat" data-page-node-id="caAzAluJ8DyKVRoP8C2Fvr"><b data-i18n="stat_src" data-page-node-id="MPreSNOJvG8ZWMGV5uFu99">多镜像源</b><span data-i18n="stat_src_s" data-page-node-id="EucGxhgdqJQpu9FyOb1bFe">元数据加速</span></div>
     </div>
   </div>
 </section>
 
-<section id="arch" style="background:linear-gradient(180deg,transparent,rgba(59,130,246,.05),transparent)">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <span class="eyebrow">Architecture</span>
-      <h2 data-i18n="arch_h2">四容器，一套 Docker Compose 拉起</h2>
-      <p data-i18n="arch_p">Web 服务 + SMB + WebDAV + qBittorrent，持久化数据独立挂载，健康检查内置。</p>
+<section id="features" data-page-node-id="QlSOsuo0L5HSSvnC7zoJ30">
+  <div class="wrap" data-page-node-id="pUK0t55XPbUhkxFtkEF9oM">
+    <div class="sec-head reveal" data-page-node-id="JMoBGLd157netmVgzBlWQF">
+      <span class="eyebrow" data-page-node-id="zdG6sbva6VHpwGdBosoSeH">Features</span>
+      <h2 data-i18n="feat_h2" data-page-node-id="lVLqCPK7ulOKKNEgm9lF1P">为「追 ISO」这件麻烦事而生的能力</h2>
+      <p data-i18n="feat_p" data-page-node-id="CvmpiDXU453wqzdQF7BJ87">从清单浏览到下载校验，再到局域网共享，一条龙在网页里完成。</p>
     </div>
-    <div class="arch">
-      <div class="node reveal"><div class="t">iso-hub</div><div class="sub">Flask · Python 3.12</div>
-        <ul><li data-i18n="arch1_1">Web UI / API</li><li data-i18n="arch1_2">元数据刷新</li><li data-i18n="arch1_3">下载 & 校验</li><li data-i18n="arch1_4">定时任务</li></ul></div>
-      <div class="node reveal"><div class="t">samba</div><div class="sub">SMB 共享</div>
-        <ul><li data-i18n="arch2_1">局域网文件共享</li><li data-i18n="arch2_2">独立数据卷</li><li data-i18n="arch2_3">只读 / 读写</li></ul></div>
-      <div class="node reveal"><div class="t">qbittorrent</div><div class="sub">种子下载</div>
-        <ul><li data-i18n="arch4_1">官方种子 RSS</li><li data-i18n="arch4_2">磁力 / 种子链接</li><li data-i18n="arch4_3">落盘 ./data</li></ul></div>
-      <div class="node reveal"><div class="t">webdav</div><div class="sub">WebDAV 共享</div>
-        <ul><li data-i18n="arch3_1">挂载为网盘</li><li data-i18n="arch3_2">跨平台取用</li><li data-i18n="arch3_3">Basic Auth</li></ul></div>
+    <div class="grid g3" data-page-node-id="IEvBf3Q4EEtf2uhBF4s9xc">
+      <div class="card reveal" data-page-node-id="GDy0Nm0FutyUKVgkCBe0G6"><div class="ic" data-page-node-id="UQqIpOnDegGZxeoyNQf2Ky">📋</div><h3 data-i18n="feat1" data-page-node-id="ofvjtexzviWyJFZBuGCmbm">发行版清单</h3><p data-i18n="feat1d" data-page-node-id="Y4Hnd74nCgqbhOWUAE3ydC">聚合主流 Linux 发行版及其版本、架构、镜像变体，统一浏览。</p></div>
+      <div class="card reveal" data-page-node-id="dMjSmiJJao0OS8bFCs12z7"><div class="ic" data-page-node-id="iB4AB1SYMvGcOVxxiXZSn0">⬇️</div><h3 data-i18n="feat2" data-page-node-id="1vPfHURgnGEe4XdF2Af60I">选择性下载</h3><p data-i18n="feat2d" data-page-node-id="3VVqeYLQZw1ZGSrWAqKMwG">按版本 / 架构 / 变体勾选，只拉你真正需要的那几个 ISO。</p></div>
+      <div class="card reveal" data-page-node-id="lRDM6CwCpUro1ECsAkXHF2"><div class="ic" data-page-node-id="gcD5IKuOVuT27npaGy8wfX">✅</div><h3 data-i18n="feat3" data-page-node-id="dCKVjbsztOmSXU97SoLOnp">SHA256 校验</h3><p data-i18n="feat3d" data-page-node-id="QP7t7gLJefoj94cZOuSPSR">下载后自动校验哈希，确保镜像完整、未被篡改。</p></div>
+      <div class="card reveal" data-page-node-id="3ZSdgtpJaWLc4HTD9edCAm"><div class="ic" data-page-node-id="dYs9KD3sAWgkkb7lLnP4lw">🐉</div><h3 data-i18n="feat4" data-page-node-id="IGjetN3mVHkh4lRY9SYFkL">多镜像源</h3><p data-i18n="feat4d" data-page-node-id="GEHzDjigfzM5abbADKtcqr">支持清华 TUNA、中科大 USTC 等多镜像源，自动刷新元数据，国内访问快、延迟低。</p></div>
+      <div class="card reveal" data-page-node-id="z0IoeraGrCK7qREhv4hqWk"><div class="ic" data-page-node-id="DGjLFabV0KNRsJ1QbslRSm">🔧</div><h3 data-i18n="feat5" data-page-node-id="jkqUuCxjkoR5ZpVYKPiiZ3">自定义镜像源</h3><p data-i18n="feat5d" data-page-node-id="OCi1Cu6Wgb05snS1H88cAt">支持配置自有镜像源，适配内网或特定区域加速。</p></div>
+      <div class="card reveal" data-page-node-id="JH6CgV2v6oVUPvkVMFIKw5"><div class="ic" data-page-node-id="u0EeOP6sbF1Auld5Ode4TX">🛡️</div><h3 data-i18n="feat6" data-page-node-id="d5NARe87X7UByb371JZokA">镜像保护</h3><p data-i18n="feat6d" data-page-node-id="sHE0SiSexPq9BIDKhcNYI4">防止重复拉取、保护磁盘与带宽，已存在的版本智能跳过。</p></div>
+      <div class="card reveal" data-page-node-id="HQkudS5Ju6Om4vY8q3d6H9"><div class="ic" data-page-node-id="wma4od4PYuYfqnBPYJz7Ij">⭐</div><h3 data-i18n="feat7" data-page-node-id="lZNNOQSwGcsKkiELBPuiA3">收藏订阅</h3><p data-i18n="feat7d" data-page-node-id="A0Dt1LxKyZkcnFbQSbYraA">收藏常用发行版，变更时同步提醒，追新不掉队。</p></div>
+      <div class="card reveal" data-page-node-id="HHD6u7LnhvQOmqvN3ktS82"><div class="ic" data-page-node-id="tjOOgLAF7Gt9hwLzjst3yG">🔐</div><h3 data-i18n="feat8" data-page-node-id="cmag8NUNwXAbCYNJH5Rqsq">单管理员</h3><p data-i18n="feat8d" data-page-node-id="x0NdnaNrnI6z0uHbK54GeC">内置单管理员登录，轻量鉴权，适合家庭 / 小团队自建。</p></div>
+      <div class="card reveal" data-page-node-id="LTk6XYdHD3vNWicx2qkH6r"><div class="ic" data-page-node-id="XwBuBHhdaQR2UUJEKpIa0L">⏰</div><h3 data-i18n="feat9" data-page-node-id="jxflCruQFdGvA4aQBaYYTF">定时任务</h3><p data-i18n="feat9d" data-page-node-id="plrFRpfYHWlHrGGYhJJre3">按计划自动检查并更新元数据，无需人工值守。</p></div>
+      <div class="card reveal" data-page-node-id="DfQfwMRvuB99Y1MX3R8GAL"><div class="ic" data-page-node-id="B0iwYw6uAJ18fcTbiu7fNg">🌐</div><h3 data-i18n="feat10" data-page-node-id="UkheNsyGjBUCo1ObdYfc6p">中英文界面</h3><p data-i18n="feat10d" data-page-node-id="iQSYJCZ8VvlvaiTxoJYbrF">内置双语界面，中英切换无障碍。</p></div>
+      <div class="card reveal" data-page-node-id="G2js4hA62jE2CHEwXPe6FM"><div class="ic" data-page-node-id="WFjoPEKfGLPyISGMIXMFtV">🗂️</div><h3 data-i18n="feat11" data-page-node-id="sDGISKkyZQgADuoFX05QAo">SMB/WebDAV 网络共享</h3><p data-i18n="feat11d" data-page-node-id="eA4LFk0YBliJFqLg28nsSo">内置 Samba 与 WebDAV 容器，下载的 ISO 既可通过 SMB 在局域网共享，也可挂载为网络磁盘跨平台取用。</p></div>
+      <div class="card reveal" data-page-node-id="oQrKIA42neEe0uK0rBzjDs"><div class="ic" data-page-node-id="21PKhtd85KsYL39NrabxSY">🌱</div><h3 data-i18n="feat13" data-page-node-id="URTq10xiARC6MLFrxTYsub">种子下载</h3><p data-i18n="feat13d" data-page-node-id="BYfDxBvIEVVW1yv8gFI7WH">解析 DistroWatch 官方种子 RSS，交给内置 qBittorrent 下载，落盘后与直链统一识别、校验。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="arch" style="background:linear-gradient(180deg,transparent,rgba(59,130,246,.05),transparent)" data-page-node-id="GQQUlEzYCAC1d92rs1d1N4">
+  <div class="wrap" data-page-node-id="TgMxiHpvrTUoAddBoDuzvd">
+    <div class="sec-head reveal" data-page-node-id="6zPDFgO7wXgssVIqBzNuSE">
+      <span class="eyebrow" data-page-node-id="0fZZAcgGT8YWMkBAp82D9t">Architecture</span>
+      <h2 data-i18n="arch_h2" data-page-node-id="Hnby23AVRO4E6yR1sRwk4j">四容器，一套 Docker Compose 拉起</h2>
+      <p data-i18n="arch_p" data-page-node-id="luBqP7rUYkdl0EHgOXpNT7">Web 服务 + SMB + WebDAV + qBittorrent，持久化数据独立挂载，健康检查内置。</p>
+    </div>
+    <div class="arch" data-page-node-id="TLJZEKhlnvRzKlfr9YeTGI">
+      <div class="node reveal" data-page-node-id="Yzf0JNvaQpkcNvH0XWw5Nh"><div class="t" data-page-node-id="LXguTTMHSKNwKNDSNxX2YC">iso-hub</div><div class="sub" data-page-node-id="V7bhpFuiyBaNtyy22BPDKe">Flask · Python 3.12</div>
+        <ul data-page-node-id="jKSyT2tKwlvSlGJSehBnxT"><li data-i18n="arch1_1" data-page-node-id="KUVaIXRzpr1Rul3yjRAiqu">Web UI / API</li><li data-i18n="arch1_2" data-page-node-id="6OfOXz00ivjypYC0tyBwOm">元数据刷新</li><li data-i18n="arch1_3" data-page-node-id="aG9o5agu8SAGsfNCCQQHeK">下载 & 校验</li><li data-i18n="arch1_4" data-page-node-id="DycSEAVXYoDhm8CaCnt4rb">定时任务</li></ul></div>
+      <div class="node reveal" data-page-node-id="3ZGtI0K0wSerD6NDn1JW3v"><div class="t" data-page-node-id="KKXM71hak5IiCyzdEMVxT0">samba</div><div class="sub" data-page-node-id="nx4CXKwWJQDeRLUMDzTpiy">SMB 共享</div>
+        <ul data-page-node-id="zTHFF5KQAbhQWdCXLGwGZM"><li data-i18n="arch2_1" data-page-node-id="mru97ZraBS3YdYPVvIEIyY">局域网文件共享</li><li data-i18n="arch2_2" data-page-node-id="5aJDkzh2AS6JTPwPp3K5sO">独立数据卷</li><li data-i18n="arch2_3" data-page-node-id="T5kz8mIAarQUgSpjENFEfu">只读 / 读写</li></ul></div>
+      <div class="node reveal" data-page-node-id="eGGdRxeSw6qmxkDdSsGjs5"><div class="t" data-page-node-id="FCKD8R2DCuGrkKgyyyACqo">qbittorrent</div><div class="sub" data-page-node-id="Ep6OORlt3qOASNLh24mlWd">种子下载</div>
+        <ul data-page-node-id="snKWlDtnOJCT69t7RRQg12"><li data-i18n="arch4_1" data-page-node-id="LY7dsiRbc72WIfPRxoDBQq">官方种子 RSS</li><li data-i18n="arch4_2" data-page-node-id="ecuTv1zkpJrYwE1hvK5tom">磁力 / 种子链接</li><li data-i18n="arch4_3" data-page-node-id="c58s80pRGmNueIU8I4Gc5L">落盘 ./data</li></ul></div>
+      <div class="node reveal" data-page-node-id="jmvnOa2aOgTWj4zGGaHC61"><div class="t" data-page-node-id="HLy4cmUF5tbLI10sZHJ7FD">webdav</div><div class="sub" data-page-node-id="Dye8X4RzC3XwpX5kPPSwOq">WebDAV 共享</div>
+        <ul data-page-node-id="z6M3x4DpQkQ3V2XRKNF6mH"><li data-i18n="arch3_1" data-page-node-id="E3UdGYSMQpvmNgoyMl77tG">挂载为网盘</li><li data-i18n="arch3_2" data-page-node-id="hFxhDDGYZiRPbGBizDKWM1">跨平台取用</li><li data-i18n="arch3_3" data-page-node-id="3T2F034eyilZjnJpr2O57A">Basic Auth</li></ul></div>
       
-    <div class="flow reveal" data-i18n="flow">浏览器 <b>→</b> iso-hub(Web) <b>→</b> 多镜像站 / 官方种子(元数据/ISO) <b>→</b> 落盘 <b>→</b> SMB / WebDAV 共享</div>
-    <div class="meta reveal">
-      <span class="chip" data-i18n="meta1">端口 · 可配置</span><span class="chip" data-i18n="meta2">持久化 · 挂载卷</span>
-      <span class="chip" data-i18n="meta3">健康检查 · 内置</span><span class="chip" data-i18n="meta4">镜像 · Docker Hub</span>
-      <span class="chip" data-i18n="meta5">栈 · Flask + Docker</span>
+    <div class="flow reveal" data-i18n="flow" data-page-node-id="bKqggR9L3InBGQijNrHIYp">浏览器 <b data-page-node-id="A2b71jTIkDMJb7EpN4LHbs">→</b> iso-hub(Web) <b data-page-node-id="jkLpBGXGnc0MgWnW35C12Q">→</b> 多镜像站 / 官方种子(元数据/ISO) <b data-page-node-id="kucyM0jOlFLCldAQPp6YOw">→</b> 落盘 <b data-page-node-id="IvjihrSH2w8oNiOFNM8yEF">→</b> SMB / WebDAV 共享</div>
+    <div class="meta reveal" data-page-node-id="GBA4SU4SfyfP0WBOF5ttec">
+      <span class="chip" data-i18n="meta1" data-page-node-id="7ixxuldzEwvQPAVfLgHdjl">端口 · 可配置</span><span class="chip" data-i18n="meta2" data-page-node-id="LDuWIl4nrXwNCFwjevyLbZ">持久化 · 挂载卷</span>
+      <span class="chip" data-i18n="meta3" data-page-node-id="fSPkgUMKqXYHH6h3vdLUJC">健康检查 · 内置</span><span class="chip" data-i18n="meta4" data-page-node-id="93G2sQys5cjoVqzIxRcTWX">镜像 · Docker Hub</span>
+      <span class="chip" data-i18n="meta5" data-page-node-id="XE5aA0rD7qGhbhQhHYGxcC">栈 · Flask + Docker</span>
     </div>
   </div>
 </section>
@@ -258,10 +258,10 @@
 
 
 
-<footer>
-  <div class="wrap foot">
-    <div>© <span id="yr"></span> <span data-i18n="footer_main">ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</span></div>
-    <div>基于 <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" style="color:var(--cyan)">DC1024/iso-hub</a> · <a href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" style="color:var(--cyan)">Wiki</a> · Flask + Docker</div>
+<footer data-page-node-id="uogDBOMEHs6RLVluOy6TPj">
+  <div class="wrap foot" data-page-node-id="4nRALv9xkcaAuK260rDyqR">
+    <div data-page-node-id="Iicd2sVqPJ2EXbX3T9gCyT">© <span id="yr" data-page-node-id="Iz10NElATktp6KG4rZK0H0"></span> <span data-i18n="footer_main" data-page-node-id="pPqvSosjazope2g4UpOKgd">ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</span></div>
+    <div data-page-node-id="bjX0ERHLap0cPMhNsq3Ear">基于 <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" style="color:var(--cyan)" data-page-node-id="pubQSExNBjbbzPuxHIS3cs">DC1024/iso-hub</a> · <a href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" style="color:var(--cyan)" data-page-node-id="9YLUdEC5LlIj7p3Jaw2sOk">Wiki</a> · Flask + Docker</div>
   </div>
 </footer>
 
