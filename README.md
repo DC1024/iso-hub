@@ -172,8 +172,13 @@ docker compose up -d
 - 仓库地址：https://hub.docker.com/r/dcchendockeruser/iso-hub
 - 构建 workflow：`.github/workflows/docker-push.yml`，每次 push 到 `master` 自动重建并推送 `latest` 标签。
 - iso-hub 主镜像为**单容器**，上面的 samba / webdav 是**独立 sidecar 容器**，与本项目的源码构建版一致。
+- 仓库内附 `docker-compose.dockerhub.yml`（含 SMB/WebDAV/种子下载四个容器的完整版），可直接 `docker compose -f docker-compose.dockerhub.yml up -d`。**2026-09-08 起腾讯云线上部署即用此文件。**
 
 ### 1.2 阿里云 ACR 源部署方式（国内推荐）
+
+> **⚠️ 2026-09-08 更新：** 阿里云 ACR 仓库 `dcchen/isohub` 已被删除，本方式当前**不可用**（`docker pull` 会报 `not found`）。
+> **当前推荐改用 [1.1 Docker Hub 源部署](#11-docker-hub-源部署方式)**，或使用仓库内新增的 `docker-compose.dockerhub.yml`（已把腾讯云线上部署切换为从 Docker Hub 拉取）。
+> 待 ACR 仓库重建并重新推送镜像后，本方式可恢复。
 
 国内服务器从 Docker Hub 拉取经常超时或失败，因此镜像同时推送到 **阿里云容器镜像服务（华东1·杭州）**。
 该仓库已设为**公开**，**无需 `docker login`** 即可直接拉取，国内速度明显更快。
