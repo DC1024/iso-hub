@@ -1,0 +1,144 @@
+{
+  "distributions": [
+    {
+      "distribution": "Arch",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.01.01/archlinux-2026.01.01-x86_64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.01.01/sha256sums.txt",
+      "checksum": ""
+    },
+    {
+      "distribution": "Arch",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.02.01/archlinux-2026.02.01-x86_64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.02.01/sha256sums.txt",
+      "checksum": ""
+    },
+    {
+      "distribution": "Arch",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.03.01/archlinux-2026.03.01-x86_64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.03.01/sha256sums.txt",
+      "checksum": ""
+    },
+    {
+      "distribution": "CentOS",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/centos-vault/7.9.2009/isos/x86_64/CentOS-7-x86_64-Everything-2009.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/centos-vault/7.9.2009/isos/x86_64/sha256sum.txt",
+      "checksum": ""
+    },
+    {
+      "distribution": "Deepin",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/deepin-cd/23.1/amd64/deepin-desktop-community-23.1-amd64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/deepin-cd/23.1/amd64/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Deepin",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/deepin-cd/25.0.1/amd64/deepin-desktop-community-25.0.1-amd64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/deepin-cd/25.0.1/amd64/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Deepin",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/deepin-cd/25.0.10/amd64/deepin-desktop-community-25.0.10-amd64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/deepin-cd/25.0.10/amd64/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Fedora",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Everything/x86_64/iso/Fedora-Everything-netinst-x86_64-42-1.1.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Everything/x86_64/iso/Fedora-Everything-42-1.1-x86_64-CHECKSUM",
+      "checksum": ""
+    },
+    {
+      "distribution": "Fedora",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Workstation/x86_64/iso/Fedora-Workstation-Live-42-1.1.x86_64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Workstation/x86_64/iso/Fedora-Workstation-42-1.1-x86_64-CHECKSUM",
+      "checksum": ""
+    },
+    {
+      "distribution": "Fedora",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Everything/x86_64/iso/Fedora-Everything-netinst-x86_64-43-1.6.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Everything/x86_64/iso/Fedora-Everything-43-1.6-x86_64-CHECKSUM",
+      "checksum": ""
+    },
+    {
+      "distribution": "Fedora",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Workstation/x86_64/iso/Fedora-Workstation-Live-43-1.6.x86_64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Workstation/x86_64/iso/Fedora-Workstation-43-1.6-x86_64-CHECKSUM",
+      "checksum": ""
+    },
+    {
+      "distribution": "Proxmox",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/proxmox-ve_8.4-1.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Proxmox",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/proxmox-ve_9.0-1.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Proxmox",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/proxmox-ve_9.1-1.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Ubuntu",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/ubuntu-24.04.4-desktop-amd64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Ubuntu",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/ubuntu-24.04.4-live-server-amd64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Ubuntu",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/ubuntu-25.10-desktop-amd64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Ubuntu",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/ubuntu-25.10-live-server-amd64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Ubuntu",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/ubuntu-26.04-desktop-amd64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS",
+      "checksum": ""
+    },
+    {
+      "distribution": "Ubuntu",
+      "type": "linux",
+      "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/ubuntu-26.04-live-server-amd64.iso",
+      "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS",
+      "checksum": ""
+    }
+  ]
+}
