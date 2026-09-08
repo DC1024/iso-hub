@@ -18,7 +18,7 @@
 
 services:
   iso-hub:
-    image: registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:1.1.2
+    image: registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:1.1.3
     container_name: iso-hub
     restart: unless-stopped
     ports:
@@ -42,6 +42,10 @@ services:
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
       # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
       - ISO_HUB_REQUIRE_LOGIN=${ISO_HUB_REQUIRE_LOGIN:-1}
+      # 管理员账号播种: 首次启动时用这两个变量自动创建管理员
+      # 不设置的话, 公网访问登录会报"管理员账号未设置"(防抢注), 只能从服务器本机建号
+      - ISO_HUB_ADMIN_USER=${ISO_HUB_ADMIN_USER:-}
+      - ISO_HUB_ADMIN_PASS=${ISO_HUB_ADMIN_PASS:-}
       # 订阅自动同步间隔(秒),默认 86400=每天;设 0 关闭自动调度,仅手动/定时调用
       - ISO_HUB_SYNC_INTERVAL=${ISO_HUB_SYNC_INTERVAL:-86400}
       - ISO_HUB_SOURCE_STRATEGY=${ISO_HUB_SOURCE_STRATEGY:-A}

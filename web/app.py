@@ -606,14 +606,19 @@ def _docker_request(method, path, body, timeout):
 
 
 def share_container_state(name: str) -> str | None:
-    """返回 sidecar 容器运行状态: running/created/exited/None。"""
+    """返回 sidecar 容器运行状态: running/created/exited/None。失败时记录日志。"""
     try:
         r = _docker_request("GET", f"/containers/{name}/json", None, 15)
         if r.status != 200:
+            log(f"[docker] 查询容器 {name} 状态失败: HTTP {r.status}, body={r.text[:500]!r}")
             return None
-        st = json.loads(r.text).get("State", {}).get("Status")
+        payload = json.loads(r.text)
+        st = payload.get("State", {}).get("Status")
+        if not st:
+            log(f"[docker] 容器 {name} 返回异常结构: State={payload.get('State')!r}")
         return st or None
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        log(f"[docker] 查询容器 {name} 异常: {e!r}")
         return None
 
 
@@ -1642,6 +1647,11 @@ def api_qb_settings_post():
     if "password" in body:
         qb["password"] = str(body["password"]).strip()
         changed = True
+
+    # 启用或保持启用时，必须提供非空凭据
+    will_be_enabled = bool(body["enabled"]) if "enabled" in body else qb.get("enabled", False)
+    if will_be_enabled and (not qb.get("username") or not qb.get("password")):
+        return jsonify({"error": "启用 qBittorrent 必须提供非空用户名和密码"}), 400
 
     enabled_changed = False
     if "enabled" in body:

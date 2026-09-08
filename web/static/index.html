@@ -569,8 +569,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.1.2';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
-const VERSION_TAG='1.1.2';
+const APP_VERSION='1.1.3';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
+const VERSION_TAG='1.1.3';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -769,6 +769,7 @@ const I18N={
   'qbDisabledTitle':{zh:'🧲 qBittorrent 未启用',en:'🧲 qBittorrent Disabled'},
   'qbDisabledDesc':{zh:'请先在「设置」中启用 qBittorrent 并设置 WebUI 账号密码。',en:'Please enable qBittorrent and set WebUI credentials in Settings first.'},
   'qbSaved':{zh:'qBittorrent 设置已保存',en:'qBittorrent settings saved'},
+  'qbNeedCred':{zh:'启用 qBittorrent 前请填写用户名和密码',en:'Please enter username and password before enabling qBittorrent'},
   'clickTitle':{zh:'在该处点击或长按切换语言',en:'Click to switch language'},
   'adminLogin':{zh:'管理员登录',en:'Admin Login'},
   'loginTitle':{zh:'请输入管理员账号与密码以继续访问',en:'Enter admin credentials to continue'},
@@ -1718,7 +1719,12 @@ async function loadQbSettings(){
   paintQbOverlay(!!cfg.enabled);
 }
 async function saveQbEnabled(enabled){
-  const r=await jpost('/api/qb/settings',{enabled:enabled,username:$('#u-qb').value.trim(),password:$('#p-qb').value.trim()});
+  const username=$('#u-qb').value.trim();
+  const password=$('#p-qb').value.trim();
+  if(enabled && (!username || !password)){
+    return toast(t('qbNeedCred')||'启用 qBittorrent 前请填写用户名和密码','err');
+  }
+  const r=await jpost('/api/qb/settings',{enabled:enabled,username:username,password:password});
   if(r.s===401)return toast(t('pleaseLogin'),'err');
   if(r.s!==200)return toast(r.j&&r.j.error||t('shareErr'),'err');
   toast((enabled?t('enabledMsg'):t('disabledMsg'))+' qBittorrent '+t('savedShare'));

@@ -35,7 +35,7 @@
 ```text
 docker compose up -d --build
   → 打开 http://<IP>:8899
-  → 首次登录（设置管理员密码）
+  → 首次登录（公网先在 .env 播种 ISO_HUB_ADMIN_USER/PASS 建管理员，否则需 SSH 隧道从本机建号）
   → 点右上角「抓取最新版本元数据」
   → 勾选要下载的发行版/版本
   → 点「下载」，看实时进度

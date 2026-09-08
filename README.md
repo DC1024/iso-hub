@@ -28,7 +28,7 @@
 | ⚙️ 设置菜单 | 统一面板：用户登录、语言切换、网络共享、定时任务、受保护列表 |
 | 🔍 筛选 + 收藏 | 镜像列表按 全部/已下载/未下载/已收藏 筛选；每行可 ★ 收藏 |
 | 🔒 镜像保护 | 每行可锁定，受保护文件在过期清理/订阅同步时不会被删除 |
-| 👤 用户登录 | 单管理员账号（PBKDF2-SHA256 加密 + 会话），首次登录自动创建管理员 |
+| 👤 用户登录 | 单管理员账号（PBKDF2-SHA256 加密 + 会话），首次登录创建管理员（公网部署建议先用 `ISO_HUB_ADMIN_USER`/`ISO_HUB_ADMIN_PASS` 播种） |
 | ⏰ 定时任务 | 网页自建调度（每天/每周/每月/每年/一次性），定时自动触发订阅同步 |
 | 🖼 Logo | 内嵌 Syncbox Logo（base64 data URI，零外部资源） |
 
@@ -301,7 +301,10 @@ docker compose up -d         # 启动
 ```
 
 打开 `http://<服务器IP>:8899` 即可使用。**首次登录后建议先点右上角「抓取最新版本元数据」**。
+
 SMB 共享地址 `smb://<服务器IP>:1445/iso`，WebDAV `http://<服务器IP>:8081/dav`（账号 `iso` / 密码 `iso123`）。
+
+> 管理员账号：公网部署请先在 compose 同目录 `.env` 设置 `ISO_HUB_ADMIN_USER` / `ISO_HUB_ADMIN_PASS` 再 `docker compose up -d` 播种管理员；不设的话登录页会报「管理员账号未设置」（防抢注，仅允许从服务器本机首次登录建号，或用 `ssh -L 8899:127.0.0.1:8899 <user>@<服务器IP>` 隧道建号）。账号建好后改 `.env` 重启不会改密码，改密走面板「设置→修改密码」。
 
 > 非 root 用户且不在 docker 组时，命令前加 `sudo`。
 
@@ -349,6 +352,8 @@ docker compose up -d --build
 打开 `http://<服务器IP>:8899` 即可使用。**首次登录后建议先点右上角「抓取最新版本元数据」**，
 将内置样例清单刷新为当前镜像站上的最新版本列表。
 
+> 公网部署请先播种管理员（`.env` 里设 `ISO_HUB_ADMIN_USER` / `ISO_HUB_ADMIN_PASS`），否则登录页会报「管理员账号未设置」。
+
 #### 常用命令
 
 ```bash
@@ -365,6 +370,8 @@ docker exec iso-hub python /app/iso_download/update_distributions.py --output /d
 | 数据卷 | `./data:/data` | ISO 全部落盘于此：`data/linux/<发行版>/<版本>.iso`，另有 `distributions.json`/`custom_sources.json`/`subscriptions.json` 元数据 |
 | `ISO_HUB_TOKEN` | 空 | 设置后所有写操作需网页弹窗输入令牌，建议公网/多设备环境开启 |
 | `ISO_HUB_REQUIRE_LOGIN` | `1` | 强制登录门禁：1=必须登录管理员账号才能使用(默认)，0=关闭门禁直接可用 |
+| `ISO_HUB_ADMIN_USER` | 空 | 管理员账号播种：用户表为空时自动创建该账号（需同时设 PASS）；公网部署必设 |
+| `ISO_HUB_ADMIN_PASS` | 空 | 播种账号的初始密码；同名账号已存在时不覆盖，改密走面板「设置→修改密码」 |
 | `ISO_HUB_SYNC_INTERVAL` | `86400` | 订阅自动同步间隔(秒)；0=关闭内置调度器 |
 | `SAMBA_PORT` | `1445` | SMB 共享 445 端口在宿主机映射的端口（Z4Pro 原生 Samba 占 445 故用高位；未占用的机器可改回 445） |
 | `SAMBA_USER`/`SAMBA_PASS` | `iso`/`iso123` | SMB 共享账号/密码 |
