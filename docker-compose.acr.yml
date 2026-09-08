@@ -18,7 +18,7 @@
 
 services:
   iso-hub:
-    image: registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:1.1.4
+    image: registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:1.1.5
     container_name: iso-hub
     restart: unless-stopped
     ports:

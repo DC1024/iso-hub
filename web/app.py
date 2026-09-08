@@ -844,12 +844,12 @@ def _yaml_quote(value: str) -> str:
 
 
 def _ensure_webdav_conf(username: str, password: str) -> bool:
-    """webdav.yml 不存在时按内置模板生成一份; 已存在则原样保留。
+    """webdav.yml 不存在或为空文件时按内置模板生成一份; 已存在且非空则原样保留。
 
-    返回 True 表示文件此刻可用(已存在或刚刚生成成功)。
+    返回 True 表示文件此刻可用(已存在/非空或刚刚生成成功)。
     """
     cfg_path = _webdav_conf_path()
-    if cfg_path.exists():
+    if cfg_path.exists() and cfg_path.stat().st_size > 0:
         return True
     if not username or not password:
         log("[共享] webdav 配置缺失且无可用凭据, 跳过自动生成")
@@ -888,9 +888,10 @@ def _apply_webdav_creds(username: str, password: str) -> bool:
         return False
     try:
         cfg_path = _webdav_conf_path()
-        # 首次部署时 ./webdav-config 可能是空目录: 先兜底生成, 再走改写逻辑
-        if not cfg_path.exists() and not _ensure_webdav_conf(username, password):
-            log(f"[共享] webdav 配置文件缺失且无法生成: {cfg_path}")
+        # 首次部署时 ./webdav-config 可能是空目录, 或 webdav.yml 被截断成 0 字节:
+        # 先兜底生成/覆盖空文件, 再走改写逻辑
+        if (not cfg_path.exists() or cfg_path.stat().st_size == 0) and not _ensure_webdav_conf(username, password):
+            log(f"[共享] webdav 配置文件缺失/为空且无法生成: {cfg_path}")
             return False
 
         lines = cfg_path.read_text(encoding="utf-8").splitlines()
