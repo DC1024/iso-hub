@@ -812,6 +812,74 @@ def _webdav_conf_path() -> Path:
     return Path(os.environ.get("WEBDAV_CONF") or str(DATA_DIR / "webdav.yml"))
 
 
+# webdav.yml 初始模板。
+# 仓库根目录的 webdav.yml 只是一份示例, 部署时并不会自动落到宿主机的 ./webdav-config/,
+# 而 compose 里 webdav 容器以 `-c /config/webdav.yml` 启动 —— 目录为空时容器读不到配置,
+# 会立刻退出并被重启策略反复拉起。这里在配置文件缺失时按模板兜底生成, 保证 sidecar 始终可读。
+_WEBDAV_CONF_TEMPLATE = """# WebDAV 配置 (hacdias/webdav) —— 由 iso-hub 自动生成, 可手动编辑
+address: 0.0.0.0
+port: 6065
+prefix: /dav
+directory: /data
+permissions: R            # 只读 (R); 想可写改成 CRUD
+users:
+  - username: {username}
+    password: {password}
+    permissions: R        # 只读, 覆盖全局默认(可写则删这行)
+log:
+  format: console
+  outputs:
+    - stderr
+"""
+
+
+def _yaml_quote(value: str) -> str:
+    """把值包装成 YAML 安全的双引号标量; 含特殊字符时强制加引号。"""
+    # 双引号标量内转义双引号和反斜杠
+    inner = value.replace("\\", "\\\\").replace('"', '\\"')
+    # 若含 YAML 特殊字符或首尾空白则加引号
+    if not inner or inner != inner.strip() or any(ch in inner for ch in ":#{}[]|>&*%@,!'`\""):
+        return f'"{inner}"'
+    return inner
+
+
+def _ensure_webdav_conf(username: str, password: str) -> bool:
+    """webdav.yml 不存在时按内置模板生成一份; 已存在则原样保留。
+
+    返回 True 表示文件此刻可用(已存在或刚刚生成成功)。
+    """
+    cfg_path = _webdav_conf_path()
+    if cfg_path.exists():
+        return True
+    if not username or not password:
+        log("[共享] webdav 配置缺失且无可用凭据, 跳过自动生成")
+        return False
+    try:
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(
+            _WEBDAV_CONF_TEMPLATE.format(username=_yaml_quote(username), password=_yaml_quote(password)),
+            encoding="utf-8",
+        )
+        log(f"[共享] 已自动生成 webdav 配置文件: {cfg_path}")
+        return True
+    except Exception as e:  # noqa: BLE001
+        log(f"[共享] 自动生成 webdav 配置文件失败: {e!r}")
+        return False
+
+
+def _bootstrap_webdav_conf() -> None:
+    """启动时兜底: 若 webdav.yml 不存在, 按 settings.json 中的凭据生成一份。
+
+    这样即使用户从未在面板里改过共享密码, 全新部署的 webdav sidecar 也有可读配置,
+    不会因为 `-c /config/webdav.yml` 找不到文件而崩溃重启。
+    """
+    try:
+        wd = load_shares().get("webdav", {})
+        _ensure_webdav_conf(wd.get("username", ""), wd.get("password", ""))
+    except Exception as e:  # noqa: BLE001
+        log(f"[共享] 启动时生成 webdav 配置异常: {e!r}")
+
+
 def _apply_webdav_creds(username: str, password: str) -> bool:
     """webdav 凭据在挂载的 webdav.yml 里, 改写文件 + 重启容器即生效, 无需重建。"""
     # 凭据中不能含换行/回车, 否则既破坏 YAML 也允许注入新键
@@ -820,18 +888,10 @@ def _apply_webdav_creds(username: str, password: str) -> bool:
         return False
     try:
         cfg_path = _webdav_conf_path()
-        if not cfg_path.exists():
-            log(f"[共享] webdav 配置文件缺失: {cfg_path}")
+        # 首次部署时 ./webdav-config 可能是空目录: 先兜底生成, 再走改写逻辑
+        if not cfg_path.exists() and not _ensure_webdav_conf(username, password):
+            log(f"[共享] webdav 配置文件缺失且无法生成: {cfg_path}")
             return False
-
-        def _yaml_quote(value: str) -> str:
-            """把值包装成 YAML 安全的双引号标量; 含特殊字符时强制加引号。"""
-            # 双引号标量内转义双引号和反斜杠
-            inner = value.replace("\\", "\\\\").replace('"', '\\"')
-            # 若含 YAML 特殊字符或首尾空白则加引号
-            if not inner or inner != inner.strip() or any(ch in inner for ch in ":#{}[]|>&*%@,!'`\""):
-                return f'"{inner}"'
-            return inner
 
         lines = cfg_path.read_text(encoding="utf-8").splitlines()
         new_lines = []
@@ -1909,6 +1969,7 @@ if __name__ == "__main__":
     seed_admin()  # 若设置 ISO_HUB_ADMIN_USER/PASS 则播种管理员
     _sync_disabled_shares()  # 默认禁用的 sidecar 若被 compose 拉起, 启动后立即停止
     _sync_disabled_qb()  # 默认禁用的 qBittorrent 若被 compose 拉起, 启动后立即停止
+    _bootstrap_webdav_conf()  # 首次部署时 ./webdav-config 为空, 按当前设置生成 webdav.yml
     schedule_auto_sync()  # 订阅自动同步调度器(默认每天; ISO_HUB_SYNC_INTERVAL 可改秒数)
     if os.environ.get("ISO_HUB_DEV"):
         # 即使开发模式也不开启 debug, 避免 Werkzeug 调试器暴露任意代码执行

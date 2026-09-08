@@ -569,8 +569,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.1.3';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
-const VERSION_TAG='1.1.3';
+const APP_VERSION='1.1.4';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
+const VERSION_TAG='1.1.4';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -1709,14 +1709,14 @@ async function saveShareCred2(proto){
 /* ---------- qBittorrent ---------- */
 async function loadQbSettings(){
   const r=await jget('/api/qb/settings');
-  const cfg=(r.j&&r.j.qb)||{};
+  const cfg=(r&&r.qb)||{};
   const sw=$('#sw-qb'); if(sw)sw.checked=!!cfg.enabled;
+  paintQbOverlay(!!cfg.enabled);
   const uin=$('#u-qb'); if(uin)uin.value=cfg.username||'';
   const pin=$('#p-qb'); if(pin)pin.value=cfg.password||'';
   const st=$('#st-qb');
   const key=cfg.container||'none';
   if(st){st.textContent=(CONTAINER_OK[key]||(()=>key))();st.className='sstat '+(cfg.enabled&&cfg.container==='running'?'':'muted');}
-  paintQbOverlay(!!cfg.enabled);
 }
 async function saveQbEnabled(enabled){
   const username=$('#u-qb').value.trim();
@@ -1731,10 +1731,17 @@ async function saveQbEnabled(enabled){
   loadQbSettings();
 }
 async function saveQbCred(){
-  const r=await jpost('/api/qb/settings',{username:$('#u-qb').value.trim(),password:$('#p-qb').value.trim()});
+  const username=$('#u-qb').value.trim();
+  const password=$('#p-qb').value.trim();
+  const r=await jpost('/api/qb/settings',{username:username,password:password});
   if(r.s===401)return toast(t('pleaseLogin'),'err');
   if(r.s!==200)return toast(r.j&&r.j.error||t('saveFailed'),'err');
   toast(t('qbSaved'));
+  if(r.j&&r.j.qb){
+    const uin=$('#u-qb'), pin=$('#p-qb');
+    if(uin)uin.value=r.j.qb.username||username;
+    if(pin)pin.value=r.j.qb.password||password;
+  }
   loadQbSettings();
 }
 function paintQbOverlay(enabled){
@@ -1744,7 +1751,7 @@ function paintQbOverlay(enabled){
 }
 async function checkQbEnabled(){
   const r=await jget('/api/qb/settings');
-  const cfg=(r.j&&r.j.qb)||{};
+  const cfg=(r&&r.qb)||{};
   const enabled=!!cfg.enabled;
   paintQbOverlay(enabled);
   if(enabled){
