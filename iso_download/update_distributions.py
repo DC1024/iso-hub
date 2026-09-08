@@ -64,8 +64,10 @@ def load_config(path: Path) -> List[Dict]:
     return sources
 
 
-def fetch_text(url: str) -> str:
-    response = requests.get(url, headers=DEFAULT_HEADERS, timeout=30)
+def fetch_text(url: str, timeout: Optional[float] = None) -> str:
+    if timeout is None:
+        timeout = 30  # 默认 30s, 与旧行为一致
+    response = requests.get(url, headers=DEFAULT_HEADERS, timeout=timeout)
     response.raise_for_status()
     return response.text
 
@@ -158,7 +160,7 @@ def get_primary_match(match: re.Match) -> Tuple[str, Dict[str, str]]:
 def build_from_dated_directory(source: Dict) -> List[Dict]:
     listing_url: str = source["listing_url"]
     version_regex: str = source["version_regex"]
-    html = fetch_text(listing_url)
+    html = fetch_text(listing_url, timeout=source.get("timeout", 30))
     pattern = re.compile(version_regex)
     matches = pattern.finditer(html)
     values: List[str] = []
@@ -210,7 +212,7 @@ def build_from_dated_directory(source: Dict) -> List[Dict]:
 def build_from_flat_listing(source: Dict) -> List[Dict]:
     listing_url: str = source["listing_url"]
     artifact_regex: str = source["artifact_regex"]
-    html = fetch_text(listing_url)
+    html = fetch_text(listing_url, timeout=source.get("timeout", 30))
     pattern = re.compile(artifact_regex)
     matches = []
     for match in pattern.finditer(html):
@@ -281,7 +283,7 @@ def build_from_versioned_flat_listing(source: Dict) -> List[Dict]:
     base_listing: str = source["listing_url"]
     version_regex: str = source["version_regex"]
     sub_listing_template: str = source["sub_listing_template"]
-    html = fetch_text(base_listing)
+    html = fetch_text(base_listing, timeout=source.get("timeout", 30))
     pattern = re.compile(version_regex)
     matches = pattern.finditer(html)
     versions: List[str] = []
@@ -301,7 +303,7 @@ def build_from_versioned_flat_listing(source: Dict) -> List[Dict]:
         context = {"version": version, "listing_url": base_listing}
         sub_listing_url = format_template(sub_listing_template, context)
         try:
-            artifact_html = fetch_text(sub_listing_url)
+            artifact_html = fetch_text(sub_listing_url, timeout=source.get("timeout", 30))
             artifact_matches = []
             for match in artifact_pattern.finditer(artifact_html):
                 primary, groups = get_primary_match(match)

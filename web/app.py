@@ -221,7 +221,11 @@ def expand_custom_repo(item: dict, timeout: int = 40) -> list:
             return []
         sys.path.insert(0, str(_custom_repo_dir()))
         from update_distributions import build_entries  # noqa: PLC0415
-        entries = build_entries(dict(item))
+        # B6 修复: 把 timeout 注入 item, 使其真正传给底层 fetch_text 的 HTTP 请求
+        #   (此前 build_entries(dict(item)) 不含 timeout, 底层请求恒用 30s 默认, 该参数形同虚设)
+        item = dict(item)
+        item["timeout"] = timeout
+        entries = build_entries(item)
         # 展开后的条目可能缺 distribution/type,补上
         for e in entries:
             e.setdefault("distribution", item.get("distribution", "?"))
