@@ -14,9 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import shutil
-import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -49,6 +46,7 @@ def qb_config() -> Dict[str, str]:
     env_defaults = {
         "QB_URL": "http://qbittorrent:8080",
         "QB_USER": "admin",
+        # nosec B105: 这是 qBittorrent 官方默认密码, 仅作为兜底; 部署时必须通过 QB_PASS 环境变量修改。
         "QB_PASS": "adminadmin",
     }
     merged = {k: cfg.get(k.lower()) or os.environ.get(k) or env_defaults[k] for k in env_defaults}
@@ -71,9 +69,9 @@ class QBClient:
         # (qBittorrent 的 session cookie 名是 QBT_SID_<端口>, 手工拼 Cookie 头不可靠)
         self._sess = requests.Session() if requests is not None else None
         self._jar = _cj.CookieJar() if _cj is not None else None
-        # L12 修复: 默认开启 TLS 校验(避免 MITM); 仅当显式设置 QB_INSECURE=1 时才关闭。
+        # 默认开启 TLS 校验(避免 MITM); 仅当显式设置 QB_INSECURE=1 时才关闭。
         # 内网 http 无 TLS, 不受影响。
-        self._verify = os.environ.get("QB_INSECURE", "").strip().lower() in ("1", "true", "yes", "on")
+        self._verify = not (os.environ.get("QB_INSECURE", "").strip().lower() in ("1", "true", "yes", "on"))
         self._opener = (urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self._jar)) if self._jar is not None else None)
 

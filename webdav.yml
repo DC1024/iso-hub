@@ -3,7 +3,7 @@
 # 主容器在网页改密码后重写此文件并 restart webdav 容器即生效。
 # 注: 早期版本用单文件 bind (./data/webdav.yml:/config.yml), 在部分内核/Docker 组合上
 #     runc 会报 "not a directory", 故改为目录挂载。
-# 注意: 凭据明文存放, 仅内网使用
+# ⚠️ 安全提示: 凭据明文存放, 且默认密码 iso123 仅供体验。生产环境请在 .env 中修改并部署到可信内网。
 address: 0.0.0.0
 port: 6065
 prefix: /dav

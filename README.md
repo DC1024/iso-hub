@@ -103,12 +103,13 @@ services:
       start_period: 15s
 
   # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
-  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso   (账号 iso / 密码 iso123)
+  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso
+  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
   # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
   samba:
     image: dperson/samba:latest
     container_name: iso-hub-samba
-    restart: unless-stopped
+    restart: no
     ports:
       - "${SAMBA_PORT:-1445}:445"
       - "${SAMBA_NETBIOS:-1137}:137/udp"
@@ -125,11 +126,12 @@ services:
       -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
       -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
 
-  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav   (账号 iso / 密码 iso123)
+  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav
+  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
   webdav:
     image: hacdias/webdav:latest
     container_name: iso-hub-webdav
-    restart: unless-stopped
+    restart: no
     ports:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
@@ -142,7 +144,8 @@ services:
   # ---------- 种子下载 sidecar: qBittorrent (BitTorrent 下载) ----------
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
   # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
-  # WebUI: http://<服务器IP>:8090  (默认 admin/adminadmin, 首次登录务必改)
+  # WebUI: http://<服务器IP>:8090
+  # 默认禁用: 请在 iso-hub 面板「设置→qBittorrent」中手动启用并设置 WebUI 账号密码
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: iso-hub-qbittorrent
@@ -228,12 +231,13 @@ services:
       start_period: 15s
 
   # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
-  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso   (账号 iso / 密码 iso123)
+  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso
+  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
   # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
   samba:
     image: dperson/samba:latest
     container_name: iso-hub-samba
-    restart: unless-stopped
+    restart: no
     ports:
       - "${SAMBA_PORT:-1445}:445"
       - "${SAMBA_NETBIOS:-1137}:137/udp"
@@ -250,11 +254,12 @@ services:
       -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
       -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
 
-  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav   (账号 iso / 密码 iso123)
+  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav
+  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
   webdav:
     image: hacdias/webdav:latest
     container_name: iso-hub-webdav
-    restart: unless-stopped
+    restart: no
     ports:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
@@ -267,7 +272,8 @@ services:
   # ---------- 种子下载 sidecar: qBittorrent (BitTorrent 下载) ----------
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
   # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
-  # WebUI: http://<服务器IP>:8090  (默认 admin/adminadmin, 首次登录务必改)
+  # WebUI: http://<服务器IP>:8090
+  # 默认禁用: 请在 iso-hub 面板「设置→qBittorrent」中手动启用并设置 WebUI 账号密码
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: iso-hub-qbittorrent
@@ -367,7 +373,7 @@ docker exec iso-hub python /app/iso_download/update_distributions.py --output /d
 | `SAMBA_139` | `1139` | NetBIOS 139/tcp 宿主端口 |
 | `WEBDAV_PORT`/`WEBDAV_USER`/`WEBDAV_PASS` | `8081`/`iso`/`iso123` | WebDAV 共享端口与凭据 |
 | `QB_PORT` | `8090` | qBittorrent WebUI 宿主端口 |
-| `QB_URL`/`QB_USER`/`QB_PASS` | `http://qbittorrent:8080`/`admin`/`adminadmin` | iso-hub 连 qBittorrent 的地址/账号/密码（默认走 compose 内网；改 QB_PASS 后须与 qBittorrent 实际密码一致） |
+| `QB_URL`/`QB_USER`/`QB_PASS` | `http://qbittorrent:8080`/`admin`/`adminadmin` | qBittorrent 默认禁用；这些值仅作首次启用前的兜底，启用后请在面板中设置账号密码（改 QB_PASS 后须与 qBittorrent 实际密码一致） |
 | `TZ` | `Asia/Shanghai` | 时区 |
 
 > 内置**用户登录**（设置面板可设/改管理员密码）。若暴露到公网建议同时配置 `ISO_HUB_TOKEN` 或置于反代（Caddy/Nginx Basic Auth）之后。
@@ -421,13 +427,13 @@ samba / webdav 的完整定义已包含在 [方式 1 的 compose 示例](#1-使�
   2. **手动粘贴**：粘贴任意磁力链接（`magnet:?xt=...`）或 `.torrent` 文件 URL 到输入框，可手动指定发行版名（决定落盘目录）。
   3. **自加 RSS 源**：可添加任意 RSS/Atom 种子源 URL，解析其中的种子条目供选择下载。
 - **落盘目录**：iso-hub 会尽量从种子文件名推断发行版，保存到 `/data/<type>/<发行版>/`；推断不出则存 `/data/_torrents/`。两个目录都会被 `disk_inventory()` 扫描，前端「已下载」标记、过期清理、订阅同步、删除操作对**种子下载与直链下载一视同仁**。
-- **侧容器**：compose 会额外启动 `qbittorrent`（`lscr.io/linuxserver/qbittorrent`），挂载 `./data`（下载目录）、`./qb-config`（配置）、`./qb-downloads`（默认下载目录）。iso-hub 通过内网 `http://qbittorrent:8080` 调用其 Web API 发起下载/查询/删除。WebUI 地址 `http://<服务器IP>:8090`。
-- **⚠️ 首次使用需设置 WebUI 密码**：qBittorrent 4.6+/5.x **不再使用默认 `adminadmin`**，首次启动会随机生成临时密码（只在容器日志里出现一次），导致 iso-hub 连不上。用仓库附带的助手脚本设置一个固定密码：
+- **侧容器**：compose 会定义 `qbittorrent`（`lscr.io/linuxserver/qbittorrent`）服务并拉取镜像，但 **默认不自动启动**，与 samba/webdav 一样需要手动启用。它挂载 `./data`（下载目录）、`./qb-config`（配置）、`./qb-downloads`（默认下载目录）。启用后 iso-hub 通过内网 `http://qbittorrent:8080` 调用其 Web API 发起下载/查询/删除。WebUI 地址 `http://<服务器IP>:8090`。
+- **⚠️ 首次使用需手动启用并设置 WebUI 密码**：进入 iso-hub Web 面板 →「设置」→「qBittorrent 设置」，打开「启用 qBittorrent」，设置用户名/密码后保存。主容器会自动把 PBKDF2 哈希写进 `./qb-config/qBittorrent/qBittorrent.conf` 并重启 sidecar，使固定密码生效。设置一次即可持久生效。
+- 若无法使用 Web 面板（如远程服务器无浏览器），也可用仓库附带的助手脚本设置密码：
   ```bash
   python3 scripts/qb_set_password.py --host <服务器IP> --user ubuntu --pw <SSH密码> --qbpass 你的密码
   # 然后把 .env 的 QB_PASS 改成同一个密码, 再 docker compose up -d
   ```
-  该脚本会停掉 qb 容器 → 把 PBKDF2 哈希写进 `./qb-config/qBittorrent/qBittorrent.conf` → 重启。设置一次即可持久生效。
 - 支持在 qBittorrent WebUI 里自行管理种子；iso-hub 网页只负责「发起/查看/删除」，实时进度与传输速率也会回显到 iso-hub 的种子页。
 
 > 说明：`qbittorrent` 镜像来自 Docker Hub（`lscr.io/linuxserver/qbittorrent`），国内拉取可能较慢；可给该服务单独配 Docker Hub 加速器。

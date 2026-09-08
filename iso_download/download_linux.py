@@ -18,11 +18,32 @@ import time
 from tqdm import tqdm
 
 
+ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+
+
+def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
+    """把 (type, name) 安全拼接为 download_dir 下的路径, 拒绝路径穿越/非法字符。"""
+    if not typ or not name or typ not in ALLOWED_TYPES:
+        return None
+    for comp in (typ, name):
+        comp = str(comp)
+        if comp != comp.strip() or comp in (".", ".."):
+            return None
+        if "/" in comp or "\\" in comp:
+            return None
+    target = (download_dir / typ / name).resolve()
+    try:
+        target.relative_to(download_dir.resolve())
+    except ValueError:
+        return None
+    return target
+
+
 class LinuxDistributionDownloader:
-    def __init__(self, json_file: str = "distributions.json", download_dir: str = None):
+    def __init__(self, json_file: str = "distributions.json", download_dir: Optional[str] = None):
         """初始化下载器"""
         self.json_file = json_file
-        
+
         # 设置下载目录，默认为脚本所在目录
         if download_dir:
             self.download_dir = Path(download_dir)
@@ -30,7 +51,7 @@ class LinuxDistributionDownloader:
             # 获取脚本所在目录
             script_dir = Path(__file__).parent
             self.download_dir = script_dir
-        
+
         self.download_dir.mkdir(exist_ok=True)
         self.distributions = self.load_distributions()
         
@@ -164,7 +185,7 @@ class LinuxDistributionDownloader:
                 if self.verify_checksum(filepath, url_checksum):
                     return True, f"URL校验和验证通过: {url_checksum}"
                 else:
-                    print(f"  URL校验和验证失败")
+                    print("  URL校验和验证失败")
         
         # 第二优先级：使用JSON中存储的checksum
         if stored_checksum:
@@ -172,7 +193,7 @@ class LinuxDistributionDownloader:
             if self.verify_checksum(filepath, stored_checksum):
                 return True, f"存储校验和验证通过: {stored_checksum}"
             else:
-                print(f"  存储校验和验证失败")
+                print("  存储校验和验证失败")
         
         # 第三优先级：两个都没有，跳过验证
         if not checksum_url and not stored_checksum:
@@ -183,6 +204,12 @@ class LinuxDistributionDownloader:
     
     def cleanup_distribution_dir(self, dist_dir: Path, expected_files: List[str]) -> None:
         """清理发行版目录，删除不在JSON中维护的文件"""
+        # 安全校验: dist_dir 必须位于 self.download_dir 内
+        try:
+            dist_dir.resolve().relative_to(self.download_dir.resolve())
+        except ValueError:
+            print(f"拒绝清理越界目录: {dist_dir}")
+            return
         if not dist_dir.exists():
             return
         
@@ -231,7 +258,10 @@ class LinuxDistributionDownloader:
             print(f"下载第 {i}/{len(matching_dists)} 个版本:")
             
             # 创建下载目录，使用 type/distribution 格式
-            dist_dir = self.download_dir / target_dist["type"] / target_dist["distribution"]
+            dist_dir = _safe_dist_dir(self.download_dir, target_dist.get("type", "linux"), target_dist.get("distribution", ""))
+            if dist_dir is None:
+                print(f"错误: 发行版 {target_dist} 的 type/distribution 不合法, 跳过")
+                continue
             dist_dir.mkdir(parents=True, exist_ok=True)
             
             # 获取文件名
@@ -306,8 +336,9 @@ class LinuxDistributionDownloader:
         
         # 清理发行版目录，删除不在JSON中维护的文件
         if matching_dists:
-            dist_dir = self.download_dir / matching_dists[0]["type"] / matching_dists[0]["distribution"]
-            self.cleanup_distribution_dir(dist_dir, expected_files)
+            dist_dir = _safe_dist_dir(self.download_dir, matching_dists[0].get("type", "linux"), matching_dists[0].get("distribution", ""))
+            if dist_dir is not None:
+                self.cleanup_distribution_dir(dist_dir, expected_files)
         
         print(f"\n{'='*60}")
         print(f"下载完成！成功下载 {success_count}/{len(matching_dists)} 个版本")

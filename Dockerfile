@@ -4,6 +4,11 @@
 #   /app/iso_download   上游脚本(只读,不可变)
 #   /app/web            Flask API + 前端 + 选择性下载 runner
 #   /data               [VOLUME] 发行版清单 distributions.json + 下载的 ISO
+#
+# ⚠️ 安全提示:
+#   1. 本镜像默认以 root 运行, 且 compose 会挂载宿主机 /var/run/docker.sock。
+#      这意味着容器内进程拥有宿主机 Docker(近似 root)控制权。请仅在可信内网使用。
+#   2. 生产部署务必设置 ISO_HUB_TOKEN / ISO_HUB_REQUIRE_LOGIN=1, 并修改默认共享/种子凭据。
 FROM python:3.12-slim
 
 # 国内构建可传 --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/

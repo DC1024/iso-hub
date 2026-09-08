@@ -1,0 +1,161 @@
+# ISO Hub - 代码质量与安全流水线
+# 触发器:
+#   - pull_request            -> 对目标分支的 PR 全部触发
+#   - push 到 master 分支      -> 主干提交后复验
+#   - workflow_dispatch       -> 手动运行
+#
+# 三个检查相互独立、并行执行，任一失败则流水线失败（汇总在 security-gate）：
+#   1. py-compile : python -m py_compile          语法检查
+#   2. ruff       : ruff check . --select=F       引用类错误（F401/F821 等）
+#   3. bandit     : bandit -r ... -ll             安全扫描（Medium 及以上才失败）
+#
+# Python 版本: 3.12, 与 Dockerfile 的基础镜像 python:3.12-slim 保持一致,
+#              避免因版本差异导致 CI 与运行时结果不一致。
+#
+# 工具版本固定(ruff 0.16.6 / bandit 1.9.4)以保证 CI 结果可复现。
+
+name: Lint & Security
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------- 1. 语法检查
+  py-compile:
+    name: Syntax (py_compile)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 安装项目自身依赖，保证后续可以平滑扩展成 import 级检查；
+      # py_compile 只做语法分析，本身并不依赖这些包。
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          for req in requirements.txt web/requirements.txt iso_download/requirements.txt; do
+            if [ -f "$req" ]; then
+              echo "installing: $req"
+              python -m pip install -r "$req"
+            else
+              echo "skip missing: $req"
+            fi
+          done
+
+      # 对所有 .py 源文件逐一执行 py_compile。
+      # 使用 -print0 / xargs -0 以正确处理含空格或特殊字符的路径。
+      # 排除 .git 与运行时产物目录（__pycache__、虚拟环境）。
+      - name: Compile all Python sources
+        run: |
+          set -euo pipefail
+
+          FILE_LIST="$(mktemp)"
+          find . -type f -name '*.py' \
+              -not -path './.git/*' \
+              -not -path '*/__pycache__/*' \
+              -not -path '*/venv/*' \
+              -not -path '*/.venv/*' \
+              -not -path '*/node_modules/*' \
+              -print0 > "$FILE_LIST"
+
+          COUNT="$(tr -dc '\0' < "$FILE_LIST" | wc -c)"
+          echo "发现 Python 源文件数量: $COUNT"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::warning::未发现任何 Python 源文件，跳过语法检查"
+            exit 0
+          fi
+
+          echo "---- 待编译文件清单 ----"
+          xargs -0 -a "$FILE_LIST" --no-run-if-empty printf '%s\n'
+          echo "------------------------"
+
+          # 任一文件语法错误 -> py_compile 返回非零 -> step 失败
+          xargs -0 -a "$FILE_LIST" --no-run-if-empty python -m py_compile
+          echo "所有 Python 文件语法检查通过"
+
+  # ------------------------------------------------------------- 2. Ruff (F 规则)
+  ruff:
+    name: Ruff (pyflakes / F)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 版本固定以保证 CI 结果可复现（本地验证版本: ruff 0.16.6）
+      - name: Install ruff
+        run: python -m pip install --upgrade "ruff==0.16.6"
+
+      # --select=F : F401 未使用的导入、F811 重复定义、F821 未定义名称、F841 未使用变量等。
+      # 这些都是真实的运行期/重构残留风险，必须为零。
+      # ruff 默认遵循 .gitignore，因此 __pycache__、venv 等自动被忽略。
+      - name: Run ruff (F rules)
+        run: python -m ruff check . --select=F
+
+  # ------------------------------------------------------------------ 3. Bandit
+  bandit:
+    name: Bandit (security)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 版本固定以保证 CI 结果可复现（本地验证版本: bandit 1.9.4）
+      - name: Install bandit
+        run: python -m pip install --upgrade "bandit==1.9.4"
+
+      # 退出码语义（已实测验证）：
+      #   bandit -l  (默认) -> 只要发现任何级别问题（含 Low）就返回 1，会造成 CI 误报
+      #   bandit -ll        -> 仅报告/计入 Medium 及以上严重级别，只有 Low 时返回 0
+      # 因此这里用 -ll：
+      #   仅有 Low       -> 退出码 0，CI 通过
+      #   存在 Medium/High -> 退出码 1，CI 失败
+      # 注意不要加 --exit-zero，那会让真正的安全问题也被放行。
+      - name: Run bandit (fail on Medium+ only)
+        run: python -m bandit -r web iso_download scripts -ll
+
+  # ---------------------------------------------------------------- 汇总门禁
+  # 便于在分支保护规则里只需要勾选 "Lint & Security Gate" 这一个必需检查项。
+  security-gate:
+    name: Lint & Security Gate
+    runs-on: ubuntu-latest
+    needs: [py-compile, ruff, bandit]
+    if: always()
+    steps:
+      - name: Verify all checks passed
+        env:
+          PY_COMPILE_RESULT: ${{ needs.py-compile.result }}
+          RUFF_RESULT: ${{ needs.ruff.result }}
+          BANDIT_RESULT: ${{ needs.bandit.result }}
+        run: |
+          echo "py-compile : $PY_COMPILE_RESULT"
+          echo "ruff       : $RUFF_RESULT"
+          echo "bandit     : $BANDIT_RESULT"
+          if [ "$PY_COMPILE_RESULT" != "success" ] \
+             || [ "$RUFF_RESULT" != "success" ] \
+             || [ "$BANDIT_RESULT" != "success" ]; then
+            echo "::error::存在未通过的检查，流水线判定失败"
+            exit 1
+          fi
+          echo "全部检查通过"

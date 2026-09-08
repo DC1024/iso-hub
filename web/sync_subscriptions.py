@@ -22,9 +22,29 @@ import sys
 import types
 from pathlib import Path
 
+ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+
 
 def natural_key(value: str):
     return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", value)]
+
+
+def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
+    """把 (type, name) 安全拼接为 download_dir 下的路径, 拒绝路径穿越/非法字符。"""
+    if not typ or not name or typ not in ALLOWED_TYPES:
+        return None
+    for comp in (typ, name):
+        comp = str(comp)
+        if comp != comp.strip() or comp in (".", ".."):
+            return None
+        if "/" in comp or "\\" in comp:
+            return None
+    target = (download_dir / typ / name).resolve()
+    try:
+        target.relative_to(download_dir.resolve())
+    except ValueError:
+        return None
+    return target
 
 
 def main() -> None:
@@ -115,7 +135,16 @@ def main() -> None:
             continue
         name = sub.get("distribution")
         typ = sub.get("type", "linux")
-        keep = max(1, int(sub.get("keep", 2)))
+        try:
+            keep = max(1, int(sub.get("keep", 2)))
+        except (ValueError, TypeError):
+            print(f"[WARN] 订阅 {name} 的 keep 值非法, 使用默认值 2", file=sys.stderr)
+            keep = 2
+        # 路径穿越防护: distribution/type 必须合法
+        target = _safe_dist_dir(download_dir, typ, name)
+        if target is None:
+            print(f"[WARN] 订阅 {typ}/{name} 的 distribution/type 不合法, 跳过", file=sys.stderr)
+            continue
         print(f"\n{'='*60}\n>>> 订阅同步: {typ}/{name} (保留最新 {keep} 版)")
 
         pool = [
@@ -143,7 +172,7 @@ def main() -> None:
             failed = True
 
         # 清理该组不在最新 N 内的过期 ISO
-        target = download_dir / typ / name
+        # target 已由 _safe_dist_dir 校验, 确定落在 download_dir 内
         removed = []
         # 受保护名单(settings.json 的 protected, 相对路径或文件名)
         protected = set()

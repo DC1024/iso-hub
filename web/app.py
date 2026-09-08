@@ -24,6 +24,10 @@ import json
 import re
 import time
 import shlex
+import base64
+import hashlib
+import urllib.parse
+import configparser
 from time import struct_time  # 供 _sched_matches 类型注解
 import threading
 import subprocess
@@ -44,7 +48,7 @@ except Exception as e:  # noqa: BLE001
 BASE_DIR = Path(__file__).resolve().parent
 REPO_DIR = Path(os.environ.get("ISO_REPO_DIR", "/app/iso_download"))
 DATA_DIR = Path(os.environ.get("ISO_DATA_DIR", "/data"))
-HOST, PORT = "0.0.0.0", int(os.environ.get("ISO_HUB_PORT", "8080"))
+HOST, PORT = "0.0.0.0", int(os.environ.get("ISO_HUB_PORT", "8080"))  # nosec B104
 PY = sys.executable
 JSON_FILE = DATA_DIR / "distributions.json"
 DEFAULT_JSON = REPO_DIR / "distributions.json"
@@ -55,6 +59,15 @@ SHARE_CONTAINERS = {"samba": "iso-hub-samba", "webdav": "iso-hub-webdav"}
 ISO_SUFFIXES = {".iso", ".img", ".qcow2", ".vmdk"}
 # 下载目录类型白名单(路径穿越防护)
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+
+
+def _is_http_url(url: str) -> bool:
+    """仅允许 http/https 协议, 阻断 file://、ftp://、gopher:// 等 SSRF 向量。"""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        return parsed.scheme in ("http", "https") and parsed.netloc != ""
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _safe_join(typ: str, name: str) -> Path | None:
@@ -216,6 +229,11 @@ def expand_custom_repo(item: dict, timeout: int = 40) -> list:
     hit = _CUSTOM_REPO_CACHE.get(cache_key)
     if hit and hit[0] > now:
         return list(hit[1])
+    # SSRF 防护: 只接受 http/https 协议
+    listing_url = item.get("listing_url", "")
+    if listing_url and not _is_http_url(listing_url):
+        log(f"[自定义源] 拒绝非 http/https 的 listing_url: {listing_url}")
+        return []
     try:
         if item.get("strategy") not in ("dated_directory", "flat_listing", "versioned_flat_listing", "static"):
             return []
@@ -302,11 +320,23 @@ def build_distros() -> dict:
 
 # --------------------------------------------------------------------------- network shares (SMB / WebDAV)
 DEFAULT_SHARES = {
-    "samba": {"enabled": True, "username": os.environ.get("SAMBA_USER", "iso"),
+    "samba": {"enabled": False, "username": os.environ.get("SAMBA_USER", "iso"),
               "password": os.environ.get("SAMBA_PASS", "iso123"), "port": os.environ.get("SAMBA_PORT", "1445")},
-    "webdav": {"enabled": True, "username": os.environ.get("WEBDAV_USER", "iso"),
+    "webdav": {"enabled": False, "username": os.environ.get("WEBDAV_USER", "iso"),
                "password": os.environ.get("WEBDAV_PASS", "iso123"), "port": os.environ.get("WEBDAV_PORT", "8081")},
 }
+
+
+# --------------------------------------------------------------------------- qBittorrent sidecar
+DEFAULT_QB = {
+    "enabled": False,
+    "username": os.environ.get("QB_USER", "admin"),
+    "password": os.environ.get("QB_PASS", "adminadmin"),
+    "port": os.environ.get("QB_PORT", "8090"),
+    "url": os.environ.get("QB_URL", "http://qbittorrent:8080"),
+}
+QB_CONTAINER = "iso-hub-qbittorrent"
+QB_CONF_PATH = Path("/qb-config/qBittorrent/qBittorrent.conf")
 
 
 def load_shares() -> dict:
@@ -328,6 +358,25 @@ def load_shares() -> dict:
 def save_shares(shares: dict) -> None:
     cur = load_settings_all()
     cur.update(shares)  # 保留 protected 等其它顶层键
+    SETTINGS_JSON.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_qb_settings() -> dict:
+    """读取 qBittorrent 设置, 缺失键回退环境变量默认。"""
+    data = {}
+    if SETTINGS_JSON.exists():
+        try:
+            data = json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) or {}
+        except Exception:  # noqa: BLE001
+            data = {}
+    out = dict(DEFAULT_QB)
+    out.update({k: v for k, v in data.get("qb", {}).items() if k in out})
+    return out
+
+
+def save_qb_settings(qb: dict) -> None:
+    cur = load_settings_all()
+    cur["qb"] = qb
     SETTINGS_JSON.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -443,7 +492,6 @@ def _sched_matches(s: dict, now: struct_time | None = None) -> bool:
 
 
 # ---------- 用户登录 / 会话 token (单管理员, 标准库实现) ----------
-import hashlib  # noqa: E402
 import secrets  # noqa: E402
 
 USER_STORE_KEY = "users"
@@ -594,6 +642,99 @@ def set_share(proto: str, enabled: bool) -> bool:
         return False
 
 
+def _sync_disabled_shares() -> None:
+    """启动时同步共享 sidecar 容器状态: 若默认/配置为 disabled 但容器仍在运行, 则停止它。
+
+    这样即使 docker compose up 时自动拉起了 samba/webdav, 首次启动也会立即把它们停掉,
+    让用户在 Web 面板里手动启用并设置凭据。
+    """
+    try:
+        shares = load_shares()
+        for proto in ("samba", "webdav"):
+            if not shares.get(proto, {}).get("enabled", True):
+                cname = SHARE_CONTAINERS.get(proto)
+                if not cname:
+                    continue
+                st = share_container_state(cname)
+                if st == "running":
+                    log(f"[共享] 启动同步: {proto} 当前为禁用但容器在运行, 正在停止")
+                    set_share(proto, False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _make_qb_pbkdf2(password: str) -> str:
+    """生成 qBittorrent WebUI 接受的 PBKDF2 密码哈希。"""
+    salt = os.urandom(16)
+    key = hashlib.pbkdf2_hmac("sha512", password.encode(), salt, 100000, 64)
+    return "@ByteArray(" + base64.b64encode(salt).decode() + ":" + base64.b64encode(key).decode() + ")"
+
+
+def _set_qb_password(username: str, password: str) -> bool:
+    """把用户名/密码写入挂载的 qBittorrent.conf, 禁用 LocalHostAuth/HostHeaderValidation。"""
+    if not QB_CONF_PATH.exists():
+        return False
+    try:
+        c = configparser.ConfigParser(strict=False, allow_no_value=True)
+        c.optionxform = str
+        c.read(QB_CONF_PATH, encoding="utf-8")
+        if not c.has_section("Preferences"):
+            c.add_section("Preferences")
+        c.set("Preferences", "WebUI\\Username", username)
+        c.set("Preferences", "WebUI\\Password_PBKDF2", _make_qb_pbkdf2(password))
+        c.set("Preferences", "WebUI\\LocalHostAuth", "false")
+        c.set("Preferences", "WebUI\\HostHeaderValidation", "false")
+        with open(QB_CONF_PATH, "w", encoding="utf-8") as f:
+            c.write(f)
+        return True
+    except Exception as e:  # noqa: BLE001
+        log(f"[qB] 写入密码失败: {e!r}")
+        return False
+
+
+def set_qb(enabled: bool, username: str, password: str) -> bool:
+    """启动/停止 qBittorrent sidecar, 并在首次启用时写入固定密码。"""
+    try:
+        if enabled:
+            # 1. 启动容器
+            r1 = _docker_request("POST", f"/containers/{QB_CONTAINER}/start", None, 20)
+            if r1.status not in (200, 204, 304):
+                return False
+            # 2. 恢复自动重启策略
+            _docker_request("POST", f"/containers/{QB_CONTAINER}/update", {"RestartPolicy": {"Name": "unless-stopped"}}, 20)
+            # 3. 等待 conf 生成并写入密码
+            for _ in range(15):
+                if QB_CONF_PATH.exists() and _set_qb_password(username, password):
+                    break
+                time.sleep(1)
+            else:
+                log("[qB] 启用后未能在 15 秒内写入 qBittorrent.conf")
+                return False
+            # 4. 重启使新密码生效
+            rr = _docker_request("POST", f"/containers/{QB_CONTAINER}/restart", None, 30)
+            return rr.status in (200, 204, 304)
+        else:
+            _docker_request("POST", f"/containers/{QB_CONTAINER}/update", {"RestartPolicy": {"Name": "no"}}, 20)
+            r = _docker_request("POST", f"/containers/{QB_CONTAINER}/stop", None, 20)
+            return r.status in (200, 204, 304)
+    except Exception as e:  # noqa: BLE001
+        log(f"[qB] 启停异常: {e!r}")
+        return False
+
+
+def _sync_disabled_qb() -> None:
+    """启动时同步 qBittorrent 容器状态: 若配置为 disabled 但容器在运行, 则停止它。"""
+    try:
+        qb = load_qb_settings()
+        if not qb.get("enabled", True):
+            st = share_container_state(QB_CONTAINER)
+            if st == "running":
+                log("[qB] 启动同步: qBittorrent 当前为禁用但容器在运行, 正在停止")
+                set_qb(False, qb.get("username", ""), qb.get("password", ""))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # 每个 sidecar 容器内用于凭据的环境变量名 (samba 用; webdav 已改用挂载的 webdav.yml 明文)
 CRED_ENVS = {
     "samba": ("SAMBA_USER", "SAMBA_PASS"),
@@ -608,7 +749,7 @@ def _recreate_samba(username: str, password: str) -> bool:
     if not username or not password:
         return False
     if any(ch in (username + password) for ch in (" ", ";", "\n", "\r", '"', "'", "\\", ",")):
-        log(f"[共享] 拒绝含特殊字符的共享凭据(用户名/密码不能含空格、分号、逗号、引号、反斜杠)")
+        log("[共享] 拒绝含特殊字符的共享凭据(用户名/密码不能含空格、分号、逗号、引号、反斜杠)")
         return False
     cname = SHARE_CONTAINERS["samba"]
     try:
@@ -621,17 +762,17 @@ def _recreate_samba(username: str, password: str) -> bool:
         nw = spec.get("NetworkSettings", {}) or {}
         nets = nw.get("Networks", {}) or {}
 
-        # 重拼 cmd 的 -u 与 -s 参数里的用户/密码
-        cmd = list(cfg.get("Cmd", []))
-        joined = " ".join(cmd)
-        joined = re.sub(r"-u\s+\S+;\S+", f"-u {username};{password}", joined)
-        # -s 形如  iso;/srv/iso;no;no;no;user,pass  替换末尾 user,pass
-        joined = re.sub(r"(;[^;]+;no;no;no;)[^,]+,[^\s]+", rf"\g<1>{username},{password}", joined)
-        cmd = joined.split(" ")
+        # 安全重建 cmd: 不使用正则/字符串拆分, 直接构造已知安全的参数列表,
+        # 避免用户名/密码中的 shell/regex 元字符被二次解析。
+        samba_cmd = [
+            "-p",
+            "-u", f"{username};{password}",
+            "-s", f"iso;/srv/iso;no;no;no;{username},{password}",
+        ]
 
         body = {
             "Image": cfg.get("Image", "dperson/samba:latest"),
-            "Cmd": cmd,
+            "Cmd": samba_cmd,
             "Env": cfg.get("Env", []),
             "Labels": cfg.get("Labels", {}),
             "HostConfig": {
@@ -668,15 +809,44 @@ def _webdav_conf_path() -> Path:
 
 def _apply_webdav_creds(username: str, password: str) -> bool:
     """webdav 凭据在挂载的 webdav.yml 里, 改写文件 + 重启容器即生效, 无需重建。"""
+    # 凭据中不能含换行/回车, 否则既破坏 YAML 也允许注入新键
+    if not username or not password or "\n" in username or "\r" in username or "\n" in password or "\r" in password:
+        log("[共享] webdav 凭据不能含换行符")
+        return False
     try:
         cfg_path = _webdav_conf_path()
         if not cfg_path.exists():
             log(f"[共享] webdav 配置文件缺失: {cfg_path}")
             return False
-        text = cfg_path.read_text(encoding="utf-8")
-        text = re.sub(r"(username:\s*)\S+", rf"\g<1>{username}", text, count=1)
-        text = re.sub(r"(password:\s*)\S+", rf"\g<1>{password}", text, count=1)
-        cfg_path.write_text(text, encoding="utf-8")
+
+        def _yaml_quote(value: str) -> str:
+            """把值包装成 YAML 安全的双引号标量; 含特殊字符时强制加引号。"""
+            # 双引号标量内转义双引号和反斜杠
+            inner = value.replace("\\", "\\\\").replace('"', '\\"')
+            # 若含 YAML 特殊字符或首尾空白则加引号
+            if not inner or inner != inner.strip() or any(ch in inner for ch in ":#{}[]|>&*%@,!'`\""):
+                return f'"{inner}"'
+            return inner
+
+        lines = cfg_path.read_text(encoding="utf-8").splitlines()
+        new_lines = []
+        replaced_user = replaced_pass = False
+        for line in lines:
+            m = re.match(r"^(\s*username:\s*)([^\n]*)", line)
+            if m and not replaced_user:
+                new_lines.append(f"{m.group(1)}{_yaml_quote(username)}")
+                replaced_user = True
+                continue
+            m = re.match(r"^(\s*password:\s*)([^\n]*)", line)
+            if m and not replaced_pass:
+                new_lines.append(f"{m.group(1)}{_yaml_quote(password)}")
+                replaced_pass = True
+                continue
+            new_lines.append(line)
+        if not (replaced_user and replaced_pass):
+            log("[共享] webdav.yml 中未找到 username/password 行")
+            return False
+        cfg_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
         _docker_request("POST", f"/containers/{SHARE_CONTAINERS['webdav']}/restart", None, 30)
         return True
     except Exception as e:  # noqa: BLE001
@@ -895,7 +1065,7 @@ def stop_task() -> bool:
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 AUTH_TOKEN = os.environ.get("ISO_HUB_TOKEN", "").strip()
 # 强制登录开关: ISO_HUB_REQUIRE_LOGIN=1 时, 除登录/自身状态接口外所有 API 均需登录会话或 X-Auth-Token
-REQUIRE_LOGIN = os.environ.get("ISO_HUB_REQUIRE_LOGIN", "").strip().lower() in ("1", "true", "yes", "on")
+REQUIRE_LOGIN = os.environ.get("ISO_HUB_REQUIRE_LOGIN", "1").strip().lower() in ("1", "true", "yes", "on")
 
 
 @app.before_request
@@ -1002,7 +1172,11 @@ def api_download():
     seen = set()
     for e in matched:
         fname = e["download_url"].rstrip("/").rsplit("/", 1)[-1]
-        path = str(DATA_DIR / e["type"] / e["distribution"] / fname)
+        # 路径穿越防护: 通过白名单校验确保目标目录在 DATA_DIR 内
+        target = _safe_join(e.get("type", "linux"), e.get("distribution", ""))
+        if target is None:
+            return jsonify({"error": f"非法的发行版类型/名称: {e.get('type')}/{e.get('distribution')}"}), 400
+        path = str(target / fname)
         if (e["distribution"], fname) not in seen:
             seen.add((e["distribution"], fname))
             download_payload.append({"filename": fname, "path": path})
@@ -1069,6 +1243,8 @@ def api_custom_sources_add():
     typ = (body.get("type") or "linux").strip()
     if not distribution:
         return jsonify({"error": "需要 distribution(发行版名)"}), 400
+    if typ not in ALLOWED_TYPES:
+        return jsonify({"error": f"type 必须是 {', '.join(sorted(ALLOWED_TYPES))} 之一"}), 400
     items = load_custom_sources()
     strategy = (body.get("strategy") or "").strip()
     if strategy:
@@ -1079,10 +1255,24 @@ def api_custom_sources_add():
         download_template = (body.get("download_template") or "").strip()
         if not listing_url or not download_template:
             return jsonify({"error": "发行版源需要 listing_url 与 download_template"}), 400
+        # SSRF 防护: listing_url 与下载模板必须为 http/https
+        if not _is_http_url(listing_url):
+            return jsonify({"error": "listing_url 必须是 http/https 链接"}), 400
+        if download_template and re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", download_template):
+            if not _is_http_url(download_template):
+                return jsonify({"error": "download_template 若含绝对 URL 协议, 必须是 http/https"}), 400
+        checksum_template = (body.get("checksum_template") or "").strip()
+        if checksum_template and re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", checksum_template):
+            if not _is_http_url(checksum_template):
+                return jsonify({"error": "checksum_template 若含绝对 URL 协议, 必须是 http/https"}), 400
         # 判断重复: 同名 + 同 strategy + 同 listing_url
         if any(c.get("strategy") == strategy and c.get("distribution") == distribution
                and c.get("listing_url") == listing_url for c in items):
             return jsonify({"error": "该发行版源已存在"}), 400
+        try:
+            max_entries = max(1, int(body.get("max_entries") or 1))
+        except (ValueError, TypeError):
+            max_entries = 1
         entry = {
             "distribution": distribution,
             "type": typ,
@@ -1091,8 +1281,8 @@ def api_custom_sources_add():
             "version_regex": (body.get("version_regex") or "").strip(),
             "artifact_regex": (body.get("artifact_regex") or "").strip(),
             "download_template": download_template,
-            "checksum_template": (body.get("checksum_template") or "").strip(),
-            "max_entries": int(body.get("max_entries") or 1),
+            "checksum_template": checksum_template,
+            "max_entries": max_entries,
         }
         if strategy == "static":
             vs = body.get("versions")
@@ -1110,13 +1300,18 @@ def api_custom_sources_add():
     url = (body.get("download_url") or "").strip()
     if not url:
         return jsonify({"error": "需要 download_url 或 strategy"}), 400
+    if not _is_http_url(url):
+        return jsonify({"error": "download_url 必须是 http/https 链接"}), 400
     if any(c.get("download_url") == url for c in items):
         return jsonify({"error": "该地址已存在"}), 400
+    checksum_url = (body.get("checksum_url") or "").strip()
+    if checksum_url and not _is_http_url(checksum_url):
+        return jsonify({"error": "checksum_url 必须是 http/https 链接"}), 400
     items.append({
         "distribution": distribution,
         "type": typ,
         "download_url": url,
-        "checksum_url": (body.get("checksum_url") or "").strip(),
+        "checksum_url": checksum_url,
         "checksum": (body.get("checksum") or "").strip(),
     })
     save_custom_sources(items)
@@ -1427,14 +1622,76 @@ def api_shares_save():
     return jsonify({"ok": True, "shares": {k: {**v, "container": share_container_state(SHARE_CONTAINERS[k])} for k, v in shares.items()}})
 
 
+@app.get("/api/qb/settings")
+def api_qb_settings_get():
+    """获取 qBittorrent 设置及容器实时状态。"""
+    qb = load_qb_settings()
+    qb["container"] = share_container_state(QB_CONTAINER)
+    return jsonify({"ok": True, "qb": qb})
+
+
+@app.post("/api/qb/settings")
+def api_qb_settings_post():
+    """保存 qBittorrent 设置并启停/重启容器。body: {enabled?:bool, username?:str, password?:str}"""
+    body = request.get_json(force=True, silent=True) or {}
+    qb = load_qb_settings()
+    changed = False
+    if "username" in body:
+        qb["username"] = str(body["username"]).strip()
+        changed = True
+    if "password" in body:
+        qb["password"] = str(body["password"]).strip()
+        changed = True
+
+    enabled_changed = False
+    if "enabled" in body:
+        want = bool(body["enabled"])
+        if want != qb.get("enabled", False):
+            ok = set_qb(want, qb["username"], qb["password"])
+            if not ok:
+                return jsonify({"error": "qBittorrent 容器操作失败，请检查是否已部署 sidecar 且挂载 docker.sock"}), 500
+            qb["enabled"] = want
+            changed = True
+            enabled_changed = True
+
+    # 如果凭据变了且当前是启用状态(或刚启用)，同步密码到容器
+    if changed and qb.get("enabled", False):
+        if not enabled_changed:
+            # 仅修改凭据：直接写 conf 并重启
+            if QB_CONF_PATH.exists() and _set_qb_password(qb["username"], qb["password"]):
+                rr = _docker_request("POST", f"/containers/{QB_CONTAINER}/restart", None, 30)
+                if rr.status not in (200, 204, 304):
+                    return jsonify({"error": "qBittorrent 凭据已保存，但重启容器失败"}), 500
+            else:
+                return jsonify({"error": "qBittorrent 凭据保存失败，请检查 qb-config 是否正确挂载"}), 500
+        save_qb_settings(qb)
+    elif changed:
+        save_qb_settings(qb)
+
+    qb["container"] = share_container_state(QB_CONTAINER)
+    return jsonify({"ok": True, "qb": qb})
+
+
 # --------------------------------------------------------------------------- 种子下载 (qBittorrent + DistroWatch)
 def _qb() -> QBClient:
-    return QBClient()
+    qb_cfg = load_qb_settings()
+    return QBClient(qb_cfg.get("url"), qb_cfg.get("username"), qb_cfg.get("password"))
+
+
+def _ensure_qb_enabled() -> tuple[bool, tuple | None]:
+    """检查 qBittorrent 是否已启用；未启用时返回 (False, (response, status))。"""
+    qb = load_qb_settings()
+    if not qb.get("enabled", False):
+        return False, (jsonify({"error": "qBittorrent 未启用，请在「设置」中启用并设置账号密码"}), 403)
+    return True, None
 
 
 @app.get("/api/torrent/sources")
 def api_torrent_sources():
     """扫描 DistroWatch 官方种子源 + 用户自加 RSS/链接, 返回可下载的种子列表。"""
+    ok, err = _ensure_qb_enabled()
+    if not ok:
+        return err
     if not TORRENT_AVAILABLE:
         return jsonify({"error": "种子模块未加载: " + (_torrent_import_err or "")}), 500
     try:
@@ -1452,6 +1709,9 @@ def api_torrent_sources():
 @app.get("/api/torrent/info")
 def api_torrent_info():
     """查询 qBittorrent 连接状态 + 传输信息 + 种子列表(含本地是否已存在)."""
+    ok, err = _ensure_qb_enabled()
+    if not ok:
+        return err
     if not TORRENT_AVAILABLE:
         return jsonify({"error": "种子模块未加载"}), 500
     try:
@@ -1493,6 +1753,9 @@ def api_torrent_add():
     body: {urls:[...], distro?, type?, category?}
     若能推断发行版, 保存路径设为 /data/<type>/<发行版>/; 否则存 /data/_torrents/。
     """
+    ok, err = _ensure_qb_enabled()
+    if not ok:
+        return err
     if not TORRENT_AVAILABLE:
         return jsonify({"error": "种子模块未加载"}), 500
     body = request.get_json(force=True, silent=True) or {}
@@ -1500,6 +1763,11 @@ def api_torrent_add():
     if not urls:
         return jsonify({"error": "未提供任何种子 URL/磁力链接"}), 400
     urls = [str(u).strip() for u in urls]
+    for u in urls:
+        if u.startswith("magnet:"):
+            continue
+        if not _is_http_url(u):
+            return jsonify({"error": f"非法的种子链接(仅允许 http/https/magnet): {u[:80]}"}), 400
     # 推断保存路径
     save_path = None
     # 后端优先从 URL 文件名推断发行版(可靠), 前端传来的 distro 可能是完整文件名(如
@@ -1546,6 +1814,9 @@ def api_torrent_add():
 @app.post("/api/torrent/delete")
 def api_torrent_delete():
     """从 qBittorrent 删除种子。body: {hashes:[...], delete_files?:bool}"""
+    ok, err = _ensure_qb_enabled()
+    if not ok:
+        return err
     if not TORRENT_AVAILABLE:
         return jsonify({"error": "种子模块未加载"}), 500
     body = request.get_json(force=True, silent=True) or {}
@@ -1564,17 +1835,26 @@ def api_torrent_delete():
 
 @app.post("/api/torrent/rss/add")
 def api_torrent_rss_add():
+    ok, err = _ensure_qb_enabled()
+    if not ok:
+        return err
     body = request.get_json(force=True, silent=True) or {}
     url = (body.get("url") or "").strip()
-    if not url.startswith("http"):
-        return jsonify({"error": "RSS 地址需以 http 开头"}), 400
-    lst = dtorrents.add_user_rss(url)
+    if not _is_http_url(url):
+        return jsonify({"error": "RSS 地址必须是有效的 http/https 链接"}), 400
+    try:
+        lst = dtorrents.add_user_rss(url)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     log(f"[种子] 添加 RSS 源: {url}")
     return jsonify({"ok": True, "user_rss": lst})
 
 
 @app.post("/api/torrent/rss/remove")
 def api_torrent_rss_remove():
+    ok, err = _ensure_qb_enabled()
+    if not ok:
+        return err
     body = request.get_json(force=True, silent=True) or {}
     url = (body.get("url") or "").strip()
     lst = dtorrents.remove_user_rss(url)
@@ -1584,17 +1864,28 @@ def api_torrent_rss_remove():
 
 @app.post("/api/torrent/link/add")
 def api_torrent_link_add():
+    ok, err = _ensure_qb_enabled()
+    if not ok:
+        return err
     body = request.get_json(force=True, silent=True) or {}
     url = (body.get("url") or "").strip()
-    if not url.startswith(("http", "magnet:")):
-        return jsonify({"error": "链接需以 http 或 magnet: 开头"}), 400
-    lst = dtorrents.add_user_link(url, (body.get("distro") or ""))
+    if url.startswith("magnet:"):
+        pass
+    elif not _is_http_url(url):
+        return jsonify({"error": "链接必须是有效的 http/https 磁力链接"}), 400
+    try:
+        lst = dtorrents.add_user_link(url, (body.get("distro") or ""))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     log(f"[种子] 添加手动链接: {url}")
     return jsonify({"ok": True, "user_links": lst})
 
 
 @app.post("/api/torrent/link/remove")
 def api_torrent_link_remove():
+    ok, err = _ensure_qb_enabled()
+    if not ok:
+        return err
     body = request.get_json(force=True, silent=True) or {}
     url = (body.get("url") or "").strip()
     lst = dtorrents.remove_user_link(url)
@@ -1606,9 +1897,12 @@ if __name__ == "__main__":
     log(f"ISO Hub 启动  |  清单: {JSON_FILE}  数据目录: {DATA_DIR}")
     _sessions_load()  # 从磁盘恢复持久化会话(容器重建后 token 仍有效)
     seed_admin()  # 若设置 ISO_HUB_ADMIN_USER/PASS 则播种管理员
+    _sync_disabled_shares()  # 默认禁用的 sidecar 若被 compose 拉起, 启动后立即停止
+    _sync_disabled_qb()  # 默认禁用的 qBittorrent 若被 compose 拉起, 启动后立即停止
     schedule_auto_sync()  # 订阅自动同步调度器(默认每天; ISO_HUB_SYNC_INTERVAL 可改秒数)
     if os.environ.get("ISO_HUB_DEV"):
-        app.run(host=HOST, port=PORT, debug=True)
+        # 即使开发模式也不开启 debug, 避免 Werkzeug 调试器暴露任意代码执行
+        app.run(host=HOST, port=PORT, debug=False)
     else:
         from waitress import serve
         print(f"serving on http://{HOST}:{PORT}")

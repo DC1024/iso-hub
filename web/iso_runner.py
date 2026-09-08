@@ -16,6 +16,27 @@ from pathlib import Path
 
 import requests
 
+ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+
+
+def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
+    """把 (type, name) 安全拼接为 download_dir 下的路径, 拒绝路径穿越/非法字符。"""
+    if not typ or not name or typ not in ALLOWED_TYPES:
+        return None
+    for comp in (typ, name):
+        comp = str(comp)
+        if comp != comp.strip() or comp in (".", ".."):
+            return None
+        if "/" in comp or "\\" in comp:
+            return None
+    target = (download_dir / typ / name).resolve()
+    try:
+        target.relative_to(download_dir.resolve())
+    except ValueError:
+        return None
+    return target
+
+
 # 在上游 download_linux 被 import 之前 mock 掉 tqdm。
 # 上游用 tqdm 的 \r(回车) 覆盖式进度条输出(无换行), 会阻塞后端按行读取子进程 stdout,
 # 导致日志/状态不实时刷新(进度条卡 0%)、停止任务后才一次性 flush。这里用无输出的 stub 替换,
@@ -200,7 +221,11 @@ def main() -> None:
 
         for entry in group:
             fname = entry["download_url"].rstrip("/").rsplit("/", 1)[-1]
-            dist_dir = Path(downloader.download_dir) / entry["type"] / entry["distribution"]
+            dist_dir = _safe_dist_dir(Path(downloader.download_dir), entry.get("type", "linux"), entry.get("distribution", ""))
+            if dist_dir is None:
+                print(f"错误: 发行版 {entry.get('distribution')} 的 type/distribution 不合法, 跳过", file=sys.stderr)
+                failed = True
+                continue
             dist_dir.mkdir(parents=True, exist_ok=True)
             filepath = dist_dir / fname
 

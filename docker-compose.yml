@@ -14,9 +14,12 @@ services:
     volumes:
       # 所有 ISO 与发行版清单持久化到宿主机 ./data
       - ./data:/data
+      # qBittorrent 配置目录: 主容器直接改写 qBittorrent.conf 以设置固定 WebUI 密码
+      - ./qb-config:/qb-config:rw
       # webdav 凭据配置目录: 与 webdav 容器共享(网页改密码后主容器改写此文件)
       - ./webdav-config:/webdav-config
-      # 挂载 docker.sock 以便网页端控制 SMB/WebDAV sidecar 的启停
+      # ⚠️ 安全风险: 挂载 docker.sock 后, 主容器内获得宿主机 Docker 完全控制权,
+      # 相当于容器 root 可逃逸到宿主机。请仅在可信内网/单机使用, 并开启 ISO_HUB_REQUIRE_LOGIN=1。
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - TZ=Asia/Shanghai
@@ -46,12 +49,13 @@ services:
       start_period: 15s
 
   # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
-  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso   (账号 iso / 密码 iso123)
+  # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso
+  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
   # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
   samba:
     image: dperson/samba:latest
     container_name: iso-hub-samba
-    restart: unless-stopped
+    restart: no
     ports:
       - "${SAMBA_PORT:-1445}:445"
       - "${SAMBA_NETBIOS:-1137}:137/udp"
@@ -68,11 +72,12 @@ services:
       -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
       -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
 
-  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav   (账号 iso / 密码 iso123)
+  # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav
+  # 默认禁用, 请在面板「设置→共享」中手动启用并设置账号密码
   webdav:
     image: hacdias/webdav:latest
     container_name: iso-hub-webdav
-    restart: unless-stopped
+    restart: no
     ports:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
@@ -85,11 +90,12 @@ services:
   # ---------- 种子下载 sidecar: qBittorrent (BitTorrent 下载) ----------
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
   # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
-  # WebUI: http://<服务器IP>:8090  (默认 admin/adminadmin, 首次登录务必改)
+  # WebUI: http://<服务器IP>:8090
+  # 默认禁用, 请在 iso-hub 面板「设置→共享/下载」中手动启用并设置 WebUI 账号密码
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: iso-hub-qbittorrent
-    restart: unless-stopped
+    restart: no
     ports:
       - "${QB_PORT:-8090}:8080"
     volumes:

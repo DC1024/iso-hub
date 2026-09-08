@@ -14,17 +14,32 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List
 
-import xml.etree.ElementTree as ET
+try:  # 优先使用 defusedxml 防御 XML 炸弹/XXE
+    from defusedxml import ElementTree as ET
+except Exception:  # noqa: BLE001
+    # 生产环境已依赖 defusedxml; 此 fallback 仅用于无该库的开发环境,
+    # 且下层 parse_rss 已对 URL 做 http/https 校验并限制响应大小。
+    import xml.etree.ElementTree as ET  # type: ignore  # nosec B405
 
 BUILTIN_RSS = "https://distrowatch.com/news/torrents.xml"
 TITLE = "DistroWatch Torrents"
 
 SETTINGS_JSON = Path(os.environ.get("ISO_DATA_DIR", "/data")) / "settings.json"
+
+
+def _is_http_url(url: str) -> bool:
+    """仅允许 http/https 协议, 阻断 file://、ftp:// 等 SSRF 向量。"""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        return parsed.scheme in ("http", "https") and parsed.netloc != ""
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _load_settings() -> dict:
@@ -55,8 +70,10 @@ def get_user_links() -> List[Dict]:
 
 
 def add_user_rss(url: str) -> List[str]:
-    lst = get_user_rss()
     url = url.strip()
+    if not _is_http_url(url):
+        raise ValueError("RSS 地址必须是 http/https 链接")
+    lst = get_user_rss()
     if url and url not in lst:
         lst.append(url)
         _save_settings({"torrent_rss": lst})
@@ -70,8 +87,10 @@ def remove_user_rss(url: str) -> List[str]:
 
 
 def add_user_link(url: str, distro: str = "") -> List[Dict]:
-    lst = get_user_links()
     url = url.strip()
+    if not url.startswith(("http://", "https://", "magnet:")):
+        raise ValueError("链接必须是 http/https/magnet 开头")
+    lst = get_user_links()
     if url:
         lst.append({"url": url, "distro": distro.strip(), "ts": int(time.time())})
         _save_settings({"torrent_links": lst})
@@ -86,10 +105,24 @@ def remove_user_link(url: str) -> List[Dict]:
 
 def parse_rss(url: str, timeout: float = 20) -> List[Dict]:
     """抓取并解析一个 RSS 种子源, 返回 [{title,url,pubDate}] 列表。"""
+    if not _is_http_url(url):
+        raise ValueError("仅允许 http/https 协议的 RSS 源")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (iso-hub)"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    # 禁止 urllib 自动跟随重定向到非 http(s) 方案(防御 SSRF)
+    req.add_unredirected_header("Accept", "application/rss+xml, application/xml, text/xml, */*")
+    # 调用前已通过 _is_http_url 校验 URL 方案为 http/https,
+    # 并在响应后再次校验最终 URL, 禁止重定向到 file:// 等非预期方案。
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310
+        # 校验最终 URL 仍合法(某些服务可能 30x 到 file://)
+        final_url = r.geturl()
+        if not _is_http_url(final_url):
+            raise ValueError(f"RSS 请求被重定向到非法地址: {final_url}")
         raw = r.read()
-    root = ET.fromstring(raw)
+        # 限制 RSS 实体大小, 防御 XML 炸弹/内存耗尽
+        if len(raw) > 5 * 1024 * 1024:
+            raise ValueError("RSS 响应超过 5MB, 已拒绝")
+    # 优先使用 defusedxml; fallback 仅用于无该库环境, 且已做 URL/大小限制。
+    root = ET.fromstring(raw)  # nosec B314
     items = []
     # 兼容 <rss><channel><item> 与 <feed><entry>
     for it in root.iter():

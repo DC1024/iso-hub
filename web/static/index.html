@@ -440,6 +440,22 @@
       </div>
     </div>
     <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="qbConfig">🧲 qBittorrent 设置</span><span class="chip">BitTorrent 下载</span></div>
+      <div class="share-body">
+        <label class="sw"><input type="checkbox" id="sw-qb" onchange="saveQbEnabled(this.checked)"><span data-i18n="enable">启用</span></label>
+        <span class="sstat" id="st-qb"></span>
+        <div class="share-fields">
+          <span><span data-i18n="addr">地址:</span> <code id="url-qb">http://&lt;服务器IP&gt;:8090</code></span>
+          <div class="share-cred">
+            <label data-i18n="username">用户名 <input type="text" id="u-qb" class="inp"></label>
+            <label data-i18n="password">密码 <input type="text" id="p-qb" class="inp"></label>
+            <button class="btn-s" onclick="saveQbCred()" data-i18n="saveCred">保存凭据</button>
+          </div>
+        </div>
+        <div class="hint" style="padding:4px 0 0" data-i18n="qbDesc"></div>
+      </div>
+    </div>
+    <div class="card">
       <div class="card-head"><span class="g-name" data-i18n="schedules">⏰ 定时任务</span><span class="chip" data-i18n="schedTip">每天/周/月/年 自动同步</span></div>
       <div style="padding:12px 16px">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:10px">
@@ -492,15 +508,22 @@
     </div>
   </div>
   <div id="panel-torrent" style="display:none">
-    <div class="card">
-      <div class="card-head">
-        <span class="g-name" data-i18n="torrConn">🧲 种子下载</span>
-        <span class="chip" id="qb-status" data-i18n="torrNoQb">未连接 qBittorrent</span>
-        <span style="flex:1"></span>
-        <button class="btn-s" onclick="loadTorrentInfo()" data-i18n="torrRefresh">🔄 刷新</button>
+    <div id="qb-disabled-overlay" class="card" style="display:none">
+      <div style="padding:40px 16px;text-align:center">
+        <div style="font-size:18px;margin-bottom:10px" data-i18n="qbDisabledTitle">🧲 qBittorrent 未启用</div>
+        <div class="muted" data-i18n="qbDisabledDesc">请先在「设置」中启用 qBittorrent 并设置 WebUI 账号密码。</div>
       </div>
     </div>
-    <div class="src-tabs" style="display:flex;gap:8px;margin:10px 0">
+    <div id="qb-enabled-content">
+      <div class="card">
+        <div class="card-head">
+          <span class="g-name" data-i18n="torrConn">🧲 种子下载</span>
+          <span class="chip" id="qb-status" data-i18n="torrNoQb">未连接 qBittorrent</span>
+          <span style="flex:1"></span>
+          <button class="btn-s" onclick="loadTorrentInfo()" data-i18n="torrRefresh">🔄 刷新</button>
+        </div>
+      </div>
+      <div class="src-tabs" style="display:flex;gap:8px;margin:10px 0">
       <button class="src-tab active" data-sub="source" onclick="switchTorr('source')" data-i18n="torrSource">📚 种子源</button>
       <button class="src-tab" data-sub="running" onclick="switchTorr('running')" data-i18n="torrRunning">⏳ 下载中</button>
     </div>
@@ -536,6 +559,7 @@
         <div class="card-head"><span class="g-name" data-i18n="torrRunning">⏳ 下载中</span><span class="chip" id="qb-tcount">0</span></div>
         <div id="qb-list" style="padding:10px 16px;display:flex;flex-direction:column;gap:10px"></div>
       </div>
+    </div>
     </div>
   </div>
 </div>
@@ -660,7 +684,7 @@ const I18N={
   'unlocked':{zh:'已解锁',en:'unlocked'},
   'protectFailed':{zh:'操作失败',en:'Operation failed'},
   'settingsDesc':{zh:'用户、语言、共享设置',en:'User, language & share settings'},
-  'shareDesc':{zh:'说明：开关会实时启动/停止对应共享容器。账号密码初始值来自 docker-compose.yml 的 SAMBA_USER/PASS、WEBDAV_USER/PASS；修改后写入 ./data/settings.json，若共享正在运行需 docker compose restart 使新凭据生效。',en:'Toggles start/stop the share containers live. Credentials come from SAMBA_USER/PASS, WEBDAV_USER/PASS in docker-compose.yml; changes are saved to ./data/settings.json and need a container restart to apply.'},
+  'shareDesc':{zh:'说明：SMB/WebDAV 共享默认禁用。点击下方开关手动启用，随后设置账号密码；修改后写入 ./data/settings.json。默认凭据仅作兜底，启用后请务必修改。',en:'SMB/WebDAV shares are disabled by default. Toggle to enable, then set credentials; changes are saved to ./data/settings.json. The default credentials are fallbacks only — change them after enabling.'},
   'sambaDesc':{zh:'PVE/Windows 挂载 ISO 库',en:'Mount ISO library from PVE/Windows'},
   'webdavDesc':{zh:'HTTP WebDAV endpoint',en:'HTTP WebDAV endpoint'},
   'repoTab':{zh:'发行版源 · 追踪最新版本',en:'Distro source · track latest'},
@@ -740,6 +764,11 @@ const I18N={
   'disabledMsg':{zh:'已停用',en:'Disabled'},
   'credSaved':{zh:'凭据已保存，运行中的共享需 restart 生效',en:'Credentials saved; restart running shares to apply'},
   'shareErr':{zh:'操作失败',en:'Operation failed'},
+  'qbConfig':{zh:'🧲 qBittorrent 设置',en:'🧲 qBittorrent Settings'},
+  'qbDesc':{zh:'说明：qBittorrent 默认禁用。点击下方开关手动启用，随后设置 WebUI 账号密码；修改后写入 ./data/settings.json 并同步到 qBittorrent.conf。',en:'qBittorrent is disabled by default. Toggle to enable, then set WebUI credentials; changes are saved to ./data/settings.json and synced to qBittorrent.conf.'},
+  'qbDisabledTitle':{zh:'🧲 qBittorrent 未启用',en:'🧲 qBittorrent Disabled'},
+  'qbDisabledDesc':{zh:'请先在「设置」中启用 qBittorrent 并设置 WebUI 账号密码。',en:'Please enable qBittorrent and set WebUI credentials in Settings first.'},
+  'qbSaved':{zh:'qBittorrent 设置已保存',en:'qBittorrent settings saved'},
   'clickTitle':{zh:'在该处点击或长按切换语言',en:'Click to switch language'},
   'adminLogin':{zh:'管理员登录',en:'Admin Login'},
   'loginTitle':{zh:'请输入管理员账号与密码以继续访问',en:'Enter admin credentials to continue'},
@@ -1093,7 +1122,7 @@ function switchTab(tab){
   if(tab==='source')loadCustomSources();
   if(tab==='subs')loadSubs();
   if(tab==='settings')loadSettings();
-  if(tab==='torrent'){loadTorrentSources();loadTorrentInfo();}
+  if(tab==='torrent'){checkQbEnabled();}
   // 离开 torrent 页签时停止种子列表轮询
   if(tab!=='torrent'){clearInterval(TORR_POLL);TORR_POLL=null;}
 }
@@ -1118,6 +1147,7 @@ async function loadSrcStrat(){
 }
 function loadSettings(){
   loadShares();
+  loadQbSettings();
   loadUserState();
   renderProtectedList();
   renderSchedules();
@@ -1673,6 +1703,48 @@ async function saveShareCred2(proto){
   if(r.s!==200)return toast(r.j&&r.j.error||t('saveFailed'),'err');
   toast(proto.toUpperCase()+' '+t('credSaved'));
   loadShares();
+}
+
+/* ---------- qBittorrent ---------- */
+async function loadQbSettings(){
+  const r=await jget('/api/qb/settings');
+  const cfg=(r.j&&r.j.qb)||{};
+  const sw=$('#sw-qb'); if(sw)sw.checked=!!cfg.enabled;
+  const uin=$('#u-qb'); if(uin)uin.value=cfg.username||'';
+  const pin=$('#p-qb'); if(pin)pin.value=cfg.password||'';
+  const st=$('#st-qb');
+  const key=cfg.container||'none';
+  if(st){st.textContent=(CONTAINER_OK[key]||(()=>key))();st.className='sstat '+(cfg.enabled&&cfg.container==='running'?'':'muted');}
+  paintQbOverlay(!!cfg.enabled);
+}
+async function saveQbEnabled(enabled){
+  const r=await jpost('/api/qb/settings',{enabled:enabled,username:$('#u-qb').value.trim(),password:$('#p-qb').value.trim()});
+  if(r.s===401)return toast(t('pleaseLogin'),'err');
+  if(r.s!==200)return toast(r.j&&r.j.error||t('shareErr'),'err');
+  toast((enabled?t('enabledMsg'):t('disabledMsg'))+' qBittorrent '+t('savedShare'));
+  loadQbSettings();
+}
+async function saveQbCred(){
+  const r=await jpost('/api/qb/settings',{username:$('#u-qb').value.trim(),password:$('#p-qb').value.trim()});
+  if(r.s===401)return toast(t('pleaseLogin'),'err');
+  if(r.s!==200)return toast(r.j&&r.j.error||t('saveFailed'),'err');
+  toast(t('qbSaved'));
+  loadQbSettings();
+}
+function paintQbOverlay(enabled){
+  const ov=$('#qb-disabled-overlay'), box=$('#qb-enabled-content');
+  if(ov)ov.style.display=enabled?'none':'block';
+  if(box)box.style.display=enabled?'block':'none';
+}
+async function checkQbEnabled(){
+  const r=await jget('/api/qb/settings');
+  const cfg=(r.j&&r.j.qb)||{};
+  const enabled=!!cfg.enabled;
+  paintQbOverlay(enabled);
+  if(enabled){
+    loadTorrentSources();
+    loadTorrentInfo();
+  }
 }
 
 /* ---------- 强制登录门禁 (ISO_HUB_REQUIRE_LOGIN=1 时生效) ---------- */
