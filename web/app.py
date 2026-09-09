@@ -1021,8 +1021,12 @@ def _spawn_worker() -> None:
         if line.startswith("#TARGET "):
             try:
                 _, _p, _s = line.split(" ", 2)
+                _targets = {}
                 with _lock:
-                    cur["targets"][_p] = int(_s)
+                    _targets.update(cur["targets"])
+                _targets[_p] = int(_s)
+                with _lock:
+                    cur["targets"] = _targets
             except (ValueError, IndexError):
                 pass
             continue
