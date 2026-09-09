@@ -28,7 +28,7 @@ WORKDIR /app
 ARG APT_MIRROR=archive.ubuntu.com
 RUN sed -i "s@//.*archive.ubuntu.com@//${APT_MIRROR}@; s@//security.ubuntu.com@//${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends gnupg \
+    && apt-get install -y --no-install-recommends gnupg gpgv \
     && rm -rf /var/lib/apt/lists/*
 
 # 上游 CLI 依赖

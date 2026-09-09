@@ -183,8 +183,10 @@ class LinuxDistributionDownloader:
         """
         try:
             import shutil
-            if shutil.which("gpgv") is None and shutil.which("gpg") is None:
-                return "skip"  # 容器未装 gpg, 降级
+            # 优先 gpgv(不信任签名者, 更适合校验); 缺失时回退 gpg --verify
+            use_gpgv = shutil.which("gpgv") is not None
+            if not use_gpgv and shutil.which("gpg") is None:
+                return "skip"  # 两者都无, 降级
             keyring_dir.mkdir(parents=True, exist_ok=True)
             keyring = keyring_dir / "iso-hub.gpg"
             # 1. 首次使用: 从官方 keyserver 获取公钥并缓存到 data 卷
@@ -209,17 +211,23 @@ class LinuxDistributionDownloader:
             sig = requests.get(sig_url, timeout=30).content
             if not sig:
                 return "skip"
-            # 3. 用 gpgv(不信任签名者) 验证 detached 签名
+            # 3. 验证 detached 签名: 优先 gpgv(不信任签名者), 否则回退 gpg --verify
             import tempfile
             with tempfile.TemporaryDirectory() as home:
+                env = dict(os.environ, GNUPGHOME=home)
                 kr = home + "/keyring.gpg"
                 open(kr, "wb").write(keyring.read_bytes())
                 cf = home + "/checksum.txt"
                 sf = home + "/checksum.sig"
                 open(cf, "w", encoding="utf-8").write(checksum_text)
                 open(sf, "wb").write(sig)
-                r = subprocess.run(["gpgv", "--keyring", kr, sf, cf],
-                                   capture_output=True, env=dict(os.environ, GNUPGHOME=home))
+                if use_gpgv:
+                    cmd = ["gpgv", "--keyring", kr, sf, cf]
+                else:
+                    # gpg --verify 需显式禁用默认 keyring 以只信任导入的官方公钥
+                    cmd = ["gpg", "--no-default-keyring", "--keyring", kr,
+                           "--verify", sf, cf]
+                r = subprocess.run(cmd, capture_output=True, env=env)
                 if r.returncode == 0:
                     return "pass"
                 # 校验和文件自身可含嵌入式签名(如 Fedora CHECKSUM): 尝试用 gpg --verify 校验文件内签名
