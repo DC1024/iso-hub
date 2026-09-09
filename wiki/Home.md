@@ -52,5 +52,6 @@ docker compose up -d --build
 - **1.1.4** — webdav 配置自愈 + qBittorrent 前端输入框 bug 修复
 - **1.1.5** — webdav.yml 空文件自愈（判断"存在且非空"再重写）
 - **1.1.6** — 根治全站卡死：/api/distros 请求线程只读缓存、自定义源改后台子进程手动/定时刷新、移除前端 30s 轮询
+- **1.1.7** — 三个稳定性修复：① 停止下载卡死（RLock 可重入锁替换不可重入 Lock）② 手动勾选下载进度条不动（#TARGET 解析移出锁外）③ 订阅同步进度条不显示（订阅路径补打 #TARGET 标记 + running_task 从 targets 派生 downloads）
 
 若你看到的徽章数字小于最新 release，说明浏览器缓存了旧前端，请强制刷新（Ctrl+F5）。
