@@ -172,39 +172,182 @@ class LinuxDistributionDownloader:
             print(f"  从URL获取校验和失败: {e}")
             return None
     
+    # 指纹只保留十六进制字符, 归一化后应为 40 位(OpenPGP v4 fingerprint)
+    _FINGERPRINT_HEX = frozenset("0123456789ABCDEF")
+
+    def _normalize_fingerprints(self, raw: object) -> List[str]:
+        """把 gpg_key_fingerprint 字段归一化为 40 位大写十六进制指纹列表。
+
+        兼容三种写法: 未配置(None/空) / 单个字符串 / 字符串数组(发行版轮换密钥
+        或多位签名者时很有用)。无法归一化为 40 位的条目会被忽略并告警,
+        避免一条误配的指纹拖累整站拒绝下载。
+        """
+        if not raw:
+            return []
+        items = raw if isinstance(raw, (list, tuple)) else [raw]
+        result: List[str] = []
+        for item in items:
+            if not isinstance(item, str):
+                continue
+            fp = "".join(ch for ch in item.upper() if ch in self._FINGERPRINT_HEX)
+            if len(fp) == 40:
+                result.append(fp)
+            else:
+                print(f"  ⚠ 忽略非法指纹配置(需 40 位十六进制): {item!r}")
+        return result
+
+    @staticmethod
+    def _parse_colon_fingerprints(colons: str) -> List[str]:
+        """从 gpg --with-colons 输出里提取所有**主密钥**(pub)的指纹。
+
+        只取 pub 段后的 fpr 行: sub 段的 fpr 是子密钥指纹, 不参与锚定比对。
+        """
+        if isinstance(colons, bytes):  # 兼容未启用 text 模式的 gpg 输出
+            colons = colons.decode("utf-8", "replace")
+        fps: List[str] = []
+        is_primary: bool = False
+        for line in colons.splitlines():
+            fields = line.split(":")
+            if fields[0] in ("pub", "sub"):
+                is_primary = fields[0] == "pub"
+            elif fields[0] == "fpr" and is_primary and len(fields) > 9:
+                fps.append(fields[9].upper())
+        return fps
+
+    def _keyring_fingerprints(self, keyring: Path) -> List[str]:
+        """读取已缓存 keyring(或任意公钥文件)内主密钥的指纹。
+
+        用 gpg --show-keys 直接读文件: 不依赖 GNUPGHOME, 也不会改动用户 keyring。
+        """
+        try:
+            if not keyring.exists() or keyring.stat().st_size == 0:
+                return []
+        except OSError:
+            return []
+        r = subprocess.run(
+            ["gpg", "--batch", "--no-tty", "--with-colons", "--show-keys", str(keyring)],
+            capture_output=True, text=True, errors="replace")
+        if r.returncode != 0:
+            return []
+        return self._parse_colon_fingerprints(r.stdout)
+
+    def _list_imported_fingerprints(self, env: Dict[str, str]) -> List[str]:
+        """在指定 GNUPGHOME 下列出刚导入的主密钥指纹。"""
+        r = subprocess.run(["gpg", "--batch", "--with-colons", "--list-keys"],
+                           capture_output=True, text=True, errors="replace", env=env)
+        if r.returncode != 0:
+            return []
+        return self._parse_colon_fingerprints(r.stdout)
+
+    def _prepare_keyring(self, keyring: Path, gpg_key_url: str,
+                         expected: List[str]) -> str:
+        """确保 keyring 存在, 且其中的密钥指纹与预期一致(公钥指纹锚定)。
+
+        这是消除 TOFU(首次信任即信任)风险的关键: 无论公钥来自官网 HTTPS
+        还是 keyserver, 指纹不匹配就绝不写入缓存。
+
+        returns:
+          "ok"   可继续做签名校验
+          "skip" 无公钥地址/下载失败/解析失败(降级, 不阻塞)
+          "fail" 指纹不匹配(公钥源被污染 或 硬编码指纹已过时) -> 拒绝下载
+        """
+        try:
+            cached_ok = keyring.exists() and keyring.stat().st_size > 0
+        except OSError:
+            cached_ok = False
+
+        if cached_ok:
+            if not expected:
+                return "ok"  # 未配置指纹锚定: 沿用旧行为(只在首次拉取)
+            actual = self._keyring_fingerprints(keyring)
+            if any(fp in expected for fp in actual):
+                return "ok"
+            # 迁移路径: 旧缓存是无指纹校验时代写入的, 可能已被投毒, 必须重建
+            print(f"  ⚠ 已缓存 keyring 指纹不匹配, 删除并重建: {keyring}")
+            print(f"    预期指纹: {', '.join(expected)}")
+            print(f"    实际指纹: {', '.join(actual) or '(空)'}")
+            try:
+                keyring.unlink()
+            except OSError as e:
+                print(f"    删除旧 keyring 失败: {e}")
+                return "fail"
+
+        if not gpg_key_url:
+            return "skip"  # 未提供公钥获取地址, 官方无签名可验
+        try:
+            resp = requests.get(gpg_key_url, timeout=30)
+            resp.raise_for_status()
+            pubkey = resp.content  # 官方 .gpg 多为二进制, 必须用 content 而非 text
+        except Exception as e:  # noqa: BLE001
+            print(f"  获取官方公钥失败(降级): {e}")
+            return "skip"
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(os.environ, GNUPGHOME=home)
+            imp = subprocess.run(["gpg", "--batch", "--import"], input=pubkey,
+                                 capture_output=True, env=env)
+            if imp.returncode != 0:
+                # 公钥解析失败(如返回 HTML 错误页): 不阻塞下载
+                print("  公钥解析失败(降级): "
+                      f"{imp.stderr.decode('utf-8', 'replace')[:200]}")
+                return "skip"
+            actual = self._list_imported_fingerprints(env)
+            matched = [fp for fp in actual if fp in expected] if expected else []
+            if expected and not matched:
+                # 要么公钥源被污染(安全事件), 要么硬编码指纹已过时。
+                # 两者都不应静默降级到 SHA256 —— 那等于让防护失效。
+                print("  ⚠ 公钥指纹不匹配, 拒绝下载")
+                print(f"    公钥来源: {gpg_key_url}")
+                print(f"    预期指纹: {', '.join(expected)}")
+                print(f"    实际指纹: {', '.join(actual) or '(空)'}")
+                return "fail"  # 关键: 不写入缓存
+            if matched:
+                # 只导出命中指纹的密钥: keyring 里绝不留未锚定的密钥,
+                # 否则同一 keyring 里的"旁密钥"仍能放行伪造签名。
+                exp = subprocess.run(["gpg", "--batch", "--export"] + matched,
+                                     capture_output=True, env=env)
+                data = exp.stdout
+            else:
+                exp = subprocess.run(["gpg", "--batch", "--export"],
+                                     capture_output=True, env=env)
+                data = exp.stdout
+            if not data:
+                print("  公钥导出结果为空(降级)")
+                return "skip"
+            keyring.write_bytes(data)  # 缓存到持久卷
+            if expected:
+                print(f"  ✓ 公钥指纹锚定通过: {', '.join(matched)}")
+            return "ok"
+
     def verify_signature(self, checksum_text: str, sig_url: str, gpg_key_url: str,
-                         keyring_dir: Path) -> str:
+                         keyring_dir: Path,
+                         expected_fingerprints: Optional[object] = None) -> str:
         """验证 checksum 文件是否由官方私钥签名。
+
+        expected_fingerprints: 发行版条目里配置的 gpg_key_fingerprint
+          (字符串或字符串数组)。配置后即启用公钥指纹锚定, 消除 TOFU 风险;
+          未配置(None)时保持改动前的行为, 仅打印风险告警。
 
         returns:
           "pass"  签名验证通过(文件可信, 其内 SHA256 可放心比对 ISO)
-          "fail"  签名校验失败(文件可能被篡改, 应拒绝下载)
+          "fail"  签名校验失败/指纹不匹配(应拒绝下载)
           "skip"  官方无公钥/获取失败/无 gpg 环境(降级到 SHA256, 不阻塞)
         """
         try:
             import shutil
-            # 优先 gpgv(不信任签名者, 更适合校验); 缺失时回退 gpg --verify
+            # 导入/导出/指纹提取都依赖 gpg; gpgv 只负责校验签名
+            if shutil.which("gpg") is None:
+                return "skip"  # 无 gpg 环境, 降级
             use_gpgv = shutil.which("gpgv") is not None
-            if not use_gpgv and shutil.which("gpg") is None:
-                return "skip"  # 两者都无, 降级
             keyring_dir.mkdir(parents=True, exist_ok=True)
             keyring = keyring_dir / "iso-hub.gpg"
-            # 1. 首次使用: 从官方 keyserver 获取公钥并缓存到 data 卷
-            if not keyring.exists():
-                if not gpg_key_url:
-                    return "skip"  # 未提供公钥获取地址, 官方无签名可验
-                resp = requests.get(gpg_key_url, timeout=30)
-                resp.raise_for_status()
-                pubkey = resp.text
-                import tempfile
-                with tempfile.TemporaryDirectory() as home:
-                    env = dict(os.environ, GNUPGHOME=home)
-                    imp = subprocess.run(["gpg", "--import"], input=pubkey.encode(),
-                                         capture_output=True, env=env)
-                    if imp.returncode != 0:
-                        return "skip"  # 公钥解析失败, 不阻塞下载
-                    exp = subprocess.run(["gpg", "--export"], capture_output=True, env=env)
-                    keyring.write_bytes(exp.stdout)  # 缓存到持久卷
+            expected = self._normalize_fingerprints(expected_fingerprints)
+            if not expected:
+                print("  ⚠ 未配置公钥指纹锚定(gpg_key_fingerprint), 存在 TOFU 首次信任风险")
+            # 1. 准备可信 keyring: 指纹锚定 + 旧缓存迁移校验
+            state = self._prepare_keyring(keyring, gpg_key_url, expected)
+            if state != "ok":
+                return state
             # 2. 取签名文件(URL 或按惯例推导)
             if not sig_url:
                 return "skip"  # 无签名文件可验
@@ -253,8 +396,9 @@ class LinuxDistributionDownloader:
                              dist: Optional[dict] = None) -> tuple[bool, str]:
         """智能校验和验证，按优先级进行。
 
-        dist: 发行版条目(dict), 含可选的 gpg_verify/signature_url/gpg_key_url 字段。
-              配置了 gpg_verify 时, 先验证 checksum 文件的 GPG 签名, 再取其 SHA256 比对。
+        dist: 发行版条目(dict), 含可选的 gpg_verify/signature_url/gpg_key_url/
+              gpg_key_fingerprint 字段。配置了 gpg_verify 时, 先验证 checksum 文件的
+              GPG 签名(指纹锚定), 再取其 SHA256 比对。
         """
         filename = filepath.name
 
@@ -269,12 +413,13 @@ class LinuxDistributionDownloader:
             sig_url = dist.get("signature_url") or self._default_sig_url(checksum_url)
             keyring_dir = self.download_dir / "gpg-keyring"  # 缓存到 data 卷
             gpg_status = self.verify_signature(checksum_text, sig_url,
-                                               dist.get("gpg_key_url", ""), keyring_dir)
+                                               dist.get("gpg_key_url", ""), keyring_dir,
+                                               dist.get("gpg_key_fingerprint"))
             if gpg_status == "pass":
                 print("  ✓ GPG 签名验证通过: checksum 文件由官方私钥签名, 可信")
             elif gpg_status == "fail":
-                print("  ⚠ GPG 签名校验失败: checksum 文件可能被篡改, 拒绝下载")
-                return False, "GPG 签名校验失败(checksum 文件不可信)"
+                print("  ⚠ GPG 校验未通过: checksum 文件可能被篡改, 或公钥指纹不匹配, 拒绝下载")
+                return False, "GPG 校验未通过(签名无效或公钥指纹不匹配, checksum 文件不可信)"
             else:
                 print("  - GPG 签名验证跳过(官方无公钥/获取失败), 降级到 SHA256")
 

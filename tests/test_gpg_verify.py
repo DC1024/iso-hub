@@ -5,10 +5,20 @@
 - 无 gpg 环境 / 公钥获取失败 -> 降级 skip, 不阻塞下载
 - 签名校验失败 -> 拒绝(fail)
 - 无签名发行版(CentOS/Deepin/Proxmox)行为完全不变
+
+以及公钥指纹锚定(消除 TOFU 风险):
+- 指纹匹配 -> pass 且只缓存命中指纹的密钥
+- 指纹不匹配 -> fail, 且不写入缓存
+- 已存在但被污染的旧 keyring -> 被检测并重建(迁移路径)
+- 未配置指纹 -> 不阻塞, 打印 TOFU 告警, 行为与改动前一致
 """
 
+import contextlib
+import io
 import json
+import subprocess as _subprocess
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -180,6 +190,337 @@ class TestDistributionsJsonGpgFields(unittest.TestCase):
         for d in self.data["distributions"]:
             for key in ("distribution", "type", "download_url"):
                 self.assertIn(key, d)
+
+    def test_every_signed_entry_has_fingerprint(self):
+        """配置了 gpg_verify 就必须配置指纹锚定, 否则仍是 TOFU。"""
+        for d in self.data["distributions"]:
+            if d.get("gpg_verify"):
+                self.assertTrue(
+                    d.get("gpg_key_fingerprint"),
+                    f"{d['distribution']} {d.get('download_url')} 配置了 gpg_verify "
+                    "却缺少 gpg_key_fingerprint")
+
+    def test_fingerprints_are_40_hex(self):
+        """distributions.json 里每条指纹都必须是 40 位十六进制。"""
+        helper = dl.LinuxDistributionDownloader.__new__(dl.LinuxDistributionDownloader)
+        for d in self.data["distributions"]:
+            raw = d.get("gpg_key_fingerprint")
+            if not raw:
+                continue
+            fps = helper._normalize_fingerprints(raw)
+            self.assertTrue(fps, f"{d['distribution']} 指纹非法: {raw!r}")
+            for fp in fps:
+                self.assertEqual(len(fp), 40, f"{d['distribution']} 指纹长度错误: {fp}")
+                self.assertTrue(all(c in "0123456789ABCDEF" for c in fp),
+                                f"{d['distribution']} 指纹含非十六进制字符: {fp}")
+
+    def test_unsigned_distros_have_no_fingerprint(self):
+        """无官方签名的发行版不应有指纹字段。"""
+        for name in ("CentOS", "Deepin", "Proxmox"):
+            for d in [x for x in self.data["distributions"] if x["distribution"] == name]:
+                self.assertNotIn("gpg_key_fingerprint", d)
+
+    def test_all_gpg_key_urls_are_https(self):
+        """公钥必须经 HTTPS 传输(明文 HTTP 可被中间人替换为任意密钥)。"""
+        for d in self.data["distributions"]:
+            url = d.get("gpg_key_url")
+            if url:
+                self.assertTrue(url.startswith("https://"),
+                                f"{d['distribution']} 公钥地址非 HTTPS: {url}")
+
+
+# ---------------------------------------------------------------------------
+# 公钥指纹锚定(TOFU 防护)相关测试
+# ---------------------------------------------------------------------------
+
+# 真实发行版指纹(Arch 发布密钥), 仅作测试数据使用
+GOOD_FP = "3E80CA1A8B89F69CBA57D98A76A5EF9054449A5C"
+ROTATED_FP = "C6E7F081CF80E13146676E88829B606631645531"
+UNRELATED_FP = "1111111111111111111111111111111111111111"
+BAD_FP = "0000000000000000000000000000000000000000"
+
+KEY_URL = "https://example.org/official-keyring.gpg"
+SIG_URL = "https://example.org/SHA256SUMS.gpg"
+
+_KEYRING_MAGIC = b"ISO-HUB-FAKE-KEYRING:"
+
+
+def _colons(fingerprints):
+    """构造 gpg --with-colons 输出(pub 行 + 紧随其后的 fpr 行)。"""
+    lines = []
+    for fp in fingerprints:
+        lines.append("pub:u:4096:1:" + fp[-16:] + ":::::::::::::::::")
+        lines.append("fpr:::::::::" + fp + ":")
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _encode_keyring(fingerprints):
+    """把"已导出密钥"编码成可反解的字节, 模拟 gpg --export 的产物。"""
+    return _KEYRING_MAGIC + ",".join(fingerprints).encode("utf-8")
+
+
+def _decode_keyring(data: bytes):
+    """反解 _encode_keyring, 供假的 --show-keys 读取缓存 keyring。"""
+    if not data.startswith(_KEYRING_MAGIC):
+        return []
+    return [fp for fp in data[len(_KEYRING_MAGIC):].decode("utf-8").split(",") if fp]
+
+
+def _completed(returncode=0, stdout=b"", stderr=b""):
+    """构造 subprocess.CompletedProcess。"""
+    return _subprocess.CompletedProcess(args=[], returncode=returncode,
+                                        stdout=stdout, stderr=stderr)
+
+
+def _fake_gpg(imported):
+    """返回一个假的 subprocess.run, 模拟 gpg 的 import/list/export/show-keys 与 gpgv。"""
+    def _run(args, **kwargs):
+        cmd = list(args)
+        # 真实 gpg 在 text=True 时返回 str, 否则返回 bytes; 这里保持一致
+        def _out(payload: bytes):
+            return payload.decode("utf-8") if kwargs.get("text") else payload
+
+        if cmd[0] == "gpgv":
+            return _completed(0, b"", b"Good signature")
+        if cmd[0] != "gpg":
+            return _completed(1, b"", b"unexpected command")
+        if "--show-keys" in cmd:
+            path = Path(cmd[cmd.index("--show-keys") + 1])
+            data = path.read_bytes() if path.exists() else b""
+            return _completed(0, _out(_colons(_decode_keyring(data))), b"")
+        if "--import" in cmd:
+            return _completed(0, b"", b"imported")
+        if "--list-keys" in cmd:
+            return _completed(0, _out(_colons(imported)), b"")
+        if "--export" in cmd:
+            selected = [a for a in cmd[cmd.index("--export") + 1:] if not a.startswith("-")]
+            return _completed(0, _encode_keyring(selected or imported), b"")
+        if "--verify" in cmd:
+            return _completed(0, b"", b"Good signature")
+        return _completed(1, b"", b"unexpected gpg subcommand")
+    return _run
+
+
+class _FakeResponse:
+    """最小 requests.Response 替身: 只需 content / text / raise_for_status。"""
+
+    def __init__(self, content: bytes):
+        self.content = content
+        self.text = content.decode("utf-8", "replace")
+
+    def raise_for_status(self):
+        return None
+
+
+def _fake_requests_get(url, *args, **kwargs):
+    if url == KEY_URL:
+        return _FakeResponse(b"FAKE-OFFICIAL-PUBKEY")
+    if url == SIG_URL:
+        return _FakeResponse(b"FAKE-DETACHED-SIGNATURE")
+    raise AssertionError(f"未预期的请求: {url}")
+
+
+class TestFingerprintPinning(unittest.TestCase):
+    """公钥指纹锚定: 指纹不符即拒绝, 且绝不写入持久缓存。"""
+
+    def setUp(self):
+        self.d = dl.LinuxDistributionDownloader.__new__(dl.LinuxDistributionDownloader)
+        self.tmp = Path(tempfile.mkdtemp())
+        self.keyring = self.tmp / "iso-hub.gpg"
+
+    def _call(self, expected, imported, stdout_buffer=None):
+        """在假 gpg / 假网络环境下调用 verify_signature。"""
+        ctx = contextlib.redirect_stdout(stdout_buffer) if stdout_buffer is not None \
+            else contextlib.nullcontext()
+        with patch("shutil.which", return_value="/usr/bin/gpg"), \
+             patch.object(dl.subprocess, "run", side_effect=_fake_gpg(imported)), \
+             patch.object(dl.requests, "get", side_effect=_fake_requests_get), ctx:
+            return self.d.verify_signature("checksum text", SIG_URL, KEY_URL,
+                                           self.tmp, expected)
+
+    def test_fingerprint_match_passes_and_caches_only_pinned_key(self):
+        """指纹匹配 -> pass; keyring 只留命中指纹的密钥, 不留"旁密钥"。"""
+        status = self._call(GOOD_FP, [GOOD_FP, UNRELATED_FP])
+        self.assertEqual(status, "pass")
+        self.assertTrue(self.keyring.exists())
+        self.assertEqual(_decode_keyring(self.keyring.read_bytes()), [GOOD_FP])
+
+    def test_fingerprint_mismatch_fails_and_never_writes_cache(self):
+        """指纹不匹配 -> fail(拒绝下载), 且不写入缓存(否则毒 key 被永久固化)。"""
+        status = self._call(GOOD_FP, [BAD_FP])
+        self.assertEqual(status, "fail")
+        self.assertFalse(self.keyring.exists(), "指纹不匹配时不应创建/保留缓存")
+
+    def test_mismatch_logs_expected_and_actual_fingerprints(self):
+        """失败日志必须同时打印预期与实际指纹, 便于定位是投毒还是配置过时。"""
+        buf = io.StringIO()
+        status = self._call(GOOD_FP, [BAD_FP], stdout_buffer=buf)
+        self.assertEqual(status, "fail")
+        log = buf.getvalue()
+        self.assertIn(GOOD_FP, log)
+        self.assertIn(BAD_FP, log)
+
+    def test_poisoned_cached_keyring_is_detected_and_rebuilt(self):
+        """迁移路径: 无指纹校验时代写入的旧缓存会被校验并重建。"""
+        self.keyring.write_bytes(_encode_keyring([BAD_FP]))
+        status = self._call(GOOD_FP, [GOOD_FP])
+        self.assertEqual(status, "pass")
+        self.assertEqual(_decode_keyring(self.keyring.read_bytes()), [GOOD_FP])
+
+    def test_valid_cached_keyring_is_reused_without_refetch(self):
+        """缓存指纹命中 -> 直接复用, 不再拉取公钥。"""
+        self.keyring.write_bytes(_encode_keyring([GOOD_FP]))
+        seen = []
+
+        def _spy(url, *args, **kwargs):
+            seen.append(url)
+            return _fake_requests_get(url, *args, **kwargs)
+
+        with patch("shutil.which", return_value="/usr/bin/gpg"), \
+             patch.object(dl.subprocess, "run", side_effect=_fake_gpg([GOOD_FP])), \
+             patch.object(dl.requests, "get", side_effect=_spy):
+            status = self.d.verify_signature("t", SIG_URL, KEY_URL, self.tmp, GOOD_FP)
+        self.assertEqual(status, "pass")
+        self.assertNotIn(KEY_URL, seen)
+        self.assertIn(SIG_URL, seen)
+
+    def test_missing_fingerprint_warns_and_keeps_legacy_behavior(self):
+        """未配置指纹 -> 不阻塞, 打印 TOFU 告警, 行为与改动前一致。"""
+        buf = io.StringIO()
+        status = self._call(None, [GOOD_FP, UNRELATED_FP], stdout_buffer=buf)
+        self.assertEqual(status, "pass")
+        self.assertIn("TOFU", buf.getvalue())
+        # 未锚定时全量导出(与改动前一致)
+        self.assertEqual(_decode_keyring(self.keyring.read_bytes()),
+                         [GOOD_FP, UNRELATED_FP])
+
+    def test_invalid_fingerprint_config_is_ignored_not_blocking(self):
+        """误配的非法指纹只被忽略并告警, 不应导致拒绝下载。"""
+        buf = io.StringIO()
+        status = self._call("NOT-A-FINGERPRINT", [GOOD_FP], stdout_buffer=buf)
+        self.assertEqual(status, "pass")
+        self.assertIn("非法指纹", buf.getvalue())
+
+    def test_multiple_fingerprints_any_match_is_enough(self):
+        """支持多个合法指纹(密钥轮换/多位签名者), 命中任一即可。"""
+        status = self._call([BAD_FP, GOOD_FP], [GOOD_FP, UNRELATED_FP])
+        self.assertEqual(status, "pass")
+        self.assertEqual(_decode_keyring(self.keyring.read_bytes()), [GOOD_FP])
+
+    def test_rotated_key_accepted_by_second_fingerprint(self):
+        """发行版轮换密钥后, 新指纹应在同一条配置里通过。"""
+        status = self._call([BAD_FP, ROTATED_FP], [ROTATED_FP])
+        self.assertEqual(status, "pass")
+        self.assertEqual(_decode_keyring(self.keyring.read_bytes()), [ROTATED_FP])
+
+    def test_empty_cached_keyring_is_rebuilt(self):
+        """0 字节的坏缓存(旧代码可能写出)必须被重建, 而不是永久失效。"""
+        self.keyring.write_bytes(b"")
+        status = self._call(GOOD_FP, [GOOD_FP])
+        self.assertEqual(status, "pass")
+        self.assertEqual(_decode_keyring(self.keyring.read_bytes()), [GOOD_FP])
+
+
+class TestChecksumSmartFingerprintWiring(unittest.TestCase):
+    """verify_checksum_smart 必须把指纹透传给 verify_signature。"""
+
+    def setUp(self):
+        self.d = dl.LinuxDistributionDownloader.__new__(dl.LinuxDistributionDownloader)
+        self.d.download_dir = Path(tempfile.mkdtemp())
+
+    @patch.object(dl.LinuxDistributionDownloader, "get_checksum_from_url")
+    @patch.object(dl.LinuxDistributionDownloader, "verify_checksum")
+    def test_fingerprint_is_forwarded(self, mock_vc, mock_gc):
+        mock_gc.return_value = "a" * 64
+        mock_vc.return_value = True
+        dist = {"distribution": "Ubuntu", "gpg_verify": "checksum",
+                "gpg_key_url": KEY_URL, "signature_url": SIG_URL,
+                "gpg_key_fingerprint": GOOD_FP}
+        with patch.object(dl.LinuxDistributionDownloader, "verify_signature",
+                          return_value="pass") as mock_sig:
+            ok, _ = self.d.verify_checksum_smart(Path("/tmp/x.iso"),
+                                                 "http://c", "", dist=dist)
+        self.assertTrue(ok)
+        self.assertEqual(mock_sig.call_args[0][4], GOOD_FP)
+
+    @patch.object(dl.LinuxDistributionDownloader, "get_checksum_from_url")
+    @patch.object(dl.LinuxDistributionDownloader, "verify_checksum")
+    def test_absent_fingerprint_forwards_none(self, mock_vc, mock_gc):
+        """旧条目没有指纹字段时透传 None, 保证向后兼容。"""
+        mock_gc.return_value = "b" * 64
+        mock_vc.return_value = True
+        dist = {"distribution": "Ubuntu", "gpg_verify": "checksum",
+                "gpg_key_url": KEY_URL, "signature_url": SIG_URL}
+        with patch.object(dl.LinuxDistributionDownloader, "verify_signature",
+                          return_value="skip") as mock_sig:
+            ok, _ = self.d.verify_checksum_smart(Path("/tmp/x.iso"),
+                                                 "http://c", "", dist=dist)
+        self.assertTrue(ok)  # skip 降级到 SHA256
+        self.assertIsNone(mock_sig.call_args[0][4])
+
+
+class MigrationDistributionsTest(unittest.TestCase):
+    """web/app.py 的配置遮蔽迁移函数(_migrate_distribution_fields)单元测试。
+
+    覆盖: 旧副本补齐缺失字段 / 用户自定义条目保留 / 已有字段值不覆盖 /
+    幂等(二次运行不重写)。用 AST 提取函数源码, 在隔离命名空间执行, 不触发 app 启动。
+    """
+
+    @staticmethod
+    def _extract_migrate():
+        import ast
+        src = (REPO_ROOT / "web" / "app.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        for n in ast.walk(tree):
+            if isinstance(n, ast.FunctionDef) and n.name == "_migrate_distribution_fields":
+                return ast.get_source_segment(src, n)
+        raise AssertionError("web/app.py 未找到 _migrate_distribution_fields")
+
+    def _run_migrate(self, data_dir: Path, builtin: dict):
+        fn_src = self._extract_migrate()
+        ns = {
+            "json": json,
+            "DEFAULT_JSON": data_dir / "_builtin.json",
+            "JSON_FILE": data_dir / "distributions.json",
+            "log": lambda m: None,
+        }
+        exec(compile(fn_src, "<migrate>", "exec"), ns)  # noqa: S102
+        ns["_migrate_distribution_fields"]()
+        return json.loads((data_dir / "distributions.json").read_text(encoding="utf-8"))
+
+    def test_migration_backfills_missing_fields_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            builtin = json.loads((REPO_ROOT / "iso_download" / "distributions.json")
+                                 .read_text(encoding="utf-8"))
+            (d / "_builtin.json").write_text(json.dumps(builtin), encoding="utf-8")
+            ubuntu_url = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/ubuntu-26.04-desktop-amd64.iso"
+            old = {"distributions": [
+                {"distribution": "Ubuntu", "type": "linux", "download_url": ubuntu_url,
+                 "checksum_url": "cu", "checksum": ""},
+                {"distribution": "MyDistro", "type": "linux", "download_url": "http://c/x.iso",
+                 "checksum_url": "cc", "checksum": "", "myfield": "keep"},
+            ]}
+            (d / "distributions.json").write_text(json.dumps(old), encoding="utf-8")
+            res = self._run_migrate(d, builtin)
+            ub = next(e for e in res["distributions"]
+                      if e["download_url"] == ubuntu_url)
+            cust = next(e for e in res["distributions"]
+                        if e["distribution"] == "MyDistro")
+            # 补齐 gpg 字段
+            self.assertEqual(ub.get("gpg_verify"), "checksum")
+            self.assertEqual(ub.get("gpg_key_fingerprint"),
+                             "843938DF228D22F7B3742BC0D94AA3F0EFE21092")
+            # 已有字段不被覆盖
+            self.assertEqual(ub.get("checksum"), "")
+            # 用户自定义条目完整保留, 不误补
+            self.assertEqual(cust.get("myfield"), "keep")
+            self.assertIsNone(cust.get("gpg_verify"))
+            # 幂等: 二次运行不重写
+            m1 = (d / "distributions.json").stat().st_mtime
+            self._run_migrate(d, builtin)
+            m2 = (d / "distributions.json").stat().st_mtime
+            self.assertEqual(m1, m2)
 
 
 if __name__ == "__main__":

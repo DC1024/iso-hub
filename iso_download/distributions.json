@@ -7,7 +7,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.01.01/sha256sums.txt",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x4AA4767BC9C1F2EF",
+      "gpg_key_url": "https://openpgpkey.archlinux.org/.well-known/openpgpkey/archlinux.org/hu/9hy3wi4ewwiicomnjmhewifn6d1gi87i",
+      "gpg_key_fingerprint": "3E80CA1A8B89F69CBA57D98A76A5EF9054449A5C",
       "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.01.01/sha256sums.txt.sig"
     },
     {
@@ -17,7 +18,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.02.01/sha256sums.txt",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x4AA4767BC9C1F2EF",
+      "gpg_key_url": "https://openpgpkey.archlinux.org/.well-known/openpgpkey/archlinux.org/hu/9hy3wi4ewwiicomnjmhewifn6d1gi87i",
+      "gpg_key_fingerprint": "3E80CA1A8B89F69CBA57D98A76A5EF9054449A5C",
       "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.02.01/sha256sums.txt.sig"
     },
     {
@@ -27,7 +29,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.03.01/sha256sums.txt",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x4AA4767BC9C1F2EF",
+      "gpg_key_url": "https://openpgpkey.archlinux.org/.well-known/openpgpkey/archlinux.org/hu/9hy3wi4ewwiicomnjmhewifn6d1gi87i",
+      "gpg_key_fingerprint": "3E80CA1A8B89F69CBA57D98A76A5EF9054449A5C",
       "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.03.01/sha256sums.txt.sig"
     },
     {
@@ -65,7 +68,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Everything/x86_64/iso/Fedora-Everything-42-1.1-x86_64-CHECKSUM",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.fedoraproject.org/pks/lookup?op=get&search=0x53DE98467A2EADA1"
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB0F4950458F69E1150C6C5EDC8AC4916105EF944",
+      "gpg_key_fingerprint": "B0F4950458F69E1150C6C5EDC8AC4916105EF944"
     },
     {
       "distribution": "Fedora",
@@ -74,7 +78,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Workstation/x86_64/iso/Fedora-Workstation-42-1.1-x86_64-CHECKSUM",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.fedoraproject.org/pks/lookup?op=get&search=0x53DE98467A2EADA1"
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB0F4950458F69E1150C6C5EDC8AC4916105EF944",
+      "gpg_key_fingerprint": "B0F4950458F69E1150C6C5EDC8AC4916105EF944"
     },
     {
       "distribution": "Fedora",
@@ -83,7 +88,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Everything/x86_64/iso/Fedora-Everything-43-1.6-x86_64-CHECKSUM",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.fedoraproject.org/pks/lookup?op=get&search=0x53DE98467A2EADA1"
+      "gpg_key_url": "https://fedoraproject.org/fedora.gpg",
+      "gpg_key_fingerprint": "C6E7F081CF80E13146676E88829B606631645531"
     },
     {
       "distribution": "Fedora",
@@ -92,7 +98,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Workstation/x86_64/iso/Fedora-Workstation-43-1.6-x86_64-CHECKSUM",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.fedoraproject.org/pks/lookup?op=get&search=0x53DE98467A2EADA1"
+      "gpg_key_url": "https://fedoraproject.org/fedora.gpg",
+      "gpg_key_fingerprint": "C6E7F081CF80E13146676E88829B606631645531"
     },
     {
       "distribution": "Proxmox",
@@ -122,7 +129,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "gpg_key_url": "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg",
+      "gpg_key_fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092",
       "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS.gpg"
     },
     {
@@ -132,7 +140,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "gpg_key_url": "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg",
+      "gpg_key_fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092",
       "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS.gpg"
     },
     {
@@ -142,7 +151,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "gpg_key_url": "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg",
+      "gpg_key_fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092",
       "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS.gpg"
     },
     {
@@ -152,7 +162,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "gpg_key_url": "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg",
+      "gpg_key_fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092",
       "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS.gpg"
     },
     {
@@ -162,7 +173,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "gpg_key_url": "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg",
+      "gpg_key_fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092",
       "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS.gpg"
     },
     {
@@ -172,7 +184,8 @@
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS",
       "checksum": "",
       "gpg_verify": "checksum",
-      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "gpg_key_url": "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg",
+      "gpg_key_fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092",
       "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS.gpg"
     }
   ]

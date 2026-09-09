@@ -100,6 +100,56 @@ if not JSON_FILE.exists() and DEFAULT_JSON.exists():
     import shutil
     shutil.copyfile(DEFAULT_JSON, JSON_FILE)
 
+
+def _migrate_distribution_fields() -> None:
+    """字段级增量补齐 /data/distributions.json 中缺失的配置字段。
+
+    背景: 旧版本只在 data 副本"不存在"时才从镜像内置配置复制一次, 此后镜像升级
+    新增的字段(如 gpg_verify/gpg_key_url/gpg_key_fingerprint)永远同步不进运行时,
+    导致这些功能在已部署环境上静默失效。
+
+    本函数每次启动调用: 以 download_url 为条目标识, 把内置配置里"存在而 data 副本
+    缺失"的字段逐个补齐。只补缺失, 绝不覆盖 data 副本已有值, 也绝不删除用户
+    自定义条目 —— 保证幂等, 不破坏用户数据。
+    """
+    try:
+        default = json.loads(DEFAULT_JSON.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return  # 内置配置读不到, 无从迁移
+    builtin = default.get("distributions", [])
+    if not builtin:
+        return
+    try:
+        data = json.loads(JSON_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    data_list = data.setdefault("distributions", [])
+    # 用 download_url 建立内置索引(避免同名发行版多条目错配)
+    builtin_index = {e.get("download_url"): e for e in builtin if e.get("download_url")}
+    changed_entries = 0
+    changed_fields = 0
+    for entry in data_list:
+        src = builtin_index.get(entry.get("download_url"))
+        if not src:
+            continue  # 用户自定义条目, 完整保留
+        added = 0
+        for field, value in src.items():
+            if field in entry:
+                continue  # data 副本已有该字段, 不覆盖
+            entry[field] = value  # 只补缺失字段
+            added += 1
+        if added:
+            changed_entries += 1
+            changed_fields += added
+    if changed_fields:
+        tmp = JSON_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(JSON_FILE)
+        log(f"配置迁移: 补齐 {changed_entries} 个条目的 {changed_fields} 个缺失字段 -> {JSON_FILE}")
+
+
+_migrate_distribution_fields()
+
 # --------------------------------------------------------------------------- state
 # D1 修复: 用 RLock 代替 Lock —— stop_task() 在 with _lock: 块内调用 log(), 而 log()
 # 内部也要 with _lock:, 普通 Lock 在同一线程内二次 acquire 会永久死锁, 占满 waitress 线程。
