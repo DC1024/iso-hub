@@ -22,6 +22,8 @@ import sys
 import types
 from pathlib import Path
 
+import requests
+
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 
 
@@ -177,6 +179,23 @@ def main() -> None:
         keep_entries = pool[:keep]
         keep_fnames = {fname_of(e) for e in keep_entries}
         print(f"待下载: {len(keep_entries)} 个 -> {[fname_of(e) for e in keep_entries]}")
+
+        # 下载前先 HEAD 探测每个待下载条目的目标文件大小, 打印 #TARGET 哨兵行。
+        # 后端 web/app.py 拦截该行填充 task["targets"](path->字节数),
+        # 再结合 running_task() 的 stat(size) 计算下载进度百分比。
+        # 与手动勾选下载(web/iso_runner.py)走同一套行协议, 保持前端进度条一致。
+        # 真实下载路径 = download_dir/typ/name/<URL文件名>, 与 download_linux.py 一致。
+        for _e in keep_entries:
+            _fn = _e.get("download_url", "").rstrip("/").rsplit("/", 1)[-1]
+            _fp = target / _fn
+            _sz = 0
+            try:
+                _r = requests.head(_e["download_url"], timeout=(10, 30), allow_redirects=True)
+                _r.raise_for_status()
+                _sz = int(_r.headers.get("Content-Length", 0) or 0)
+            except Exception:  # noqa: BLE001
+                _sz = 0
+            print(f"#TARGET {_fp} {_sz}", flush=True)
 
         # 下载最新 N 个
         downloader = LinuxDistributionDownloader(args.json_file, str(download_dir))

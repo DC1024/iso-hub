@@ -1192,6 +1192,10 @@ def running_task() -> dict | None:
             return None
         dl = list(task.get("downloads", []))
         targets = dict(task.get("targets", {}))
+        # 订阅同步等场景 downloads 可能为空但 targets 已由 #TARGET 填充:
+        # 从 targets 派生 downloads, 让前端进度条能显示
+        if not dl and targets:
+            dl = [{"filename": str(Path(p).name), "path": str(p)} for p in targets]
         info = {
             "kind": task["kind"],
             "title": task["title"],
