@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """qBittorrent 默认禁用改造的业务逻辑单元测试。"""
 
+import inspect
 import json
 import sys
 import tempfile
@@ -166,6 +167,32 @@ class TestQbPasswordHash(unittest.TestCase):
         salt_b64, key_b64 = inner.split(":")
         self.assertGreater(len(salt_b64), 0)
         self.assertGreater(len(key_b64), 0)
+
+
+class TestLockReentrant(unittest.TestCase):
+    """回归: 锁必须是可重入 RLock, 否则 stop_task 在持锁内调 log() 会死锁,
+    占满 waitress 8 线程, 队列飙升、应用日志一条打不出来。"""
+
+    def test_stop_task_log_inside_lock_does_not_deadlock(self):
+        """_lock 为 RLock 时, 持锁线程内调 log() 可重入, 不永久阻塞。"""
+        self.assertIsInstance(app._lock, type(app.threading.RLock()))
+        with app._lock:
+            # 持锁内调 log()——旧实现普通 Lock 在此永久死锁
+            app.log("[测试] 持锁内写日志(可重入)")
+        # 若死锁此处永不返回, 测试超时失败
+        self.assertTrue(True)
+
+    def test_running_task_stat_outside_lock(self):
+        """running_task 的磁盘 IO 不得持 _lock 进行(防止慢盘阻塞日志/停止)。"""
+        import ast
+        src = inspect.getsource(app.running_task)
+        # 用 AST 定位 with _lock 节点, 只取该节点的 body 源码(不含函数级注释), 断言无可执行磁盘 IO
+        tree = ast.parse(src)
+        fn = tree.body[0]
+        with_node = next(n for n in ast.walk(fn) if isinstance(n, ast.With))
+        body_src = ast.get_source_segment(src, with_node) or ""
+        for kw in ("stat", "exists", "for d in dl", "p.iterdir", "os.scandir"):
+            self.assertNotIn(kw, body_src, f"锁内不应出现 {kw}")
 
 
 if __name__ == "__main__":

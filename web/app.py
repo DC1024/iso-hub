@@ -101,7 +101,9 @@ if not JSON_FILE.exists() and DEFAULT_JSON.exists():
     shutil.copyfile(DEFAULT_JSON, JSON_FILE)
 
 # --------------------------------------------------------------------------- state
-_lock = threading.Lock()
+# D1 修复: 用 RLock 代替 Lock —— stop_task() 在 with _lock: 块内调用 log(), 而 log()
+# 内部也要 with _lock:, 普通 Lock 在同一线程内二次 acquire 会永久死锁, 占满 waitress 线程。
+_lock = threading.RLock()
 _log_lines = deque(maxlen=4000)
 _log_seq = 0
 task = {"proc": None}
@@ -1177,9 +1179,15 @@ def schedule_auto_sync() -> None:
 
 
 def running_task() -> dict | None:
+    # D2 修复: 绝不把阻塞磁盘 IO(Path.stat/p.exists) 放在 _lock 内。
+    # 旧实现 with _lock: 内逐文件 stat(), 在慢盘/网络盘或目标文件正被写入时,
+    # 会把 /api/logs、/api/stop 和 _spawn_worker 的 log() 全卡在同一把锁上,
+    # 叠加锁内死锁即造成 waitress 线程耗尽、队列飙升、应用日志一条打不出来。
     with _lock:
         if not task.get("proc"):
             return None
+        dl = list(task.get("downloads", []))
+        targets = dict(task.get("targets", {}))
         info = {
             "kind": task["kind"],
             "title": task["title"],
@@ -1187,17 +1195,17 @@ def running_task() -> dict | None:
             "cancelled": task["cancelled"],
             "downloads": [],
         }
-        # 实时汇报每个目标文件当前大小（含正在写入的）
-        for d in task.get("downloads", []):
-            p = Path(d["path"])
-            size = 0
-            try:
-                size = p.stat().st_size if p.exists() else 0
-            except OSError:
-                pass
-            info["downloads"].append({"filename": d["filename"], "path": str(p),
-                                      "size": size, "total": task.get("targets", {}).get(str(p), 0)})
-        return info
+    # 锁外做磁盘 IO(每文件一次 stat, 失败按 0 处理)
+    for d in dl:
+        p = Path(d["path"])
+        size = 0
+        try:
+            size = p.stat().st_size if p.exists() else 0
+        except OSError:
+            pass
+        info["downloads"].append({"filename": d["filename"], "path": str(p),
+                                  "size": size, "total": targets.get(str(p), 0)})
+    return info
 
 
 def stop_task() -> bool:
