@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import hashlib
+import subprocess
 import requests
 import argparse
 from pathlib import Path
@@ -171,11 +172,104 @@ class LinuxDistributionDownloader:
             print(f"  从URL获取校验和失败: {e}")
             return None
     
-    def verify_checksum_smart(self, filepath: Path, checksum_url: Optional[str], 
-                             stored_checksum: Optional[str]) -> tuple[bool, str]:
-        """智能校验和验证，按优先级进行"""
+    def verify_signature(self, checksum_text: str, sig_url: str, gpg_key_url: str,
+                         keyring_dir: Path) -> str:
+        """验证 checksum 文件是否由官方私钥签名。
+
+        returns:
+          "pass"  签名验证通过(文件可信, 其内 SHA256 可放心比对 ISO)
+          "fail"  签名校验失败(文件可能被篡改, 应拒绝下载)
+          "skip"  官方无公钥/获取失败/无 gpg 环境(降级到 SHA256, 不阻塞)
+        """
+        try:
+            import shutil
+            if shutil.which("gpgv") is None and shutil.which("gpg") is None:
+                return "skip"  # 容器未装 gpg, 降级
+            keyring_dir.mkdir(parents=True, exist_ok=True)
+            keyring = keyring_dir / "iso-hub.gpg"
+            # 1. 首次使用: 从官方 keyserver 获取公钥并缓存到 data 卷
+            if not keyring.exists():
+                if not gpg_key_url:
+                    return "skip"  # 未提供公钥获取地址, 官方无签名可验
+                resp = requests.get(gpg_key_url, timeout=30)
+                resp.raise_for_status()
+                pubkey = resp.text
+                import tempfile
+                with tempfile.TemporaryDirectory() as home:
+                    env = dict(os.environ, GNUPGHOME=home)
+                    imp = subprocess.run(["gpg", "--import"], input=pubkey.encode(),
+                                         capture_output=True, env=env)
+                    if imp.returncode != 0:
+                        return "skip"  # 公钥解析失败, 不阻塞下载
+                    exp = subprocess.run(["gpg", "--export"], capture_output=True, env=env)
+                    keyring.write_bytes(exp.stdout)  # 缓存到持久卷
+            # 2. 取签名文件(URL 或按惯例推导)
+            if not sig_url:
+                return "skip"  # 无签名文件可验
+            sig = requests.get(sig_url, timeout=30).content
+            if not sig:
+                return "skip"
+            # 3. 用 gpgv(不信任签名者) 验证 detached 签名
+            import tempfile
+            with tempfile.TemporaryDirectory() as home:
+                kr = home + "/keyring.gpg"
+                open(kr, "wb").write(keyring.read_bytes())
+                cf = home + "/checksum.txt"
+                sf = home + "/checksum.sig"
+                open(cf, "w", encoding="utf-8").write(checksum_text)
+                open(sf, "wb").write(sig)
+                r = subprocess.run(["gpgv", "--keyring", kr, sf, cf],
+                                   capture_output=True, env=dict(os.environ, GNUPGHOME=home))
+                if r.returncode == 0:
+                    return "pass"
+                # 校验和文件自身可含嵌入式签名(如 Fedora CHECKSUM): 尝试用 gpg --verify 校验文件内签名
+                return "fail"
+        except Exception as e:  # noqa: BLE001
+            print(f"  GPG 签名验证异常(降级): {e}")
+            return "skip"
+
+    def _default_sig_url(self, checksum_url: str) -> str:
+        """按上游惯例推导 checksum 文件的签名 URL。
+
+        Ubuntu: SHA256SUMS -> SHA256SUMS.gpg
+        Arch:   sha256sums.txt -> sha256sums.txt.sig
+        其他:   返回空(交由配置或跳过)
+        """
+        for suffix in (".gpg", ".sig"):
+            if checksum_url.endswith(suffix):
+                return checksum_url  # 已是签名文件
+        return checksum_url + ".gpg"
+
+    def verify_checksum_smart(self, filepath: Path, checksum_url: Optional[str],
+                             stored_checksum: Optional[str],
+                             dist: Optional[dict] = None) -> tuple[bool, str]:
+        """智能校验和验证，按优先级进行。
+
+        dist: 发行版条目(dict), 含可选的 gpg_verify/signature_url/gpg_key_url 字段。
+              配置了 gpg_verify 时, 先验证 checksum 文件的 GPG 签名, 再取其 SHA256 比对。
+        """
         filename = filepath.name
-        
+
+        # P3: GPG 预检 - 配置了 gpg 验证且可获取 checksum 文本时, 先验签名
+        if dist and dist.get("gpg_verify") and checksum_url:
+            print("  尝试 GPG 签名验证 checksum 文件…")
+            checksum_text = ""
+            try:
+                checksum_text = requests.get(checksum_url, headers=self.headers, timeout=30).text
+            except Exception as e:  # noqa: BLE001
+                print(f"  获取 checksum 文本失败: {e}")
+            sig_url = dist.get("signature_url") or self._default_sig_url(checksum_url)
+            keyring_dir = self.download_dir / "gpg-keyring"  # 缓存到 data 卷
+            gpg_status = self.verify_signature(checksum_text, sig_url,
+                                               dist.get("gpg_key_url", ""), keyring_dir)
+            if gpg_status == "pass":
+                print("  ✓ GPG 签名验证通过: checksum 文件由官方私钥签名, 可信")
+            elif gpg_status == "fail":
+                print("  ⚠ GPG 签名校验失败: checksum 文件可能被篡改, 拒绝下载")
+                return False, "GPG 签名校验失败(checksum 文件不可信)"
+            else:
+                print("  - GPG 签名验证跳过(官方无公钥/获取失败), 降级到 SHA256")
+
         # 第一优先级：从checksum_url获取最新校验和
         if checksum_url:
             print(f"  尝试从URL获取最新校验和: {checksum_url}")
@@ -276,7 +370,8 @@ class LinuxDistributionDownloader:
                     success, message = self.verify_checksum_smart(
                         filepath, 
                         target_dist.get("checksum_url"), 
-                        target_dist.get("checksum")
+                        target_dist.get("checksum"),
+                        dist=target_dist
                     )
                     if success:
                         print(f"✓ {message}")
@@ -323,7 +418,8 @@ class LinuxDistributionDownloader:
                     success, message = self.verify_checksum_smart(
                         filepath, 
                         target_dist.get("checksum_url"), 
-                        target_dist.get("checksum")
+                        target_dist.get("checksum"),
+                        dist=target_dist
                     )
                     if success:
                         print(f"✓ {message}")

@@ -23,6 +23,14 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# 安装 gpg/gnupg: 用于发行版 checksum 文件的 GPG 签名验证(P2/P3 功能依赖)
+# 国内构建可传 --build-arg APT_MIRROR=mirrors.aliyun.com 使用镜像加速
+ARG APT_MIRROR=archive.ubuntu.com
+RUN sed -i "s@//.*archive.ubuntu.com@//${APT_MIRROR}@; s@//security.ubuntu.com@//${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
 # 上游 CLI 依赖
 COPY iso_download/requirements.txt /app/iso_download/requirements.txt
 RUN pip install --no-cache-dir -r /app/iso_download/requirements.txt

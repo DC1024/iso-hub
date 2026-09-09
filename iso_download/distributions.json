@@ -5,21 +5,30 @@
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.01.01/archlinux-2026.01.01-x86_64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.01.01/sha256sums.txt",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x4AA4767BC9C1F2EF",
+      "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.01.01/sha256sums.txt.sig"
     },
     {
       "distribution": "Arch",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.02.01/archlinux-2026.02.01-x86_64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.02.01/sha256sums.txt",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x4AA4767BC9C1F2EF",
+      "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.02.01/sha256sums.txt.sig"
     },
     {
       "distribution": "Arch",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.03.01/archlinux-2026.03.01-x86_64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.03.01/sha256sums.txt",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x4AA4767BC9C1F2EF",
+      "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/2026.03.01/sha256sums.txt.sig"
     },
     {
       "distribution": "CentOS",
@@ -54,28 +63,36 @@
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Everything/x86_64/iso/Fedora-Everything-netinst-x86_64-42-1.1.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Everything/x86_64/iso/Fedora-Everything-42-1.1-x86_64-CHECKSUM",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.fedoraproject.org/pks/lookup?op=get&search=0x53DE98467A2EADA1"
     },
     {
       "distribution": "Fedora",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Workstation/x86_64/iso/Fedora-Workstation-Live-42-1.1.x86_64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/42/Workstation/x86_64/iso/Fedora-Workstation-42-1.1-x86_64-CHECKSUM",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.fedoraproject.org/pks/lookup?op=get&search=0x53DE98467A2EADA1"
     },
     {
       "distribution": "Fedora",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Everything/x86_64/iso/Fedora-Everything-netinst-x86_64-43-1.6.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Everything/x86_64/iso/Fedora-Everything-43-1.6-x86_64-CHECKSUM",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.fedoraproject.org/pks/lookup?op=get&search=0x53DE98467A2EADA1"
     },
     {
       "distribution": "Fedora",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Workstation/x86_64/iso/Fedora-Workstation-Live-43-1.6.x86_64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/Workstation/x86_64/iso/Fedora-Workstation-43-1.6-x86_64-CHECKSUM",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.fedoraproject.org/pks/lookup?op=get&search=0x53DE98467A2EADA1"
     },
     {
       "distribution": "Proxmox",
@@ -103,42 +120,60 @@
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/ubuntu-24.04.4-desktop-amd64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS.gpg"
     },
     {
       "distribution": "Ubuntu",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/ubuntu-24.04.4-live-server-amd64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/24.04.4/SHA256SUMS.gpg"
     },
     {
       "distribution": "Ubuntu",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/ubuntu-25.10-desktop-amd64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS.gpg"
     },
     {
       "distribution": "Ubuntu",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/ubuntu-25.10-live-server-amd64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/25.10/SHA256SUMS.gpg"
     },
     {
       "distribution": "Ubuntu",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/ubuntu-26.04-desktop-amd64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS.gpg"
     },
     {
       "distribution": "Ubuntu",
       "type": "linux",
       "download_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/ubuntu-26.04-live-server-amd64.iso",
       "checksum_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS",
-      "checksum": ""
+      "checksum": "",
+      "gpg_verify": "checksum",
+      "gpg_key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xD94AA3F0EFE21092",
+      "signature_url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS.gpg"
     }
   ]
 }
