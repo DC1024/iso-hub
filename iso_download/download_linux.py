@@ -295,7 +295,11 @@ class LinuxDistributionDownloader:
                 response = requests.get(target_dist["download_url"], headers=self.headers, stream=True, timeout=(15, 60))
                 response.raise_for_status()
                 
-                total_size = int(response.headers.get('content-length', 0))
+                # 风险6修复: 镜像站可能返回非法/缺失 content-length, 解析失败按 0 处理(不定长模式)
+                try:
+                    total_size = int(response.headers.get('content-length') or 0)
+                except (TypeError, ValueError):
+                    total_size = 0
                 
                 # 使用tqdm创建进度条
                 with open(filepath, 'wb') as f:
@@ -329,10 +333,15 @@ class LinuxDistributionDownloader:
                 else:
                     success_count += 1
                 
-            except requests.exceptions.RequestException as e:
+            # 风险5修复: 除网络错误外, 也捕获磁盘/IO 错误(磁盘满/权限不足/文件被占用),
+            # 避免下载中断且不清理不完整文件
+            except (requests.exceptions.RequestException, OSError, IOError) as e:
                 print(f"\n下载失败: {e}")
-                if filepath.exists():
-                    filepath.unlink()  # 删除不完整的文件
+                try:
+                    if filepath.exists():
+                        filepath.unlink()  # 删除不完整的文件
+                except OSError as ue:
+                    print(f"清理不完整文件失败: {ue}")
         
         # 清理发行版目录，删除不在JSON中维护的文件
         if matching_dists:
@@ -373,13 +382,15 @@ class LinuxDistributionDownloader:
         # 按分组下载，每个发行版只调用一次download_distribution
         for dist_name, dists in dist_groups.items():
             print(f"\n{'='*60}")
-            success = self.download_distribution(
-                dist_name, verify_checksum
-            )
-            
-            if not success:
-                print(f"下载失败: {dist_name}")
-            
+            # 风险8修复: 单个发行版下载异常不中断整批, 隔离后继续后续
+            try:
+                success = self.download_distribution(
+                    dist_name, verify_checksum
+                )
+                if not success:
+                    print(f"下载失败: {dist_name}")
+            except Exception as e:  # noqa: BLE001
+                print(f"下载 {dist_name} 异常: {e}")
             time.sleep(2)  # 避免请求过于频繁
         
         print(f"\n{'='*60}")
