@@ -56,6 +56,8 @@ def main() -> None:
                         help="若给定 sources_config.json，先刷新一次官方清单元数据")
     parser.add_argument("--custom-json", default=None,
                         help="若给定，把其中的自定义源条目并入候选池")
+    parser.add_argument("--cache-json", default=None,
+                        help="自定义源展开缓存(custom_repo_cache.json)，strategy 源从中读取而非实时抓取")
     args = parser.parse_args()
 
     subs = json.loads(args.subscriptions)
@@ -110,18 +112,31 @@ def main() -> None:
             custom = json.loads(Path(args.custom_json).read_text(encoding="utf-8"))
             if isinstance(custom, list):
                 by_url = {e["download_url"]: e for e in all_entries}
-                sys.path.insert(0, str(repo_dir))
+                # strategy 源的展开结果从持久化缓存读取(由 custom_repo_refresh.py 后台写入),
+                # 订阅同步进程内不再对镜像站发起实时抓取。
+                repo_cache = {}
+                if args.cache_json and Path(args.cache_json).exists():
+                    try:
+                        cached = json.loads(Path(args.cache_json).read_text(encoding="utf-8"))
+                        if isinstance(cached, dict):
+                            repo_cache = cached
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[WARN] 读取自定义源缓存失败: {e}", file=sys.stderr)
                 for c in custom:
                     if c.get("strategy"):
-                        # 发行版源: 展开为最新若干 ISO 条目
-                        try:
-                            from update_distributions import build_entries  # noqa: PLC0415
-                            for e in build_entries(dict(c)):
+                        key = json.dumps(
+                            {k: v for k, v in c.items() if k != "timeout"},
+                            sort_keys=True, ensure_ascii=False, default=str,
+                        )
+                        hit = repo_cache.get(key)
+                        entries = hit.get("entries") if isinstance(hit, dict) else None
+                        if isinstance(entries, list):
+                            for e in entries:
                                 e.setdefault("distribution", c.get("distribution", "?"))
                                 e.setdefault("type", c.get("type", "linux"))
                                 by_url[e["download_url"]] = e
-                        except Exception as e:  # noqa: BLE001
-                            print(f"[WARN] 发行版源展开失败 {c.get('distribution')}: {e}", file=sys.stderr)
+                        else:
+                            print(f"[WARN] 发行版源 {c.get('distribution')} 无缓存, 已跳过(请先刷新自定义源)", file=sys.stderr)
                     elif c.get("download_url"):
                         by_url[c["download_url"]] = c
                 all_entries = list(by_url.values())

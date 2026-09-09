@@ -65,9 +65,17 @@ def load_config(path: Path) -> List[Dict]:
 
 
 def fetch_text(url: str, timeout: Optional[float] = None) -> str:
+    # 连接层硬超时兜底: 即便源服务器在 TLS 握手阶段挂死, 连接阶段也最多 10s。
+    # read 阶段沿用调用方传入的 timeout(默认 30s), 既可被 source 的 timeout 覆盖,
+    # 又保证「连接不响应」这种最坏情况仍能在数十秒内失败退出, 不再无限阻塞线程。
     if timeout is None:
         timeout = 30  # 默认 30s, 与旧行为一致
-    response = requests.get(url, headers=DEFAULT_HEADERS, timeout=timeout)
+    try:
+        read_timeout = float(timeout)
+    except (TypeError, ValueError):
+        read_timeout = 30
+    connect_timeout = 10.0
+    response = requests.get(url, headers=DEFAULT_HEADERS, timeout=(connect_timeout, read_timeout))
     response.raise_for_status()
     return response.text
 

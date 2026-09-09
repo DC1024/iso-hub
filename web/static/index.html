@@ -343,6 +343,21 @@
       <div class="card-head"><span class="g-name" data-i18n="existingSources">已有自定义源</span><span class="chip" id="cs-count">0</span></div>
       <div id="cs-list" style="padding:6px 16px"></div>
     </div>
+    <div class="card">
+      <div class="card-head"><span class="g-name" data-i18n="csRefresh">🔄 自定义源刷新</span></div>
+      <div style="padding:12px 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <button class="btn-p" onclick="refreshCustomSources()" data-i18n="csRefreshNow">🔄 立即解析所有发行版源</button>
+        <label class="muted" style="display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="cs-auto-en" onchange="saveCustomAutoRefresh()">
+          <span data-i18n="csAutoEnable">自动刷新(默认关闭)</span>
+        </label>
+        <label class="muted" style="display:flex;align-items:center;gap:6px">
+          <span data-i18n="csAutoInterval">间隔(秒)</span>
+          <input type="number" id="cs-auto-int" class="inp" min="60" step="60" style="width:120px" value="86400" onchange="saveCustomAutoRefresh()">
+        </label>
+      </div>
+      <div class="hint" style="margin:0 16px 12px" data-i18n="csRefreshHint">默认不主动访问源服务器。只有开启「自动刷新」后才按间隔在后台解析；也可点击按钮手动解析。解析在后台任务中执行，不会阻塞网站。</div>
+    </div>
   </div>
 
   <!-- 订阅同步面板 -->
@@ -569,8 +584,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.1.5';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
-const VERSION_TAG='1.1.5';
+const APP_VERSION='1.1.6';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
+const VERSION_TAG='1.1.6';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -692,6 +707,13 @@ const I18N={
   'addDistroSrc':{zh:'添加发行版源',en:'Add Distro Source'},
   'addDirectLink':{zh:'添加单一直链',en:'Add Direct Link'},
   'existingSources':{zh:'已有自定义源',en:'Existing Custom Sources'},
+  'csRefresh':{zh:'自定义源刷新',en:'Custom Source Refresh'},
+  'csRefreshNow':{zh:'立即解析所有发行版源',en:'Parse all distro sources now'},
+  'csAutoEnable':{zh:'自动刷新(默认关闭)',en:'Auto refresh (off by default)'},
+  'csAutoInterval':{zh:'间隔(秒)',en:'Interval (seconds)'},
+  'csRefreshHint':{zh:'默认不主动访问源服务器。只有开启「自动刷新」后才按间隔在后台解析；也可点击按钮手动解析。解析在后台任务中执行，不会阻塞网站。',en:'Source servers are not queried by default. Enable auto-refresh to parse in the background on the interval, or click to parse manually. Parsing runs as a background task and never blocks the site.'},
+  'csRefreshStarted':{zh:'已启动自定义源解析(后台任务)',en:'Custom source parse started (background task)'},
+  'csAutoSaved':{zh:'自动刷新设置已保存',en:'Auto refresh settings saved'},
   'syncDesc1':{zh:'对每个已启用的订阅，会',en:'For each enabled subscription, it will'},
   'syncDescAuto':{zh:'自动',en:'automatically'},
   'syncDesc2':{zh:'①刷新该发行版元数据 → ②下载最新 N 版 → ③删除组目录中不在最新 N 的过期 ISO。',en:'①refresh metadata → ②download latest N versions → ③delete stale ISOs beyond latest N.'},
@@ -1016,7 +1038,7 @@ async function poll(){
   if(RUNNING&&s&&s.task){
     bar.classList.add('show');
     const tk=s.task;   // 注意: 不能叫 t, 否则遮蔽全局翻译函数 t()
-    const _tk=$('#taskkind');if(_tk)_tk.textContent='['+(tk.kind==='meta'?t('taskMeta'):t('taskDownload'))+'] '+tk.title;
+    const _tk=$('#taskkind');if(_tk)_tk.textContent='['+(tk.kind==='meta'?t('taskMeta'):tk.kind==='custom-refresh'?t('csRefresh'):t('taskDownload'))+'] '+tk.title;
     if(tk.downloads&&tk.downloads.length){
       const now=Date.now();
       let act=null;
@@ -1094,7 +1116,8 @@ refreshProtected();   // 先加载受保护名单, 再渲染列表以显示🔒�
 (function(){const s=$('#logflt');if(s){s.value=LOGF;}applyLogFilter();})();
 loadDistros();
 startPoll();
-setInterval(()=>{if(!RUNNING&&!document.hidden)loadDistros()},30000);
+// 修复: 不再每 30s 无脑轮询 /api/distros。列表仅在用户手动点击「刷新列表」时更新;
+// 后台任务运行期间由 poll() 轮询 /api/state(任务进度), 任务结束时自动 loadDistros() 刷新本地状态。
 
 /* ---------- 日夜模式 ---------- */
 function applyTheme(theme){
@@ -1120,7 +1143,7 @@ function switchTab(tab){
   ['mirror','source','subs','settings','torrent'].forEach(p=>{
     document.getElementById('panel-'+p).style.display=(p===tab)?'':'none';
   });
-  if(tab==='source')loadCustomSources();
+  if(tab==='source'){loadCustomSources();loadCustomAutoRefresh();}
   if(tab==='subs')loadSubs();
   if(tab==='settings')loadSettings();
   if(tab==='torrent'){checkQbEnabled();}
@@ -1469,6 +1492,29 @@ async function delCustomSource(url){
   const r=await fetch('/api/custom-sources?url='+encodeURIComponent(url),{method:'DELETE',headers:authH()});
   toast(t('deletedSrc'));loadCustomSources();loadDistros();
 }
+async function refreshCustomSources(){
+  const r=await jpost('/api/custom-sources/refresh');
+  if(r.s===409||r.s===400)return toast(r.j&&r.j.error||t('startFailed'),'err');
+  if(r.s!==200)return toast((r.j&&r.j.error)||t('startFailed'),'err');
+  toast(t('csRefreshStarted'));
+  AFTER=0;startPoll(true);
+}
+async function loadCustomAutoRefresh(){
+  const r=await jget('/api/custom-sources/auto-refresh');
+  const cfg=(r&&r.custom_source_auto_refresh)||{};
+  const en=$('#cs-auto-en'), iv=$('#cs-auto-int');
+  if(en)en.checked=!!cfg.enabled;
+  if(iv)iv.value=cfg.interval||86400;
+}
+async function saveCustomAutoRefresh(){
+  const en=$('#cs-auto-en'), iv=$('#cs-auto-int');
+  const enabled=en?en.checked:false;
+  const interval=iv?parseInt(iv.value,10):86400;
+  const r=await jpost('/api/custom-sources/auto-refresh',{enabled,interval});
+  if(r.s!==200)return toast((r.j&&r.j.error)||t('shareErr'),'err');
+  toast(t('csAutoSaved'));
+  loadCustomAutoRefresh();
+}
 function srcRepoPayload(){
   const p={
     distribution:$('#rs-dist').value.trim()||'Custom',
@@ -1491,10 +1537,12 @@ function srcRepoPayload(){
 async function addSrcRepo(){
   const p=srcRepoPayload();if(!p)return;
   if(!p.listing_url||!p.download_template)return toast(t('needUrl'),'err');
-  toast(t('parsing'));
   const r=await jpost('/api/custom-sources',p);
   if(!r.j.ok)return toast(r.j.error||t('addFailed'),'err');
-  toast(t('addedRepo')+' '+r.j.expanded+' '+t('versionsCount'));loadCustomSources();loadDistros();
+  toast(t('addedRepo'));
+  loadCustomSources();loadDistros();
+  // 展开改为后台任务执行(非阻塞), 完成后自动刷新列表
+  if(r.j.pending_refresh||r.j.ok){AFTER=0;startPoll(true);}
 }
 async function delSrcRepo(dist,strategy){
   if(!confirm(`${t('delRepoConfirm1')}「${dist}」${t('delRepoConfirm2')}`))return;

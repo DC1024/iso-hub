@@ -53,6 +53,7 @@ PY = sys.executable
 JSON_FILE = DATA_DIR / "distributions.json"
 DEFAULT_JSON = REPO_DIR / "distributions.json"
 CUSTOM_JSON = DATA_DIR / "custom_sources.json"      # 用户自定义镜像源(独立持久化,不随 update-meta 覆盖)
+CUSTOM_CACHE_JSON = DATA_DIR / "custom_repo_cache.json"  # 自定义发行版源展开结果的持久化缓存(仅后台刷新写入)
 SUBS_JSON = DATA_DIR / "subscriptions.json"          # 订阅配置: 自动拉最新+删旧
 SETTINGS_JSON = DATA_DIR / "settings.json"           # 网络共享开关+凭据(网页可改, 覆盖 compose env)
 SHARE_CONTAINERS = {"samba": "iso-hub-samba", "webdav": "iso-hub-webdav"}
@@ -186,6 +187,46 @@ def save_custom_sources(items: list) -> None:
     )
 
 
+# ---------- 自定义源自动刷新设置 (独立开关, 默认关闭不主动访问源服务器) ----------
+CUSTOM_AUTO_REFRESH_DEFAULT = False
+CUSTOM_REFRESH_INTERVAL_DEFAULT = 86400  # 秒, 默认每天(仅在开关开启时生效)
+
+
+def load_custom_auto_refresh() -> dict:
+    """读取自定义源自动刷新设置。缺失时回退默认(关闭 + 间隔 86400 秒)。"""
+    raw = load_settings_all()
+    enabled = raw.get("custom_source_auto_refresh", CUSTOM_AUTO_REFRESH_DEFAULT)
+    try:
+        interval = int(raw.get("custom_source_refresh_interval", CUSTOM_REFRESH_INTERVAL_DEFAULT))
+    except (ValueError, TypeError):
+        interval = CUSTOM_REFRESH_INTERVAL_DEFAULT
+    if interval < 60:  # 最小 60 秒, 防止误设过短导致高频抓取
+        interval = 60
+    return {"enabled": bool(enabled), "interval": interval}
+
+
+def save_custom_auto_refresh(enabled: bool | None, interval: int | None) -> dict:
+    """保存自定义源自动刷新设置, 返回合并后的最新值。"""
+    cur = load_custom_auto_refresh()
+    if enabled is not None:
+        cur["enabled"] = bool(enabled)
+    if interval is not None:
+        try:
+            cur["interval"] = max(60, int(interval))
+        except (ValueError, TypeError):
+            pass
+    save_settings_all({
+        "custom_source_auto_refresh": cur["enabled"],
+        "custom_source_refresh_interval": cur["interval"],
+    })
+    return cur
+
+
+def _custom_source_list() -> list:
+    """返回所有 strategy 类型的自定义源(需后台展开的发行版源)。"""
+    return [c for c in load_custom_sources() if c.get("strategy")]
+
+
 def load_subscriptions() -> list:
     """订阅配置: 每个元素 {distribution,type,keep,enabled,last_run}"""
     if SUBS_JSON.exists():
@@ -203,57 +244,69 @@ def save_subscriptions(items: list) -> None:
     )
 
 
-def _custom_repo_dir() -> Path:
-    """上游 iso_download 目录,含 update_distributions.py 的 build_from_* 展开函数。"""
-    return REPO_DIR if (REPO_DIR / "update_distributions.py").exists() else BASE_DIR.parent / "iso_download"
+# 自定义源展开结果采用「持久化落盘缓存」, 请求线程内只读缓存、绝不发起网络请求。
+# 展开动作仅由后台 runner(custom_repo_refresh.py) 执行后写回该 JSON 文件,
+# 结构与 custom_repo_refresh.py 保持一致: {"<cache_key>": {"entries": [...], "updated_at": <ts>}}
+_CUSTOM_REPO_CACHE: dict = {}      # 进程内存缓存: 磁盘缓存文件按 mtime 失效后重新读取
+_CUSTOM_REPO_CACHE_MTIME: float | None = None
 
 
-# B3 修复: 自定义源展开结果 TTL 缓存(按 source 配置 hash 键控),
-# 避免 /api/distros 每 30s 轮询时对镜像站发起全量真实 HTTP 抓取。
-_CUSTOM_REPO_CACHE = {}  # hash -> (expire_ts, entries)
-CUSTOM_REPO_TTL = float(os.environ.get("ISO_HUB_CUSTOM_TTL", "600"))
+def _custom_repo_cache_key(item: dict) -> str:
+    """计算自定义源展开结果的键。除 timeout 外的所有配置字段都决定抓取结果, 故一并纳入。"""
+    return json.dumps({k: v for k, v in item.items() if k != "timeout"},
+                      sort_keys=True, ensure_ascii=False, default=str)
+
+
+def load_custom_repo_cache() -> dict:
+    """读取自定义源展开缓存文件。结构异常时返回空 dict 并记日志。
+
+    带 mtime 失效的进程内缓存: 后台 runner 以子进程写回新文件后, 本进程检测到
+    mtime 变化会重新读盘, 避免 Web 列表永远停留在刷新前的旧结果。
+    """
+    global _CUSTOM_REPO_CACHE, _CUSTOM_REPO_CACHE_MTIME
+    try:
+        mtime = CUSTOM_CACHE_JSON.stat().st_mtime
+    except OSError:
+        _CUSTOM_REPO_CACHE = {}
+        _CUSTOM_REPO_CACHE_MTIME = None
+        return {}
+    if _CUSTOM_REPO_CACHE_MTIME is not None and abs(_CUSTOM_REPO_CACHE_MTIME - mtime) < 1e-6:
+        return _CUSTOM_REPO_CACHE
+    try:
+        data = json.loads(CUSTOM_CACHE_JSON.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            log(f"[自定义源] 缓存文件结构异常(非对象): {CUSTOM_CACHE_JSON}")
+            data = {}
+        _CUSTOM_REPO_CACHE = data
+        _CUSTOM_REPO_CACHE_MTIME = mtime
+        return data
+    except Exception as e:  # noqa: BLE001
+        log(f"[自定义源] 解析缓存文件失败 {CUSTOM_CACHE_JSON}: {e}")
+        _CUSTOM_REPO_CACHE = {}
+        _CUSTOM_REPO_CACHE_MTIME = None
+        return {}
 
 
 def expand_custom_repo(item: dict, timeout: int = 40) -> list:
-    """把一个自定义"发行版源"条目展开为若干具体 ISO 条目(复用 update_distributions 的解析策略)。
+    """把一个自定义"发行版源"条目展开为若干具体 ISO 条目(只读持久化缓存)。
 
     支持与官方 sources_config.json 相同的 strategy:
       dated_directory / flat_listing / versioned_flat_listing / static
-    返回普通 ISO 条目列表(distribution/download_url/checksum_url/checksum),供候选池合并。
-    失败时返回空列表并记日志。
+    请求线程内只命中磁盘缓存并返回缓存条目; 未命中(该源尚未被后台刷新过)时返回空列表,
+    提示用户在「自定义源」面板手动触发刷新或开启自动刷新。**绝不在请求线程内同步抓取网络。**
     """
-    # 缓存键: 除 timeout 外的所有配置字段(它们是决定抓取结果的输入)
-    cache_key = json.dumps({k: v for k, v in item.items() if k != "timeout"},
-                           sort_keys=True, ensure_ascii=False, default=str)
-    now = time.time()
-    hit = _CUSTOM_REPO_CACHE.get(cache_key)
-    if hit and hit[0] > now:
-        return list(hit[1])
-    # SSRF 防护: 只接受 http/https 协议
+    strategy = item.get("strategy", "")
+    if strategy not in ("dated_directory", "flat_listing", "versioned_flat_listing", "static"):
+        return []
+    # SSRF 防护: 只接受 http/https 协议(与后台 runner 的过滤保持一致)
     listing_url = item.get("listing_url", "")
     if listing_url and not _is_http_url(listing_url):
         log(f"[自定义源] 拒绝非 http/https 的 listing_url: {listing_url}")
         return []
-    try:
-        if item.get("strategy") not in ("dated_directory", "flat_listing", "versioned_flat_listing", "static"):
-            return []
-        sys.path.insert(0, str(_custom_repo_dir()))
-        from update_distributions import build_entries  # noqa: PLC0415
-        # B6 修复: 把 timeout 注入 item, 使其真正传给底层 fetch_text 的 HTTP 请求
-        #   (此前 build_entries(dict(item)) 不含 timeout, 底层请求恒用 30s 默认, 该参数形同虚设)
-        item = dict(item)
-        item["timeout"] = timeout
-        entries = build_entries(item)
-        # 展开后的条目可能缺 distribution/type,补上
-        for e in entries:
-            e.setdefault("distribution", item.get("distribution", "?"))
-            e.setdefault("type", item.get("type", "linux"))
-        _CUSTOM_REPO_CACHE[cache_key] = (now + CUSTOM_REPO_TTL, list(entries))
-        return entries
-    except Exception as e:  # noqa: BLE001
-        # L14 修复: 展开失败也不要缓存污染; 失败时不缓存(下次仍重试)
-        log(f"[自定义源] 发行版源展开失败 {item.get('distribution')}: {e!r}")
-        return []
+    cache_key = _custom_repo_cache_key(item)
+    hit = load_custom_repo_cache().get(cache_key)
+    entries = hit.get("entries") if isinstance(hit, dict) else None
+    return list(entries) if isinstance(entries, list) else []
 
 
 def merge_custom_entries(entries: list) -> list:
@@ -261,7 +314,8 @@ def merge_custom_entries(entries: list) -> list:
 
     自定义条目分两种:
       * 普通直链(download_url): 直接合并
-      * 发行版源(strategy=...): 实时抓取解析为最新若干 ISO 条目后合并
+      * 发行版源(strategy=...): 读取持久化缓存(custom_repo_cache.json)里的展开条目后合并
+        未命中缓存(尚无后台刷新记录)时不产生任何条目, 也不发起网络请求。
     """
     merged = {e["download_url"]: e for e in entries}
     for c in load_custom_sources():
@@ -1010,6 +1064,8 @@ def start_task(kind: str, title: str, cmd: list, downloads=None) -> bool:
 AUTO_SYNC_INTERVAL = int(os.environ.get("ISO_HUB_SYNC_INTERVAL", "86400"))  # 秒,默认每天
 # L6 修复: 初始化为当前时间, 避免存在订阅时每次容器重启后 30s 内必然触发一次全量同步
 AUTO_SYNC_LAST = {"t": time.time()}
+# 自定义源自动刷新: 独立开关(默认关闭), 开启后才按间隔调度; last 初始化为当前时间避免重启立即触发
+CUSTOM_REFRESH_LAST = {"t": time.time()}
 
 
 def _run_sync_cmd() -> list:
@@ -1024,11 +1080,40 @@ def _run_sync_cmd() -> list:
         "--subscriptions", sub_json,
         "--update-first", str(REPO_DIR / "sources_config.json"),
         "--custom-json", str(CUSTOM_JSON),
+        "--cache-json", str(CUSTOM_CACHE_JSON),
     ]
 
 
+def _run_custom_repo_refresh_cmd() -> list:
+    """自定义源展开 runner 的命令行(仅 strategy 源, 写回 custom_repo_cache.json)。"""
+    return [
+        PY, str(BASE_DIR / "custom_repo_refresh.py"),
+        "--custom-json", str(CUSTOM_JSON),
+        "--cache-json", str(CUSTOM_CACHE_JSON),
+    ]
+
+
+def refresh_custom_repo_cache() -> bool:
+    """后台(子进程)刷新自定义源展开缓存。复用 start_task 的同一时间只允许一个任务锁。
+
+    返回 True 表示任务已启动; False 表示有其它任务在运行或没有需要展开的源。
+    """
+    if running_task():
+        return False
+    if not _custom_source_list():
+        return False
+    cmd = _run_custom_repo_refresh_cmd()
+    ok = start_task(
+        "custom-refresh",
+        f"刷新自定义源: {len(_custom_source_list())} 个发行版源",
+        cmd,
+        [],
+    )
+    return ok
+
+
 def schedule_auto_sync() -> None:
-    """后台线程: 检查用户自建调度 + 传统间隔, 到点且无任务运行则自动订阅同步。"""
+    """后台线程: 检查用户自建调度 + 传统间隔 + 自定义源自动刷新, 到点且无任务运行则执行。"""
     def _trigger(msg: str):
         cmd = _run_sync_cmd()
         idle = task.get("proc") is None or task["proc"].poll() is not None
@@ -1037,6 +1122,19 @@ def schedule_auto_sync() -> None:
         n = len([s for s in load_subscriptions() if s.get("enabled", True)])
         start_task("sync", msg, cmd, [])
         log(f"[自动同步] {msg}: 已启动, {n} 个发行版")
+
+    def _trigger_custom_refresh():
+        cfg = load_custom_auto_refresh()
+        idle = task.get("proc") is None or task["proc"].poll() is not None
+        if not cfg.get("enabled") or not idle or not _custom_source_list():
+            return
+        # 间隔由用户设置控制(默认 86400s); 只在开关开启时命中
+        if time.time() - CUSTOM_REFRESH_LAST["t"] < cfg.get("interval", CUSTOM_REFRESH_INTERVAL_DEFAULT):
+            return
+        CUSTOM_REFRESH_LAST["t"] = time.time()
+        ok = refresh_custom_repo_cache()
+        if ok:
+            log(f"[自定义源] 自动刷新已启动 (间隔 {cfg.get('interval', CUSTOM_REFRESH_INTERVAL_DEFAULT)//3600} 小时)")
 
     def _loop():
         while True:
@@ -1069,6 +1167,8 @@ def schedule_auto_sync() -> None:
                 if idle and time.time() - AUTO_SYNC_LAST["t"] >= AUTO_SYNC_INTERVAL:
                     AUTO_SYNC_LAST["t"] = time.time()
                     _trigger(f"自动订阅同步 (间隔 {AUTO_SYNC_INTERVAL//3600} 小时)")
+                # 自定义源自动刷新(独立开关, 默认关闭)
+                _trigger_custom_refresh()
             except Exception as e:  # noqa: BLE001
                 log(f"[自动同步] 异常: {e}")
             time.sleep(30)
@@ -1354,14 +1454,12 @@ def api_custom_sources_add():
             vs = body.get("versions")
             if isinstance(vs, list) and vs:
                 entry["versions"] = [str(v).strip() for v in vs]
-        # 试解析一次,确认配置可用
-        exp = expand_custom_repo(entry, timeout=40)
-        if not exp:
-            return jsonify({"error": "解析该发行版源失败,请检查 listing_url/正则/模板"}), 400
         items.append(entry)
         save_custom_sources(items)
-        log(f"[自定义源] 添加发行版源 {distribution}({strategy}) <- {listing_url} ({len(exp)} 个条目)")
-        return jsonify({"ok": True, "sources": items, "expanded": len(exp)})
+        # 不再在请求线程内实时抓取校验: 落盘后由后台任务展开(若当前有任务运行则稍后手动刷新)
+        refresh_custom_repo_cache()
+        log(f"[自定义源] 添加发行版源 {distribution}({strategy}) <- {listing_url} (待后台展开)")
+        return jsonify({"ok": True, "sources": items, "expanded": 0, "pending_refresh": True})
     # 普通直链
     url = (body.get("download_url") or "").strip()
     if not url:
@@ -1400,6 +1498,45 @@ def api_custom_sources_del():
     save_custom_sources(items)
     log(f"[自定义源] 删除 {url or f'{distribution}({strategy})'}")
     return jsonify({"ok": True, "sources": items})
+
+
+@app.post("/api/custom-sources/refresh")
+def api_custom_sources_refresh():
+    """手动触发自定义源展开(后台子进程, 非阻塞)。复用 start_task 的单一任务锁。"""
+    if running_task():
+        return jsonify({"error": "已有任务在运行"}), 409
+    sources = _custom_source_list()
+    if not sources:
+        return jsonify({"error": "没有 strategy 类型的自定义源"}), 400
+    ok = refresh_custom_repo_cache()
+    if not ok:
+        return jsonify({"error": "已有任务在运行"}), 409
+    return jsonify({"ok": True, "count": len(sources)})
+
+
+@app.get("/api/custom-sources/auto-refresh")
+def api_custom_auto_refresh_get():
+    """读取自定义源自动刷新设置(独立开关, 默认关闭)。"""
+    return jsonify({"custom_source_auto_refresh": load_custom_auto_refresh()})
+
+
+@app.post("/api/custom-sources/auto-refresh")
+def api_custom_auto_refresh_set():
+    """保存自定义源自动刷新设置。body: {enabled?:bool, interval?:int(秒)}"""
+    body = request.get_json(force=True, silent=True) or {}
+    enabled = body.get("enabled")
+    interval = body.get("interval")
+    # 显式只接受 bool/None; 避免字符串 'false' 被当成真值
+    if enabled is not None and not isinstance(enabled, bool):
+        return jsonify({"error": "enabled 必须是布尔值"}), 400
+    if interval is not None:
+        try:
+            interval = int(interval)
+        except (ValueError, TypeError):
+            return jsonify({"error": "interval 必须是整数(秒)"}), 400
+    cfg = save_custom_auto_refresh(enabled, interval)
+    log(f"[自定义源] 自动刷新设置已保存: enabled={cfg['enabled']}, interval={cfg['interval']}s")
+    return jsonify({"ok": True, "custom_source_auto_refresh": cfg})
 
 
 @app.get("/api/subscriptions")
