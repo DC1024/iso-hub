@@ -345,6 +345,23 @@ class TestFingerprintPinning(unittest.TestCase):
         self.assertTrue(self.keyring.exists())
         self.assertEqual(_decode_keyring(self.keyring.read_bytes()), [GOOD_FP])
 
+    def test_keyring_parent_dir_auto_created(self):
+        """回归: 持久 keyring 目录不存在时 _prepare_keyring 需自动创建。
+
+        旧实现把 mkdir 放在 verify_signature, 重构到 _prepare_keyring 后丢失,
+        导致 write_bytes 抛 FileNotFoundError, 被上层 except 兜底成 skip ——
+        GPG 静默降级、防护形同虚设。本测试确保父目录被自动创建。
+        """
+        deep = self.tmp / "deep" / "nested" / "gpg-keyring" / "iso-hub.gpg"
+        self.assertFalse(deep.parent.exists(), "前置: 父目录必须不存在")
+        with patch("shutil.which", return_value="/usr/bin/gpg"), \
+             patch.object(dl.subprocess, "run", side_effect=_fake_gpg([GOOD_FP])), \
+             patch.object(dl.requests, "get", side_effect=_fake_requests_get):
+            status = self.d.verify_signature("checksum text", SIG_URL, KEY_URL,
+                                             deep.parent, GOOD_FP)
+        self.assertEqual(status, "pass")
+        self.assertTrue(deep.exists(), "应自动创建父目录并写入 keyring")
+
     def test_fingerprint_mismatch_fails_and_never_writes_cache(self):
         """指纹不匹配 -> fail(拒绝下载), 且不写入缓存(否则毒 key 被永久固化)。"""
         status = self._call(GOOD_FP, [BAD_FP])

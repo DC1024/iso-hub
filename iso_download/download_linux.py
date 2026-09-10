@@ -251,6 +251,14 @@ class LinuxDistributionDownloader:
           "skip" 无公钥地址/下载失败/解析失败(降级, 不阻塞)
           "fail" 指纹不匹配(公钥源被污染 或 硬编码指纹已过时) -> 拒绝下载
         """
+        # 确保持久 keyring 目录存在(旧实现把 mkdir 放在 verify_signature, 重构到
+        # _prepare_keyring 后丢失, 会导致 write_bytes 抛 FileNotFoundError, 进而被
+        # 上层 except 兜底成 skip —— 静默降级, 防护形同虚设)。
+        try:
+            keyring.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            print(f"  创建 keyring 目录失败(降级): {e}")
+            return "skip"
         try:
             cached_ok = keyring.exists() and keyring.stat().st_size > 0
         except OSError:
