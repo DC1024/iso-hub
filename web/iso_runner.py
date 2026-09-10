@@ -191,12 +191,46 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
     last_err = None
     for idx, (url, checksum_url) in enumerate(candidates):
         print(f"  候选源 {idx + 1}/{len(candidates)}: {url}")
+        # 断点续传: 已存在的 .part 就是本源的断点位置。
+        # 注意每个候选源都要重新评估(不同镜像上的文件可能不同, 故续传只在本源
+        # 首次失败后保留, 换源时从该源的断点重新开始)。
         try:
-            resp = requests.get(url, headers=downloader.headers, stream=True, timeout=60)
+            have = part.stat().st_size if part.exists() else 0
+            headers = dict(downloader.headers or {})
+            if have:
+                headers["Range"] = f"bytes={have}-"
+            resp = requests.get(url, headers=headers, stream=True, timeout=60)
+            if have and resp.status_code == 206:
+                # 服务器支持 Range: 追加写入
+                cr = resp.headers.get("content-range", "")
+                total = 0
+                if "/" in cr:
+                    try:
+                        total = int(cr.rsplit("/", 1)[-1])
+                    except ValueError:
+                        total = 0
+                if not total:
+                    cl = int(resp.headers.get("content-length", 0) or 0)
+                    total = have + cl
+                print(f"  续传: 从 {have/1024/1024:.1f} MiB 继续 (共 {total/1024/1024:.1f} MiB)")
+                mode = "ab"
+            elif have and resp.status_code == 200:
+                # 服务器不支持 Range(返回 200 全量) → 只能从头下, 截断重写
+                total = int(resp.headers.get("content-length", 0) or 0)
+                print(f"  服务器不支持断点续传, 从头下载 (已丢弃 {have/1024/1024:.1f} MiB)")
+                have = 0
+                mode = "wb"
+            else:
+                # 无 .part(全新下载) 或 Range 返回 416(断点已越界)等
+                if resp.status_code == 416:
+                    raise Exception("断点位置越界(416), 将重下")
+                total = int(resp.headers.get("content-length", 0) or 0)
+                mode = "wb"
+                have = 0
             resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
+
             # 下载到 .part; 下载途中被 kill 也会留下 .part 供识别
-            with open(part, "wb") as f:
+            with open(part, mode) as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
@@ -213,7 +247,13 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                     filepath.unlink()
                 os.replace(part, filepath)
                 return True, url
-            raise Exception(f"校验和验证失败: {msg}")
+            # 校验失败: 半成品已损坏, 删掉避免下一轮拿着坏数据做续传
+            print(f"  ✗ 校验和验证失败, 丢弃半成品重试: {msg}")
+            try:
+                if part.exists():
+                    part.unlink()
+            except OSError:
+                pass
         except Exception as e:  # noqa: BLE001
             last_err = e
             print(f"  ✗ 候选源失败, 尝试下一源: {e}")

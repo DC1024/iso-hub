@@ -106,12 +106,11 @@ class TestPartAtomicProtocol(unittest.TestCase):
         self.assertEqual(dl.verified_paths[0].name, "ubuntu.iso.part",
                          "校验应针对 .part 进行, 通过后才改名")
 
-    def test_checksum_failure_keeps_part_not_final(self):
-        """校验失败: 保留 .part, 绝不产生最终文件。"""
+    def test_checksum_failure_never_produces_final(self):
+        """校验失败: 绝不产生最终文件(且损坏的半成品会被丢弃, 见 Resume 测试)。"""
         resp = _FakeResp([b"a" * 100], {"content-length": "100"})
         (ok, _), _ = self._run(resp, downloader=_FakeDownloader(checksum_ok=False))
         self.assertFalse(ok)
-        self.assertTrue(self.part.exists(), "失败时应保留 .part 供续传")
         self.assertFalse(self.final.exists(), "失败时不得出现最终文件")
 
     def test_size_mismatch_keeps_part_not_final(self):
@@ -196,6 +195,79 @@ class TestFailoverAcrossSources(unittest.TestCase):
         self.assertFalse((self.dir / "x.iso.part").exists())
 
 
+class TestResumeSupport(unittest.TestCase):
+    """断点续传: 已存在 .part 时应带 Range 头, 服务器返回 206 时追加写入。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.final = self.dir / "big.iso"
+        self.part = self.dir / "big.iso.part"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _run(self, resp, downloader=None):
+        seen = {}
+
+        def _fake_get(url, **kw):
+            seen.update(kw)
+            return resp
+
+        with patch.object(iso_runner.requests, "get", _fake_get):
+            res = iso_runner._download_file_with_failover(
+                downloader or _FakeDownloader(), {"checksum": ""},
+                [("https://mirror.test/big.iso", None)], "big.iso", self.dir, self.final
+            )
+        return res, seen
+
+    def test_range_header_sent_when_part_exists(self):
+        """已有 1000B 的 .part -> 必须带 Range: bytes=1000- 续传。"""
+        self.part.write_bytes(b"x" * 1000)
+        resp = _FakeResp([b"y" * 500], {"content-length": "500",
+                                        "content-range": "bytes 1000-1499/1500"},
+                         status=206)
+        (ok, _), sent = self._run(resp)
+        self.assertTrue(ok)
+        self.assertEqual(sent.get("headers", {}).get("Range"), "bytes=1000-",
+                         "续传必须发送 Range 头")
+        self.assertEqual(self.final.stat().st_size, 1500, "追加写入后应是 1000+500")
+
+    def test_no_range_header_for_fresh_download(self):
+        """没有 .part 时不应发 Range 头。"""
+        resp = _FakeResp([b"a" * 100], {"content-length": "100"})
+        (ok, _), sent = self._run(resp)
+        self.assertTrue(ok)
+        self.assertNotIn("Range", sent.get("headers", {}))
+
+    def test_server_without_range_falls_back_to_full_download(self):
+        """服务器不支持 Range(返回 200) -> 丢弃旧半成品, 从头下(不出现拼接错误)。"""
+        self.part.write_bytes(b"x" * 1000)
+        resp = _FakeResp([b"z" * 800], {"content-length": "800"}, status=200)
+        (ok, _), _ = self._run(resp)
+        self.assertTrue(ok)
+        self.assertEqual(self.final.stat().st_size, 800,
+                         "应从头重下(800B), 而不是糟糕地拼接成 1800B")
+
+    def test_truncated_resume_keeps_part(self):
+        """续传中途被打断: .part 保留, 不产生最终文件。"""
+        self.part.write_bytes(b"x" * 1000)
+        resp = _FakeResp([b"y" * 50], {"content-length": "500",
+                                       "content-range": "bytes 1000-1499/1500"},
+                         status=206)
+        (ok, _), _ = self._run(resp)
+        self.assertFalse(ok)
+        self.assertFalse(self.final.exists())
+        self.assertTrue(self.part.exists())
+
+    def test_checksum_failure_discards_corrupt_part(self):
+        """校验失败时 .part 已损坏, 应删除以免下轮拿坏数据做续传。"""
+        resp = _FakeResp([b"a" * 100], {"content-length": "100"})
+        (ok, _), _ = self._run(resp, downloader=_FakeDownloader(checksum_ok=False))
+        self.assertFalse(ok)
+        self.assertFalse(self.part.exists(), "损坏的半成品应被丢弃")
+
+
 class TestRunnerSourceContract(unittest.TestCase):
     """源码静态断言: 防止回归到"直接写最终名"的旧实现。"""
 
@@ -203,13 +275,38 @@ class TestRunnerSourceContract(unittest.TestCase):
     def setUpClass(cls):
         cls.src = (REPO_ROOT / "web" / "iso_runner.py").read_text(encoding="utf-8")
         cls.dl_src = (REPO_ROOT / "iso_download" / "download_linux.py").read_text(encoding="utf-8")
+        cls.app_src = (REPO_ROOT / "web" / "app.py").read_text(encoding="utf-8")
+
+    def test_app_download_payload_uses_part_path(self):
+        """回归: /api/download 的 downloads.path 必须用 .part 路径。
+
+        否则 running_task() 对最终名 stat() 得 0, 且 targets 的 key 是 .part
+        名 → 两边对不上 → 进度条永远卡 0%。
+        """
+        self.assertIn("PART_SUFFIX", self.app_src)
+        self.assertIn("target / (fname + PART_SUFFIX)", self.app_src)
+
+    def test_runner_sends_range_header(self):
+        self.assertIn('headers["Range"] = f"bytes={have}-"', self.src)
+
+    def test_runner_handles_206_append(self):
+        self.assertIn("resp.status_code == 206", self.src)
+        self.assertIn('mode = "ab"', self.src)
+
+    def test_upstream_supports_resume(self):
+        self.assertIn("Range", self.dl_src)
+        self.assertIn("206", self.dl_src)
 
     def test_runner_uses_part_suffix_constant(self):
         self.assertIn('PART_SUFFIX = ".part"', self.src)
 
     def test_runner_opens_part_not_final(self):
-        """下载循环必须打开 .part 文件句柄。"""
-        self.assertIn("with open(part, \"wb\") as f:", self.src)
+        """下载循环必须打开 .part 文件句柄(而非最终名)。
+
+        mode 是变量: 全新下载/不支持 Range 时为 "wb", 续传命中 206 时为 "ab"。
+        """
+        self.assertIn("with open(part, mode) as f:", self.src)
+        self.assertNotIn("with open(filepath, \"wb\") as f:", self.src)
 
     def test_runner_replaces_atomically(self):
         self.assertIn("os.replace(part, filepath)", self.src)

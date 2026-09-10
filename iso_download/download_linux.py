@@ -583,24 +583,51 @@ class LinuxDistributionDownloader:
             print(f"下载链接: {target_dist['download_url']}")
             
             try:
-                # B6 修复: 显式超时(连接 15s, 读 60s), 避免镜像站半开连接时下载线程永久挂起
-                response = requests.get(target_dist["download_url"], headers=self.headers, stream=True, timeout=(15, 60))
-                response.raise_for_status()
-                
-                # 风险6修复: 镜像站可能返回非法/缺失 content-length, 解析失败按 0 处理(不定长模式)
-                try:
-                    total_size = int(response.headers.get('content-length') or 0)
-                except (TypeError, ValueError):
-                    total_size = 0
-                
                 # 下载期间写 <最终名>.part, 全部校验通过后才原子改名(见下方 os.replace)。
                 # 这样任务被「停止」kill 或网络中断时, 磁盘上留下的是 .part 半成品,
                 # 后端能识别为「下载停止」, 而不会被误判为已下载的完整 ISO。
                 part_path = filepath.with_name(filepath.name + ".part")
+
+                # 断点续传: 若已有 .part, 带 Range 头请求剩余部分
+                _have = part_path.stat().st_size if part_path.exists() else 0
+                _headers = dict(self.headers or {})
+                if _have:
+                    _headers["Range"] = f"bytes={_have}-"
+
+                # B6 修复: 显式超时(连接 15s, 读 60s), 避免镜像站半开连接时下载线程永久挂起
+                response = requests.get(target_dist["download_url"], headers=_headers,
+                                        stream=True, timeout=(15, 60))
+                # 服务器支持 Range 时返回 206, 此时应追加写入
+                if _have and response.status_code == 206:
+                    _cr = response.headers.get('content-range', '')
+                    try:
+                        total_size = int(_cr.rsplit('/', 1)[-1]) if '/' in _cr else 0
+                    except (TypeError, ValueError):
+                        total_size = 0
+                    if not total_size:
+                        try:
+                            total_size = _have + int(response.headers.get('content-length') or 0)
+                        except (TypeError, ValueError):
+                            total_size = 0
+                    print(f"续传: 从 {_have/1024/1024:.1f} MiB 继续")
+                    _mode = 'ab'
+                else:
+                    if _have and response.status_code == 200:
+                        print(f"服务器不支持断点续传, 从头下载(丢弃 {_have/1024/1024:.1f} MiB)")
+                    _have = 0
+                    _mode = 'wb'
+                    # 风险6修复: 镜像站可能返回非法/缺失 content-length, 解析失败按 0 处理(不定长模式)
+                    try:
+                        total_size = int(response.headers.get('content-length') or 0)
+                    except (TypeError, ValueError):
+                        total_size = 0
+                response.raise_for_status()
+
                 # 使用tqdm创建进度条
-                with open(part_path, 'wb') as f:
+                with open(part_path, _mode) as f:
                     with tqdm(
                         total=total_size,
+                        initial=_have,
                         unit='B',
                         unit_scale=True,
                         unit_divisor=1024,

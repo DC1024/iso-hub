@@ -57,6 +57,9 @@ CUSTOM_CACHE_JSON = DATA_DIR / "custom_repo_cache.json"  # 自定义发行版源
 SUBS_JSON = DATA_DIR / "subscriptions.json"          # 订阅配置: 自动拉最新+删旧
 SETTINGS_JSON = DATA_DIR / "settings.json"           # 网络共享开关+凭据(网页可改, 覆盖 compose env)
 FAILURES_JSON = DATA_DIR / "download_failures.json"  # 下载失败记录 {rel: {"at":ts,"kind":"hard"|"stopped"}}
+# 下载中的半成品后缀: 下载器一律写 <最终名>.part, 校验通过后才原子改名为最终名。
+# 必须与 web/iso_runner.py 的 PART_SUFFIX、iso_download/download_linux.py 保持一致。
+PART_SUFFIX = ".part"
 SHARE_CONTAINERS = {"samba": "iso-hub-samba", "webdav": "iso-hub-webdav"}
 ISO_SUFFIXES = {".iso", ".img", ".qcow2", ".vmdk"}
 # 下载目录类型白名单(路径穿越防护)
@@ -248,6 +251,12 @@ def disk_inventory() -> dict:
 
     同时识别下载中的半成品文件(.part / .aria2 / .!qB / *.tmp), 它们在条目里
     以 partial 标记返回, 供前端区分「下载失败 / 下载停止」与「未下载」。
+
+    重要: 半成品文件只以"还原后的目标名 + partial=True"的形式出现一次,
+    绝不把 xxx.iso.part 这个原始名再当成普通文件收录 —— 否则它会被
+    build_distros() 判为"不在清单中"的 stray(过期文件), UI 上显示成
+    "不在最新清单元数据中"(通常是已被更新淘汰的旧版 ISO) 并给出
+    「清理过期」按钮, 而它其实是正在下载/可续传的半成品。
     """
     inv = {}
     if not DATA_DIR.exists():
@@ -260,13 +269,17 @@ def disk_inventory() -> dict:
                 key = (tdir.name, ddir.name)
                 inv.setdefault(key, [])
                 for f in ddir.iterdir():
-                    if f.is_file():
-                        try:
-                            st = f.stat()
-                            inv[key].append({"name": f.name, "size": st.st_size,
-                                             "mtime": st.st_mtime, "partial": False})
-                        except OSError:
-                            pass
+                    if not f.is_file():
+                        continue
+                    # 半成品交给下一趟统一处理(跳过其原始名)
+                    if _partial_base_name(f.name):
+                        continue
+                    try:
+                        st = f.stat()
+                        inv[key].append({"name": f.name, "size": st.st_size,
+                                         "mtime": st.st_mtime, "partial": False})
+                    except OSError:
+                        pass
                 # 半成品: 单独一趟, 把 xxx.iso.part 归到 xxx.iso 名下
                 for f in ddir.iterdir():
                     if not f.is_file():
@@ -524,8 +537,21 @@ def build_distros() -> dict:
     result = []
     for (typ, name), g in groups.items():
         expected = {e["filename"] for e in g["entries"]}
-        strays = [f for f in inv.get((typ, name), []) if f["name"] not in expected]
-        local_total = sum(f["size"] for f in inv.get((typ, name), []))
+        # 半成品(partial)不是 stray: 它对应清单里的目标文件, 由失败记录/半成品
+        # 本身表达状态。只有"确实不属于本清单"的完整文件才算过期文件。
+        strays = [
+            f for f in inv.get((typ, name), [])
+            if f["name"] not in expected and not f.get("partial")
+        ]
+        # 本地占用: 每个物理文件只算一次(半成品与同名完整文件可能是两条记录)
+        local_total = 0
+        _seen_files = set()
+        for f in inv.get((typ, name), []):
+            _k = f.get("partial_name") or f["name"]
+            if _k in _seen_files:
+                continue
+            _seen_files.add(_k)
+            local_total += f["size"]
         result.append(
             {
                 "name": name,
@@ -1685,7 +1711,11 @@ def api_download():
         target = _safe_join(e.get("type", "linux"), e.get("distribution", ""))
         if target is None:
             return jsonify({"error": f"非法的发行版类型/名称: {e.get('type')}/{e.get('distribution')}"}), 400
-        path = str(target / fname)
+        # 下载期间字节写在 <最终名>.part 上(iso_runner 的 .part 原子落盘协议),
+        # 且 #TARGET 哨兵上报的也是 .part 路径。这里必须同样用 .part 路径,
+        # 才能让 running_task() 的 stat(size) 与 targets 的 key 对得上,
+        # 否则进度条永远 0%(size=0 且 total 取不到)。
+        path = str(target / (fname + PART_SUFFIX))
         if (e["distribution"], fname) not in seen:
             seen.add((e["distribution"], fname))
             download_payload.append({"filename": fname, "path": path})

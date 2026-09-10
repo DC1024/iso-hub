@@ -83,6 +83,54 @@ class TestPartialDetection(BaselineTestBase):
         self.assertEqual(len(hit), 1)
         self.assertFalse(hit[0]["partial"])
 
+    def test_part_file_not_listed_under_raw_name(self):
+        """回归: .part 不得以原始名(带 .part)出现在清单里。
+
+        否则 build_distros 会把 xxx.iso.part 当成"不在最新清单元数据中"的
+        过期文件(stray), UI 显示「通常已被更新淘汰的旧版 ISO」并给出
+        「清理过期」按钮 —— 而它其实是正在下载、可续传的半成品。
+        """
+        (self.data / "linux" / "Ubuntu" / "a.iso.part").write_bytes(b"x" * 500)
+        names = [f["name"] for f in app.disk_inventory()[("linux", "Ubuntu")]]
+        self.assertIn("a.iso", names, "应以目标名出现")
+        self.assertNotIn("a.iso.part", names, "不得以带 .part 的原始名出现")
+
+    def test_part_file_not_in_stray_files(self):
+        """回归: 半成品不能进 stray_files(它对应清单里的文件, 不是过期文件)。"""
+        (self.data / "distributions.json").write_text(json.dumps({
+            "updated_at": 0,
+            "distributions": [{"distribution": "Ubuntu", "type": "linux",
+                               "download_url": "https://example.com/a.iso"}],
+        }), encoding="utf-8")
+        (self.data / "linux" / "Ubuntu" / "a.iso.part").write_bytes(b"x" * 500)
+        g = next(g for g in app.build_distros()["groups"] if g["name"] == "Ubuntu")
+        stray_names = [f["name"] for f in g["stray_files"]]
+        self.assertEqual(stray_names, [], f"半成品不应算过期文件, 实际: {stray_names}")
+        self.assertEqual(g["entries"][0]["status"], "partial")
+
+    def test_genuine_stray_still_detected(self):
+        """确实不在清单里的完整文件仍要报 stray(不能因修 bug 而漏报)。"""
+        (self.data / "distributions.json").write_text(json.dumps({
+            "updated_at": 0,
+            "distributions": [{"distribution": "Ubuntu", "type": "linux",
+                               "download_url": "https://example.com/a.iso"}],
+        }), encoding="utf-8")
+        (self.data / "linux" / "Ubuntu" / "old-2020.iso").write_bytes(b"x" * 100)
+        g = next(g for g in app.build_distros()["groups"] if g["name"] == "Ubuntu")
+        self.assertEqual([f["name"] for f in g["stray_files"]], ["old-2020.iso"])
+
+    def test_local_total_counts_physical_file_once(self):
+        """半成品与其同名完整文件并存时, local_total 不应重复计数。"""
+        (self.data / "linux" / "Ubuntu" / "a.iso").write_bytes(b"x" * 100)
+        (self.data / "linux" / "Ubuntu" / "a.iso.part").write_bytes(b"x" * 30)
+        (self.data / "distributions.json").write_text(json.dumps({
+            "updated_at": 0,
+            "distributions": [{"distribution": "Ubuntu", "type": "linux",
+                               "download_url": "https://example.com/a.iso"}],
+        }), encoding="utf-8")
+        g = next(g for g in app.build_distros()["groups"] if g["name"] == "Ubuntu")
+        self.assertEqual(g["local_total"], 130, "两个物理文件应各算一次(100+30)")
+
     def test_non_partial_suffix_ignored(self):
         """没有半成品后缀的文件不会被误判。"""
         self.assertEqual(app._partial_base_name("ubuntu-26.04.iso"), "")
@@ -365,7 +413,21 @@ class TestFrontendWiring(unittest.TestCase):
                           f"{fn} 的 401 分支缺少登录接口白名单判断")
 
     def test_version_bumped(self):
-        self.assertIn("APP_VERSION='1.2.5'", self.html)
+        self.assertIn("APP_VERSION='1.2.6'", self.html)
+
+    def test_poll_refreshes_list_while_running(self):
+        """回归: 任务运行期间也要刷新列表。
+
+        旧实现只在"任务结束"那一刻 loadDistros(), 导致用户下载中途看列表时
+        状态还是旧的(例如仍是「下载停止」), 误以为重新下载没生效。
+        """
+        self.assertIn("__lastDistroRefresh", self.html)
+        # 该刷新必须出现在 RUNNING 分支内(return 之前), 否则任务运行中不会触发
+        i_running = self.html.index("if(RUNNING&&s&&s.task){")
+        i_refresh = self.html.index("__lastDistroRefresh")
+        i_wasrunning = self.html.index("if(wasRunning)loadDistros()")
+        self.assertTrue(i_running < i_refresh < i_wasrunning,
+                        "运行中刷新列表的逻辑必须在 RUNNING 分支内")
 
 
 if __name__ == "__main__":
