@@ -66,7 +66,8 @@ services:
       retries: 3
       start_period: 15s
     depends_on:
-      - socket-proxy
+      socket-proxy:
+        condition: service_healthy
 
   # ---------- Docker socket 代理: 收窄主容器对 Docker API 的访问权限 ----------
   # 主容器不再持有裸 /var/run/docker.sock(等价宿主机 root), 而是经此代理按白名单调用。
@@ -91,6 +92,13 @@ services:
     volumes:
       # 只有该代理容器持有裸 sock, 且以只读方式挂载
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      # 用容器内自带的 wget 探 /_ping(白名单放行), 代理未就绪则 unhealthy
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:2375/_ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     # 仅容器网络内部可达, 不对外暴露端口
 
   # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
