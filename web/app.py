@@ -1016,12 +1016,25 @@ def set_share(proto: str, enabled: bool) -> bool:
         # start/stop 对已处于目标状态的容器返回 304, update 正常返回 200/204
         ok1 = r1.status in (200, 204, 304)
         ok2 = r2.status in (200, 204, 304)
-        if not (ok1 and ok2):
-            log(f"[共享] {proto} {'启用' if enabled else '停用'}未完全成功: "
-                f"步骤1={'OK' if ok1 else 'HTTP %s' % r1.status}, "
-                f"步骤2={'OK' if ok2 else 'HTTP %s' % r2.status}")
-            return False
-        return True
+        if ok1 and ok2:
+            return True
+        # 区分"完全失败"与"部分成功": 关键是把"当下能不能用"和"重启后会不会失效"分开说,
+        # 让用户第一时间知道现在到底能不能用(用户最怕的是状态不明)。
+        # 启用态: 步骤1=启动(决定当下可用性), 步骤2=自愈策略(决定重启后能否自启)。
+        # 停用态: 步骤1=重启策略设为 no, 步骤2=停止。
+        if enabled:
+            if ok1:
+                log(f"[共享] {proto} 启用部分成功: 容器已启动, 但自动重启策略未生效(步骤2: HTTP {r2.status})。"
+                    f"当前可用, 重启后不会自动恢复, 将在下次 iso-hub 启动时自动修复。")
+            else:
+                log(f"[共享] {proto} 启用失败: 容器启动失败(步骤1: HTTP {r1.status}), 配置未变更, 当前不可用。")
+        else:
+            if ok2:
+                log(f"[共享] {proto} 停用部分成功: 容器已停止, 但重启策略未设为 no(步骤1: HTTP {r1.status})。"
+                    f"当前已停用, 宿主重启后可能被自动拉起, 将在下次 iso-hub 启动时自动修复。")
+            else:
+                log(f"[共享] {proto} 停用失败: 容器停止失败(步骤2: HTTP {r2.status}), 配置未变更。")
+        return False
     except Exception:  # noqa: BLE001
         return False
 
@@ -1086,12 +1099,14 @@ def set_qb(enabled: bool, username: str, password: str) -> bool:
             # 1. 启动容器
             r1 = _docker_request("POST", f"/containers/{QB_CONTAINER}/start", None, 20)
             if r1.status not in (200, 204, 304):
+                log(f"[qB] 启用失败: 容器启动失败(步骤1: HTTP {r1.status}), 配置未变更, 当前不可用。")
                 return False
             # 2. 恢复自动重启策略(与 start 同等重要: 缺失会留下 running + restart=no,
             #    面板绿灯但宿主重启后不自启, 故必须校验, 不能静默忽略)
             r2 = _docker_request("POST", f"/containers/{QB_CONTAINER}/update", {"RestartPolicy": {"Name": "unless-stopped"}}, 20)
             if r2.status not in (200, 204, 304):
-                log(f"[qB] 恢复自动重启策略失败 HTTP {r2.status}, 启用视为未完全成功")
+                log(f"[qB] 启用部分成功: 容器已启动, 但自动重启策略未生效(步骤2: HTTP {r2.status})。"
+                    f"当前可用, 重启后不会自动恢复, 将在下次 iso-hub 启动时自动修复。")
                 return False
             # 3. 等待 conf 生成并写入密码
             for _ in range(15):
@@ -1107,11 +1122,17 @@ def set_qb(enabled: bool, username: str, password: str) -> bool:
         else:
             ru = _docker_request("POST", f"/containers/{QB_CONTAINER}/update", {"RestartPolicy": {"Name": "no"}}, 20)
             r = _docker_request("POST", f"/containers/{QB_CONTAINER}/stop", None, 20)
-            if ru.status not in (200, 204, 304) or r.status not in (200, 204, 304):
-                log(f"[qB] 停用未完全成功: update={'OK' if ru.status in (200, 204, 304) else 'HTTP %s' % ru.status}, "
-                    f"stop={'OK' if r.status in (200, 204, 304) else 'HTTP %s' % r.status}")
-                return False
-            return True
+            ok_ru = ru.status in (200, 204, 304)
+            ok_r = r.status in (200, 204, 304)
+            if ok_ru and ok_r:
+                return True
+            if ok_r:
+                # 停止成功(当下已停用), 但重启策略未设为 no -> 重启后可能被自动拉起
+                log(f"[qB] 停用部分成功: 容器已停止, 但重启策略未设为 no(步骤1: HTTP {ru.status})。"
+                    f"当前已停用, 宿主重启后可能被自动拉起, 将在下次 iso-hub 启动时自动修复。")
+            else:
+                log(f"[qB] 停用失败: 容器停止失败(步骤2: HTTP {r.status}), 配置未变更。")
+            return False
     except Exception as e:  # noqa: BLE001
         log(f"[qB] 启停异常: {e!r}")
         return False
@@ -1157,8 +1178,13 @@ def _heal_enabled_sidecar(cname: str, start_fn, handled: set[str]) -> bool:
         return True  # 容器尚未出现或查询失败 -> 下一轮再看
     if st == "running":
         policy = container_restart_policy(cname)
-        if policy is None or policy == "unless-stopped":
-            return False  # 策略查不到(保守跳过) 或已一致
+        if policy is None:
+            # 策略查询失败(代理暂不可达 / Docker API 抖动): 不误判为"已一致",
+            # 留待下一轮重试, 避免漏掉真正需要补自愈策略的容器
+            log(f"[启动收敛] {cname} 在运行但重启策略查询失败(代理可能暂不可达), 留待下一轮重试")
+            return True
+        if policy == "unless-stopped":
+            return False  # 已一致
         log(f"[启动收敛] {cname} 在运行但重启策略为 {policy}, 补设为 unless-stopped")
         _docker_request("POST", f"/containers/{cname}/update",
                         {"RestartPolicy": {"Name": "unless-stopped"}}, 20)
@@ -2727,8 +2753,8 @@ if __name__ == "__main__":
     seed_admin()  # 若设置 ISO_HUB_ADMIN_USER/PASS 则播种管理员
     # 启动收敛: compose 并发拉起 sidecar 存在时序竞态, 用后台线程重试直到状态一致,
     # 替代旧的一次性快照(_sync_disabled_shares/_sync_disabled_qb 仍保留供手动/测试调用)
-    start_sidecar_convergence()
     _bootstrap_webdav_conf()  # 首次部署时 ./webdav-config 为空, 按当前设置生成 webdav.yml
+    start_sidecar_convergence()
     schedule_auto_sync()  # 订阅自动同步调度器(默认每天; ISO_HUB_SYNC_INTERVAL 可改秒数)
     if os.environ.get("ISO_HUB_DEV"):
         # 即使开发模式也不开启 debug, 避免 Werkzeug 调试器暴露任意代码执行

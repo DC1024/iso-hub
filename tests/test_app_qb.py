@@ -157,6 +157,72 @@ class TestSetQb(unittest.TestCase):
         self.assertFalse(result, "update restart 失败时停用不得报成功")
 
 
+class TestSetQbFailureMessaging(unittest.TestCase):
+    """回归: set_qb 失败时必须区分"完全失败"与"部分成功", 把"当前能不能用"说清楚。"""
+
+    def _fake(self, status):
+        r = MagicMock()
+        r.status = status
+        r.text = "{}"
+        return r
+
+    @staticmethod
+    def _logmsg(mock_log):
+        return " ".join(str(c.args[0]) for c in mock_log.call_args_list)
+
+    @patch.object(app, "QB_CONF_PATH")
+    @patch.object(app, "_docker_request")
+    @patch.object(app, "_set_qb_password")
+    @patch.object(app, "log")
+    def test_enable_partial_success_message(self, mock_log, mock_pwd, mock_docker, mock_conf):
+        """start 成功 + update 重启策略失败 -> 部分成功(当前可用, 重启后失效)。"""
+        mock_conf.exists.return_value = True
+        mock_pwd.return_value = True
+        mock_docker.side_effect = [self._fake(204), self._fake(500), self._fake(204)]
+        self.assertFalse(app.set_qb(True, "admin", "adminadmin"))
+        msg = self._logmsg(mock_log)
+        self.assertIn("部分成功", msg)
+        self.assertIn("当前可用", msg)
+        self.assertIn("重启后不会自动恢复", msg)
+        self.assertIn("步骤2", msg)
+
+    @patch.object(app, "QB_CONF_PATH")
+    @patch.object(app, "_docker_request")
+    @patch.object(app, "_set_qb_password")
+    @patch.object(app, "log")
+    def test_enable_complete_failure_message(self, mock_log, mock_pwd, mock_docker, mock_conf):
+        """start 失败 -> 完全失败(配置未变更, 当前不可用)。"""
+        mock_conf.exists.return_value = True
+        mock_pwd.return_value = True
+        mock_docker.side_effect = [self._fake(500)]
+        self.assertFalse(app.set_qb(True, "admin", "adminadmin"))
+        msg = self._logmsg(mock_log)
+        self.assertIn("启用失败", msg)
+        self.assertIn("当前不可用", msg)
+        self.assertIn("步骤1", msg)
+
+    @patch.object(app, "_docker_request")
+    @patch.object(app, "log")
+    def test_disable_partial_success_message(self, mock_log, mock_docker):
+        """停用: update no 失败但 stop 成功 -> 部分成功(当前已停用, 重启后可能被拉起)。"""
+        mock_docker.side_effect = [self._fake(500), self._fake(204)]
+        self.assertFalse(app.set_qb(False, "admin", "adminadmin"))
+        msg = self._logmsg(mock_log)
+        self.assertIn("部分成功", msg)
+        self.assertIn("当前已停用", msg)
+        self.assertIn("可能被自动拉起", msg)
+
+    @patch.object(app, "_docker_request")
+    @patch.object(app, "log")
+    def test_disable_complete_failure_message(self, mock_log, mock_docker):
+        """停用: stop 失败 -> 完全失败(配置未变更)。"""
+        mock_docker.side_effect = [self._fake(200), self._fake(500)]
+        self.assertFalse(app.set_qb(False, "admin", "adminadmin"))
+        msg = self._logmsg(mock_log)
+        self.assertIn("停用失败", msg)
+        self.assertIn("配置未变更", msg)
+
+
 class TestSyncDisabledQb(unittest.TestCase):
     """验证启动同步 _sync_disabled_qb。"""
 

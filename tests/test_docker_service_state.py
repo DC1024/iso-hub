@@ -321,6 +321,91 @@ class TestSetShareStrictResult(unittest.TestCase):
         self.assertTrue(app.set_share("samba", False))
 
 
+class TestSetShareFailureMessaging(unittest.TestCase):
+    """回归: set_share 失败时必须区分"完全失败"(当下不可用) 与"部分成功"(当下可用但重启失效)。
+
+    用户最怕的是状态不明 —— 不知道现在到底能不能用。因此日志要把
+    "当前能不能用" 与 "重启后会不会失效" 分开说清楚, 恰好对应需求里的
+    "完全失败" / "部分成功" 两种文案。
+    """
+
+    @staticmethod
+    def _logmsg(mock_log):
+        return " ".join(str(c.args[0]) for c in mock_log.call_args_list)
+
+    @patch.object(app, "_docker_request")
+    @patch.object(app, "log")
+    def test_enable_partial_success_message(self, mock_log, mock_docker):
+        """start 成功 + update 失败 -> 部分成功, 明确"当前可用, 重启后不会自动恢复"。"""
+        mock_docker.side_effect = [_docker_resp(204), _docker_resp(500)]
+        self.assertFalse(app.set_share("samba", True))
+        msg = self._logmsg(mock_log)
+        self.assertIn("部分成功", msg)
+        self.assertIn("当前可用", msg)
+        self.assertIn("重启后不会自动恢复", msg)
+        self.assertIn("步骤2", msg)
+
+    @patch.object(app, "_docker_request")
+    @patch.object(app, "log")
+    def test_enable_complete_failure_message(self, mock_log, mock_docker):
+        """start 失败 -> 完全失败, 明确"配置未变更, 当前不可用"。"""
+        mock_docker.side_effect = [_docker_resp(500), _docker_resp(200)]
+        self.assertFalse(app.set_share("samba", True))
+        msg = self._logmsg(mock_log)
+        self.assertIn("启用失败", msg)
+        self.assertIn("当前不可用", msg)
+        self.assertIn("步骤1", msg)
+
+    @patch.object(app, "_docker_request")
+    @patch.object(app, "log")
+    def test_disable_partial_success_message(self, mock_log, mock_docker):
+        """停用: update no 失败但 stop 成功 -> 部分成功(当前已停用, 重启后可能被拉起)。"""
+        mock_docker.side_effect = [_docker_resp(500), _docker_resp(204)]
+        self.assertFalse(app.set_share("samba", False))
+        msg = self._logmsg(mock_log)
+        self.assertIn("部分成功", msg)
+        self.assertIn("当前已停用", msg)
+        self.assertIn("可能被自动拉起", msg)
+
+    @patch.object(app, "_docker_request")
+    @patch.object(app, "log")
+    def test_disable_complete_failure_message(self, mock_log, mock_docker):
+        """停用: stop 失败 -> 完全失败(配置未变更)。"""
+        mock_docker.side_effect = [_docker_resp(200), _docker_resp(500)]
+        self.assertFalse(app.set_share("samba", False))
+        msg = self._logmsg(mock_log)
+        self.assertIn("停用失败", msg)
+        self.assertIn("配置未变更", msg)
+
+
+class TestHealEnabledSidecarPolicyNone(unittest.TestCase):
+    """回归: _heal_enabled_sidecar 在重启策略查询失败时(policy=None)应留待重试, 不可误判为已一致。
+
+    修复前 `policy is None` 走 `return False`, 会把"查不到"当成"已一致"跳过, 漏掉
+    真正需要补自愈策略的容器。修复后改为 `return True`(pending) + 告警日志。
+    """
+
+    def test_policy_none_pends_retry_and_does_not_act(self):
+        """running + 策略查询返回 None -> 返回 True(下一轮重试), 且不得调用 update/启停。"""
+        with patch.object(app, "share_container_state", return_value="running"), \
+             patch.object(app, "container_restart_policy", return_value=None), \
+             patch.object(app, "_docker_request") as mock_docker, \
+             patch.object(app, "log") as mock_log:
+            rc = app._heal_enabled_sidecar("samba-test", lambda on: None, set())
+        self.assertTrue(rc, "policy=None 必须留待下一轮重试, 不能视为已一致")
+        mock_docker.assert_not_called()  # 不误动作
+        self.assertIn("留待下一轮重试", " ".join(str(c.args[0]) for c in mock_log.call_args_list))
+
+    def test_policy_unless_stopped_is_consistent(self):
+        """running + unless-stopped -> 已一致, 返回 False, 不动作。"""
+        with patch.object(app, "share_container_state", return_value="running"), \
+             patch.object(app, "container_restart_policy", return_value="unless-stopped"), \
+             patch.object(app, "_docker_request") as mock_docker:
+            rc = app._heal_enabled_sidecar("samba-test", lambda on: None, set())
+        self.assertFalse(rc)
+        mock_docker.assert_not_called()
+
+
 class TestEnabledSidecarConvergence(unittest.TestCase):
     """回归: 启动收敛的**反向**分支(配置为启用的 sidecar 也要收敛)。
 
@@ -378,8 +463,12 @@ class TestEnabledSidecarConvergence(unittest.TestCase):
             self.assertEqual(c[0][1], True, "必须以 enabled=True 启动, 绝不能是停用")
         mock_set_qb.assert_called_once_with(True, "u", "p")
 
-    def test_policy_unknown_is_skipped_conservatively(self):
-        """重启策略查不到(None) -> 保守跳过, 不据此启停任何容器。"""
+    def test_policy_unknown_pends_retry_conservatively(self):
+        """重启策略查不到(None) -> 留待下一轮重试, 但仍保守(本轮不据此启停任何容器)。
+
+        修复前这里会 `return False` 把"查不到"误判成"已一致", 从而漏掉真正需要补
+        自愈策略的容器; 修复后改为 `return True`(pending), 等代理/API 恢复后再判定。
+        """
         shares = {"samba": {"enabled": True}, "webdav": {"enabled": True}}
         qb = {"enabled": True, "username": "u", "password": "p"}
         p = self._patches(shares, qb, "running", None)
@@ -390,6 +479,7 @@ class TestEnabledSidecarConvergence(unittest.TestCase):
              patch.object(app.time, "sleep"):
             app._converge_disabled_sidecars(attempts=2, interval=0)
 
+        # 仍不得误动作(不调用 docker / 不启停容器), 但会标记为 pending 继续重试
         mock_docker.assert_not_called()
         mock_set_share.assert_not_called()
         mock_set_qb.assert_not_called()
@@ -541,6 +631,21 @@ class TestStartupConvergence(unittest.TestCase):
         main_src = src[src.index('if __name__ == "__main__":'):]
         self.assertIn("start_sidecar_convergence()", main_src,
                       "启动路径应调用 start_sidecar_convergence 以覆盖时序竞态")
+
+    def test_main_entrypoint_bootstraps_webdav_before_convergence(self):
+        """回归: 启动路径必须先 _bootstrap_webdav_conf 再 start_sidecar_convergence。
+
+        顺序反了会怎样: 收敛线程可能在 webdav.yml 尚不存在时就去 docker start webdav,
+        而 webdav 容器的启动命令挂载 `-c /config/webdav.yml`, 文件缺失即崩溃重启 ——
+        "配置为启用但未运行" 的死循环。先兜底生成配置再收敛, 才是唯一正确的顺序。
+        """
+        import inspect
+        src = inspect.getsource(app)
+        main_src = src[src.index('if __name__ == "__main__":'):]
+        i_boot = main_src.index("_bootstrap_webdav_conf()")
+        i_conv = main_src.index("start_sidecar_convergence()")
+        self.assertLess(i_boot, i_conv,
+                        "_bootstrap_webdav_conf() 必须先于 start_sidecar_convergence() 执行")
 
 
 if __name__ == "__main__":
