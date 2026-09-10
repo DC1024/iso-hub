@@ -88,6 +88,16 @@
       "sub_listing_template": "{listing_url}{version}/Everything/x86_64/iso/",
       "artifact_regex": "href=\\\"(?P<value>Fedora-Everything-netinst-x86_64-(?P<release>[\\d.-]+)\\.iso)\\\"",
       "checksum_template": "{sub_listing_url}Fedora-Everything-{release}-x86_64-CHECKSUM",
+      "entry_defaults": {
+        "gpg_verify": "checksum",
+        "gpg_key_url": "https://fedoraproject.org/fedora.gpg",
+        "gpg_key_fingerprint": [
+          "C6E7F081CF80E13146676E88829B606631645531",
+          "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+          "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+          "D924B10D3E810DABDD8B56B596E7E91491211FCE"
+        ]
+      },
       "mirrors": [
         {
           "listing_url": "https://mirrors.ustc.edu.cn/fedora/releases/",
@@ -116,6 +126,16 @@
       "sub_listing_template": "{listing_url}{version}/Workstation/x86_64/iso/",
       "artifact_regex": "href=\\\"(?P<value>Fedora-Workstation-Live-(?:x86_64-)?(?P<release>[\\d.-]+)(?:\\.x86_64)?\\.iso)\\\"",
       "checksum_template": "{sub_listing_url}Fedora-Workstation-{release}-x86_64-CHECKSUM",
+      "entry_defaults": {
+        "gpg_verify": "checksum",
+        "gpg_key_url": "https://fedoraproject.org/fedora.gpg",
+        "gpg_key_fingerprint": [
+          "C6E7F081CF80E13146676E88829B606631645531",
+          "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+          "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+          "D924B10D3E810DABDD8B56B596E7E91491211FCE"
+        ]
+      },
       "mirrors": [
         {
           "listing_url": "https://mirrors.ustc.edu.cn/fedora/releases/",
@@ -139,21 +159,21 @@
       "type": "linux",
       "strategy": "flat_listing",
       "listing_url": "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/",
-      "artifact_regex": "href=\\\"(?P<value>proxmox-ve_[\\d.]+-\\d\\.iso)\\\"",
+      "artifact_regex": "href=\\\"\\.?\\/?(?P<value>proxmox-ve_[\\d.]+-\\d\\.iso)\\\"",
       "max_entries": 3,
-      "checksum_template": "{listing_url}SHA256SUMS",
+      "checksum_template": "{listing_url}{match}.sha256",
       "mirrors": [
         {
           "listing_url": "https://mirrors.ustc.edu.cn/proxmox/iso/",
-          "checksum_template": "{listing_url}SHA256SUMS"
+          "checksum_template": "{listing_url}{match}.sha256"
         },
         {
           "listing_url": "https://mirrors.aliyun.com/proxmox/iso/",
-          "checksum_template": "{listing_url}SHA256SUMS"
+          "checksum_template": "{listing_url}{match}.sha256"
         },
         {
           "listing_url": "https://download.proxmox.com/iso/",
-          "checksum_template": "{listing_url}SHA256SUMS"
+          "checksum_template": "{listing_url}{match}.sha256"
         }
       ]
     },
@@ -166,6 +186,11 @@
       "max_entries": 3,
       "download_template": "{listing_url}{version}/ubuntu-{version}-desktop-amd64.iso",
       "checksum_template": "{listing_url}{version}/SHA256SUMS",
+      "entry_defaults": {
+        "gpg_verify": "checksum",
+        "gpg_key_url": "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg",
+        "gpg_key_fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092"
+      },
       "mirrors": [
         {
           "listing_url": "https://mirrors.ustc.edu.cn/ubuntu-releases/",
@@ -198,6 +223,11 @@
       "max_entries": 3,
       "download_template": "{listing_url}{version}/ubuntu-{version}-live-server-amd64.iso",
       "checksum_template": "{listing_url}{version}/SHA256SUMS",
+      "entry_defaults": {
+        "gpg_verify": "checksum",
+        "gpg_key_url": "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg",
+        "gpg_key_fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092"
+      },
       "mirrors": [
         {
           "listing_url": "https://mirrors.ustc.edu.cn/ubuntu-releases/",

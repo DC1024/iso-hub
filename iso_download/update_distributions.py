@@ -373,12 +373,32 @@ STRATEGY_BUILDERS = {
 }
 
 
+def _apply_entry_defaults(source: Dict, entries: List[Dict]) -> List[Dict]:
+    """把 source 里的 entry_defaults 通用透传给每条 entry。
+
+    背景: 各 build_* 函数生成的 entry 只含 distribution/type/download_url/
+    checksum_url/checksum 等基础字段, GPG 签名验证所需的 gpg_verify/gpg_key_url/
+    gpg_key_fingerprint 等配置曾因此是手工写死在 distributions.json 里的,
+    刷新清单时被整体冲掉 -> 指纹锚定失效。这里把 source 配置中声明的起始
+    键值逐个 merge 进 entry, 只补 entry 缺失的键(不覆盖 builder 已生成的值,
+    也不硬编码 gpg 字段名), 做成通用透传, 向后兼容无 entry_defaults 的旧 source。
+    """
+    defaults = source.get("entry_defaults")
+    if not isinstance(defaults, dict) or not defaults:
+        return entries
+    for entry in entries:
+        for key, value in defaults.items():
+            if key not in entry:
+                entry[key] = value
+    return entries
+
+
 def build_entries(source: Dict) -> List[Dict]:
     strategy = source.get("strategy")
     if strategy not in STRATEGY_BUILDERS:
         raise SourceBuilderError(f"Unsupported strategy '{strategy}'.")
     builder = STRATEGY_BUILDERS[strategy]
-    return builder(source)
+    return _apply_entry_defaults(source, builder(source))
 
 
 def main() -> None:

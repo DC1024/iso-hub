@@ -327,6 +327,19 @@ class LinuxDistributionDownloader:
                 print(f"  ✓ 公钥指纹锚定通过: {', '.join(matched)}")
             return "ok"
 
+    @staticmethod
+    def _has_embedded_signature(checksum_text: str) -> bool:
+        """判断 checksum 文本是否内嵌 clearsigned PGP 签名(如 Fedora CHECKSUM)。
+
+        Fedora 的 CHECKSUM 文件是 cleartext signature 形式(direct signature),
+        签名就内嵌在文件自身, 没有独立的 detached .asc/.gpg 签名文件可下载。
+        识别标准: 同时出现 PGP signed message 头与 PGP signature 块。
+        """
+        if not checksum_text:
+            return False
+        return ("-----BEGIN PGP SIGNED MESSAGE-----" in checksum_text
+                and "-----BEGIN PGP SIGNATURE-----" in checksum_text)
+
     def verify_signature(self, checksum_text: str, sig_url: str, gpg_key_url: str,
                          keyring_dir: Path,
                          expected_fingerprints: Optional[object] = None) -> str:
@@ -356,13 +369,33 @@ class LinuxDistributionDownloader:
             state = self._prepare_keyring(keyring, gpg_key_url, expected)
             if state != "ok":
                 return state
-            # 2. 取签名文件(URL 或按惯例推导)
+            # 2. 内嵌 clearsigned 签名(如 Fedora CHECKSUM): 直接对 checksum 文本
+            #    单文件验签, 无需独立的 detached 签名文件。gpgv 不支持
+            #    cleartext signature(direct signature), 只能用 gpg --verify。
+            embedded = self._has_embedded_signature(checksum_text)
+            if embedded:
+                import tempfile
+                with tempfile.TemporaryDirectory() as home:
+                    env = dict(os.environ, GNUPGHOME=home)
+                    kr = home + "/keyring.gpg"
+                    open(kr, "wb").write(keyring.read_bytes())
+                    cf = home + "/checksum.txt"
+                    open(cf, "w", encoding="utf-8").write(checksum_text)
+                    cmd = ["gpg", "--no-default-keyring", "--keyring", kr,
+                           "--verify", cf]
+                    r = subprocess.run(cmd, capture_output=True, env=env)
+                    if r.returncode == 0:
+                        return "pass"
+                    print("  内嵌签名验证失败: "
+                          f"{r.stderr.decode('utf-8', 'replace')[:200]}")
+                    return "fail"
+            # 3. 取 detached 签名文件(URL 或按惯例推导)
             if not sig_url:
                 return "skip"  # 无签名文件可验
             sig = requests.get(sig_url, timeout=30).content
             if not sig:
                 return "skip"
-            # 3. 验证 detached 签名: 优先 gpgv(不信任签名者), 否则回退 gpg --verify
+            # 4. 验证 detached 签名: 优先 gpgv(不信任签名者), 否则回退 gpg --verify
             import tempfile
             with tempfile.TemporaryDirectory() as home:
                 env = dict(os.environ, GNUPGHOME=home)
@@ -381,7 +414,6 @@ class LinuxDistributionDownloader:
                 r = subprocess.run(cmd, capture_output=True, env=env)
                 if r.returncode == 0:
                     return "pass"
-                # 校验和文件自身可含嵌入式签名(如 Fedora CHECKSUM): 尝试用 gpg --verify 校验文件内签名
                 return "fail"
         except Exception as e:  # noqa: BLE001
             print(f"  GPG 签名验证异常(降级): {e}")

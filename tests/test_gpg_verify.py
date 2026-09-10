@@ -49,12 +49,14 @@ class TestSignatureUrlDerivation(unittest.TestCase):
         url = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/26.04/SHA256SUMS"
         self.assertTrue(self.d._default_sig_url(url).endswith("SHA256SUMS.gpg"))
 
-    def test_arch_sig_via_config(self):
-        """Arch 的 .sig 由 distributions.json 显式配置(推导默认 .gpg)。"""
+    def test_arch_has_no_gpg_verify(self):
+        """Arch 官方只签 ISO 本体(.iso.sig), 从不签 checksum 文件, 现行代码
+        不支持验 ISO 签名, 故 Arch 明确不配 gpg_verify, 让其走 SHA256 不误伤。"""
         data = json.loads((REPO_ROOT / "iso_download" / "distributions.json").read_text(encoding="utf-8"))
         arch = [d for d in data["distributions"] if d["distribution"] == "Arch"]
         self.assertTrue(arch, "应有 Arch 条目")
-        self.assertTrue(arch[0].get("signature_url", "").endswith(".sig"))
+        for d in arch:
+            self.assertNotIn("gpg_verify", d, "Arch 不签 checksum 文件, 不应配 gpg_verify")
 
     def test_already_signature_not_double_appended(self):
         """已是 .gpg 结尾的 URL 不应重复追加。"""
@@ -170,13 +172,35 @@ class TestDistributionsJsonGpgFields(unittest.TestCase):
             (REPO_ROOT / "iso_download" / "distributions.json").read_text(encoding="utf-8"))
 
     def test_signed_distros_have_gpg_fields(self):
-        for name in ("Ubuntu", "Arch", "Fedora"):
+        for name in ("Ubuntu", "Fedora"):
             entries = [d for d in self.data["distributions"] if d["distribution"] == name]
             self.assertTrue(entries, f"应有 {name} 条目")
             self.assertTrue(all(d.get("gpg_verify") for d in entries),
                             f"{name} 应配置 gpg_verify")
             self.assertTrue(all(d.get("gpg_key_url") for d in entries),
                             f"{name} 应配置 gpg_key_url")
+
+    def test_ubuntu_fingerprint_is_pinned_single(self):
+        """Ubuntu 单指纹锚定(CD Image Automatic Signing Key)。"""
+        for d in [x for x in self.data["distributions"] if x["distribution"] == "Ubuntu"]:
+            self.assertEqual(d.get("gpg_key_fingerprint"),
+                             "843938DF228D22F7B3742BC0D94AA3F0EFE21092")
+            self.assertEqual(d.get("gpg_key_url"),
+                             "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg")
+
+    def test_fedora_fingerprints_are_multi_pinned(self):
+        """Fedora 一份公钥含多把轮换密钥, 指纹按版本不同, 必须配成多指纹数组。"""
+        EXPECTED = [
+            "C6E7F081CF80E13146676E88829B606631645531",  # F43
+            "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",  # F44
+            "4F50A6114CD5C6976A7F1179655A4B02F577861E",  # F45
+            "D924B10D3E810DABDD8B56B596E7E91491211FCE",  # F46
+        ]
+        for d in [x for x in self.data["distributions"] if x["distribution"] == "Fedora"]:
+            self.assertEqual(d.get("gpg_key_url"), "https://fedoraproject.org/fedora.gpg")
+            self.assertIsInstance(d.get("gpg_key_fingerprint"), list,
+                                  "Fedora 指纹必须为多指纹数组")
+            self.assertEqual(d.get("gpg_key_fingerprint"), EXPECTED)
 
     def test_unsigned_distros_have_no_gpg_verify(self):
         """无官方签名的发行版不应强制 GPG(否则会误拒下载)。"""
@@ -436,6 +460,83 @@ class TestFingerprintPinning(unittest.TestCase):
         status = self._call(GOOD_FP, [GOOD_FP])
         self.assertEqual(status, "pass")
         self.assertEqual(_decode_keyring(self.keyring.read_bytes()), [GOOD_FP])
+
+
+class TestEmbeddedClearsignedSignature(unittest.TestCase):
+    """Fedora CHECKSUM 是内嵌 clearsigned 签名(direct signature), 无独立 .gpg/.asc
+    文件可下载, 走 gpg --verify 单文件模式即可, 不需要再拉 detached 签名文件。"""
+
+    CLEARSIGNED = (
+        "-----BEGIN PGP SIGNED MESSAGE-----\n"
+        "Hash: SHA256\n\n"
+        "abc  *.iso\n"
+        "-----BEGIN PGP SIGNATURE-----\n"
+        "FAKEBLOCK=fake\n"
+        "-----END PGP SIGNATURE-----\n"
+    )
+
+    def setUp(self):
+        self.d = dl.LinuxDistributionDownloader.__new__(dl.LinuxDistributionDownloader)
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_has_embedded_signature_true(self):
+        """同时含 PGP signed message 头与 PGP signature 块即判为内嵌签名。"""
+        self.assertTrue(self.d._has_embedded_signature(self.CLEARSIGNED))
+
+    def test_has_embedded_signature_false_on_plain(self):
+        """普通 checksum 文本(无签名块)不判为内嵌签名。"""
+        self.assertFalse(self.d._has_embedded_signature("abc  file.iso\n"))
+        self.assertFalse(self.d._has_embedded_signature(""))
+        self.assertFalse(self.d._has_embedded_signature(None))
+
+    def _make_spy_gpg(self, imported, verify_rc=0):
+        """复用 _fake_gpg 的 keyring/import/export 行为, 仅包一层以记录调用并
+        自定义 --verify 返回码。"""
+        base = _fake_gpg(imported)
+        calls = []
+
+        def _run(args, **kwargs):
+            calls.append(list(args))
+            if "--verify" in args:
+                out = b"Good signature" if verify_rc == 0 else b"BAD signature"
+                return _completed(verify_rc, b"", out)
+            return base(args, **kwargs)
+
+        return _run, calls
+
+    def _seed_valid_keyring(self):
+        keyring = self.tmp / "iso-hub.gpg"
+        keyring.write_bytes(_encode_keyring([GOOD_FP]))
+        return keyring
+
+    def test_embedded_signature_uses_gpg_single_file_mode(self):
+        """内嵌签名走 gpg --verify 单文件模式, 不下载 detached 签名文件。"""
+        self._seed_valid_keyring()
+        run, calls = self._make_spy_gpg([GOOD_FP], verify_rc=0)
+        with patch("shutil.which", return_value="/usr/bin/gpg"), \
+             patch.object(dl.subprocess, "run", side_effect=run):
+            status = self.d.verify_signature(self.CLEARSIGNED, "", KEY_URL,
+                                             self.tmp, GOOD_FP)
+        self.assertEqual(status, "pass")
+        # 过滤出 --verify 那次调用: 单文件模式, 参数末尾是 checksum.txt 且无独立 .sig
+        verify_calls = [c for c in calls if "--verify" in c]
+        self.assertEqual(len(verify_calls), 1)
+        verify_cmd = verify_calls[0]
+        self.assertEqual(verify_cmd[0], "gpg")
+        self.assertTrue(verify_cmd[-1].endswith("checksum.txt"))
+        self.assertFalse(any(a.endswith(".sig") for a in verify_cmd))
+
+    def test_embedded_signature_failure_returns_fail(self):
+        """内嵌签名校验失败(returncode != 0)必须 fail, 不静默降级。"""
+        self._seed_valid_keyring()
+        run, _ = self._make_spy_gpg([GOOD_FP], verify_rc=1)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), \
+             patch("shutil.which", return_value="/usr/bin/gpg"), \
+             patch.object(dl.subprocess, "run", side_effect=run):
+            status = self.d.verify_signature(self.CLEARSIGNED, "", KEY_URL,
+                                             self.tmp, GOOD_FP)
+        self.assertEqual(status, "fail")
 
 
 class TestChecksumSmartFingerprintWiring(unittest.TestCase):
