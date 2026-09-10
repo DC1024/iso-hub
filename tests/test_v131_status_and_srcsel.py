@@ -220,8 +220,8 @@ class TestMirrorDropdownDefault(unittest.TestCase):
 
 
 class TestVersionBumped(unittest.TestCase):
-    def test_app_version_is_1_3_1(self):
-        self.assertIn("'1.3.2'", HTML)
+    def test_app_version_is_current(self):
+        self.assertIn("'1.3.3'", HTML)
         self.assertNotIn("'1.2.9'\n", HTML.split("APP_VERSION")[1][:40])
 
 

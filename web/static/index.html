@@ -46,7 +46,17 @@
   .ver-chip{display:inline-block;font-size:10.5px;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--brand),var(--brand2));
             border-radius:20px;padding:1px 9px;margin-left:8px;vertical-align:middle;letter-spacing:.5px;box-shadow:0 2px 6px -2px rgba(37,99,235,.5)}
   .sub{color:var(--ink2);font-size:12.5px;margin-top:2px}
-  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  /* v1.3.3: 工具栏按钮必须"跨主题几何恒等"。
+     起因: 主题按钮的图标在日/夜模式间切换(🌙 U+1F319 EAW=Wide ↔ ☀ U+2600 EAW=Neutral),
+     两者字符宽度不同, 使 .actions 行宽相差 ~4.9px。工具栏本来就贴着换行边界,
+     这 4.9px 足以让整行在浅色模式多折一行 —— 表现就是"切主题后按钮跑到第二行/位置变了"。
+     这里同时上三道保险: 图标层固定尺寸 + 按钮不随内容换行 + 行内不做弹性伸缩。 */
+  .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .actions>button{flex:0 0 auto;white-space:nowrap}
+  /* 图标槽: 无论里面是 🌙 还是 ☀, 占位恒定, 杜绝按钮宽度随主题抖动 */
+  .icon-slot{display:inline-flex;align-items:center;justify-content:center;
+             width:1.15em;height:1em;flex:0 0 auto;line-height:1;
+             font-family:"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif}
   button{border:0;border-radius:9px;padding:8px 14px;font-size:13px;cursor:pointer;font-weight:600;
          display:inline-flex;align-items:center;gap:6px;transition:.15s;font-family:inherit}
   button:disabled{opacity:.45;cursor:not-allowed}
@@ -246,7 +256,7 @@
       <button class="btn-s" id="btnMeta" onclick="updateMeta()" data-i18n="fetchMeta" data-page-node-id="qijJX1kzDbLpYA9pKClBCO">⤓ 抓取最新版本元数据</button>
       <button class="btn-s" id="btnSync" onclick="syncSubs()" data-i18n="syncNow" data-page-node-id="mc6mlHA3GbqWRcPB5Y5TuM">🔄 订阅同步</button>
       <button class="btn-d" id="btnStop" onclick="stopTask()" disabled data-i18n="stopTask" data-page-node-id="97m2QOnbeOJBTysDJxwfAN">■ 停止任务</button>
-      <button class="btn-s" id="btnTheme" onclick="toggleTheme()" title="theme" data-page-node-id="tsHFx4ONZwJreKD408b7pp">🌓</button>
+      <button class="btn-s" id="btnTheme" onclick="toggleTheme()" data-i18n-title="theme" data-page-node-id="tsHFx4ONZwJreKD408b7pp" title="切换日/夜间模式"><span class="icon-slot" id="theme-icon">🌙</span></button>
     </div>
   </header>
 
@@ -607,8 +617,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.3.2';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.3.2';
+const APP_VERSION='1.3.3';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.3.3';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -951,6 +961,11 @@ function applyLang(){
       else el.insertBefore(document.createTextNode(v), el.firstChild);
     }
     else el.innerHTML=v;
+  });
+  // v1.3.3: 处理 data-i18n-title —— 只换悬浮提示, 不碰可见文本。
+  // 此前主题按钮写死 title="theme", 中文界面悬浮显示英文 "theme"。
+  document.querySelectorAll('[data-i18n-title]').forEach(el=>{
+    el.title=t(el.dataset.i18nTitle);
   });
   // 刷新动态内容
   if(typeof refreshSelState==='function')refreshSelState();
@@ -1346,8 +1361,13 @@ startPoll();
 function applyTheme(theme){
   document.documentElement.setAttribute('data-theme',theme);
   localStorage.setItem('iso_hub_theme',theme);
-  const b=document.querySelector('#btnTheme');
+  // v1.3.3: 只改 .icon-slot 里的字形, 不改按钮本身 —— 该 span 宽高恒定(见 CSS),
+  // 于是「🌙(Wide) → ☀(Neutral)」的字符宽度差被槽位吸收, 工具栏不再随主题换行/位移。
+  const b=document.querySelector('#theme-icon')||document.querySelector('#btnTheme');
   if(b)b.textContent=theme==='dark'?'☀':'🌙';
+  // 标题提示也要跟着语言走(此前 title="theme" 是写死的非翻译文本, 悬浮提示始终显示 "theme")
+  const btn=document.querySelector('#btnTheme');
+  if(btn)btn.title=t('theme');
   applyLang();
 }
 function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')}
