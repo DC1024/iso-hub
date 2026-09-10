@@ -596,8 +596,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.2.3';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.2.3';
+const APP_VERSION='1.2.4';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.2.4';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -945,8 +945,11 @@ let UTOKEN=localStorage.getItem('iso_hub_user')||'';   // 登录会话 token
 const authH=()=>{const t=UTOKEN||TOKEN;return t?{'X-Auth-Token':t}:{}};
 let GATE_OPEN=false; // 强制登录遮罩是否打开(打开时静默返回401, 不弹token prompt)
 function askToken(){return false} // 认证改为登录会话(REQUIRE_LOGIN)后, 不再用 ISO_HUB_TOKEN prompt; 401 交由上层提示"请先登录"
-async function jget(u){let r=await fetch(u,{headers:authH(),cache:'no-store'});if(r.status===401){if(!askToken())return{};r=await fetch(u,{headers:authH(),cache:'no-store'})}return r.json()}
-async function jpost(u,b){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'});if(r.status===401){if(!askToken())return{s:401,j:{error:t('pleaseLogin')}};r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'})}return{s:r.status,j:await r.json()}}
+// 登录接口自身返回的 401 是"凭据错误"的业务响应(带 code/error), 必须原样透传给调用方,
+// 否则会被下面的 401 兜底逻辑替换成笼统的"请先登录后再操作", 让用户看不出哪里错了。
+const AUTH_ENDPOINTS=['/api/user/login'];
+async function jget(u){let r=await fetch(u,{headers:authH(),cache:'no-store'});if(r.status===401&&!AUTH_ENDPOINTS.includes(u)){if(!askToken())return{};r=await fetch(u,{headers:authH(),cache:'no-store'})}return r.json()}
+async function jpost(u,b){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'});if(r.status===401&&!AUTH_ENDPOINTS.includes(u)){if(!askToken())return{s:401,j:{error:t('pleaseLogin')}};r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'})}return{s:r.status,j:await r.json()}}
 
 /* ---------- 数据渲染 ---------- */
 async function loadDistros(){

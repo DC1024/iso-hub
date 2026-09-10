@@ -318,8 +318,24 @@ class TestFrontendWiring(unittest.TestCase):
         self.assertIn("loginNoUser", self.html)
         self.assertIn("loginBadPass", self.html)
 
+    def test_jpost_passes_login_401_through(self):
+        """回归: jpost 不得把 /api/user/login 的 401 替换成笼统的"请先登录后再操作"。
+
+        曾出现的问题: jpost 对任何 401 都返回 {error: t('pleaseLogin')}, 把登录接口
+        返回的 code/error(用户名不存在 / 密码错误) 吞掉了, 导致用户永远只看到
+        "请先登录后再操作"。必须存在白名单让登录接口的 401 原样透传。
+        """
+        self.assertIn("AUTH_ENDPOINTS", self.html)
+        self.assertIn("'/api/user/login'", self.html)
+        # jpost/jget 的 401 分支必须带上白名单判断, 不能无条件改写
+        for fn in ("async function jpost(", "async function jget("):
+            line = next((l for l in self.html.splitlines() if l.startswith(fn)), "")
+            self.assertTrue(line, f"未找到 {fn}")
+            self.assertIn("AUTH_ENDPOINTS.includes(u)", line,
+                          f"{fn} 的 401 分支缺少登录接口白名单判断")
+
     def test_version_bumped(self):
-        self.assertIn("APP_VERSION='1.2.3'", self.html)
+        self.assertIn("APP_VERSION='1.2.4'", self.html)
 
 
 if __name__ == "__main__":
