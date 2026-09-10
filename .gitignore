@@ -25,3 +25,8 @@ Thumbs.db
 .workbuddy_push.py
 .workbuddy_e2e_*.py
 .workbuddy_*.py
+
+# ===== 开发过程产物(不入库) =====
+# agentic 工作概述 / QA 验证报告: 含本地绝对路径, 对使用者无价值
+overview.md
+QA_REPORT_*.md
