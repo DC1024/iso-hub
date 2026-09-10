@@ -405,15 +405,21 @@ class TestFrontendWiring(unittest.TestCase):
         """
         self.assertIn("AUTH_ENDPOINTS", self.html)
         self.assertIn("'/api/user/login'", self.html)
-        # jpost/jget 的 401 分支必须带上白名单判断, 不能无条件改写
-        for fn in ("async function jpost(", "async function jget("):
-            line = next((l for l in self.html.splitlines() if l.startswith(fn)), "")
-            self.assertTrue(line, f"未找到 {fn}")
-            self.assertIn("AUTH_ENDPOINTS.includes(u)", line,
-                          f"{fn} 的 401 分支缺少登录接口白名单判断")
+        # jpost/jget 的 401 分支必须带上白名单判断, 不能无条件改写。
+        # jpost 是单行实现; jget 自 v1.2.8 起改为多行, 需按函数体边界取。
+        jpost_line = next((l for l in self.html.splitlines()
+                           if l.startswith("async function jpost(")), "")
+        self.assertTrue(jpost_line, "未找到 jpost")
+        self.assertIn("AUTH_ENDPOINTS.includes(u)", jpost_line,
+                      "jpost 的 401 分支缺少登录接口白名单判断")
+
+        i = self.html.index("async function jget(u){")
+        jget_body = self.html[i:self.html.index("\n}", i)]
+        self.assertIn("AUTH_ENDPOINTS.includes(u)", jget_body,
+                      "jget 的 401 分支缺少登录接口白名单判断")
 
     def test_version_bumped(self):
-        self.assertIn("APP_VERSION='1.2.7'", self.html)
+        self.assertIn("APP_VERSION='1.2.8'", self.html)
 
     def test_poll_refreshes_list_while_running(self):
         """回归: 任务运行期间也要刷新列表。
@@ -425,7 +431,8 @@ class TestFrontendWiring(unittest.TestCase):
         # 该刷新必须出现在 RUNNING 分支内(return 之前), 否则任务运行中不会触发
         i_running = self.html.index("if(RUNNING&&s&&s.task){")
         i_refresh = self.html.index("__lastDistroRefresh")
-        i_wasrunning = self.html.index("if(wasRunning)loadDistros()")
+        # v1.2.8: 轮询结束后的刷新改为 silent(避免与主提示叠加), 断言只认前缀
+        i_wasrunning = self.html.index("if(wasRunning)loadDistros(")
         self.assertTrue(i_running < i_refresh < i_wasrunning,
                         "运行中刷新列表的逻辑必须在 RUNNING 分支内")
 
@@ -455,6 +462,71 @@ class TestFrontendWiring(unittest.TestCase):
         """v1.2.7: 「一个都没删掉」的提示文案必须真实存在, 否则 UI 显示原始 key。"""
         self.assertIn("'delNothingRemoved'", self.html)
         self.assertIn("t('delNothingRemoved')", self.html)
+
+
+class TestRefreshListFeedback(unittest.TestCase):
+    """v1.2.8 回归: 「刷新列表」必须给用户反馈, 且失败不能被静默吞掉。
+
+    Bug 背景: 用户报「点了没反应」。排除了鉴权/请求失败(用户已登录且下载正常)后
+    定位为**缺反馈**: loadDistros() 成功时不弹任何提示, 数据无变化时重绘结果与
+    当前画面完全一致, 用户无从判断点击是否被受理。
+    同时发现 jget() 的 401 分支无条件 `return {}`, 把失败信号也一并吞了——
+    这次不是它导致的, 但同属"静默"隐患, 一并修掉。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+
+    def test_button_has_id_for_loading_state(self):
+        """刷新按钮必须有 id, 才能挂 loading 态。"""
+        self.assertIn('id="btnRefresh"', self.html)
+        self.assertIn("onclick=\"loadDistros()\"", self.html)
+
+    def test_loaddistros_toasts_on_success(self):
+        """成功刷新必须提示, 否则用户看到"点了没反应"。"""
+        i = self.html.index("async function loadDistros(opts){")
+        body = self.html[i:i + 1400]
+        self.assertIn("t('listRefreshed')", body,
+                      "loadDistros 成功时应 toast 列表已刷新")
+
+    def test_loaddistros_reports_failure(self):
+        """请求失败时必须有错误提示, 不能静默渲染空列表。"""
+        i = self.html.index("async function loadDistros(opts){")
+        body = self.html[i:i + 1400]
+        self.assertIn("LAST_GET_FAILED", body, "loadDistros 应检查 jget 的失败标记")
+        self.assertIn("t('refreshFailed')", body, "失败时应提示刷新失败")
+        self.assertIn("t('pleaseLogin')", body, "401 时应提示请先登录")
+
+    def test_loaddistros_has_loading_state(self):
+        """点击后应立刻有 loading 视觉反馈。"""
+        i = self.html.index("async function loadDistros(opts){")
+        body = self.html[i:i + 1400]
+        self.assertIn("btnRefresh", body)
+        self.assertIn("classList.add('loading')", body)
+        self.assertIn("classList.remove('loading')", body)
+        self.assertIn(".btn-s.loading", self.html)
+
+    def test_jget_exposes_failure_flag(self):
+        """jget 不得再无条件静默 return {}; 必须把失败写进 LAST_GET_FAILED。"""
+        i = self.html.index("async function jget(u){")
+        body = self.html[i:i + 600]
+        self.assertIn("LAST_GET_FAILED=null", body, "每次调用先清空标记")
+        self.assertIn("LAST_GET_FAILED={status:r.status", body, "失败时写入标记")
+        # 结构必须保持 {} 以兼容其余 20+ 个调用点
+        self.assertIn("return{}", body, "仍需返回 {} 以兼容既有调用方")
+
+    def test_incidental_refreshes_are_silent(self):
+        """顺带刷新(删除后/轮询结束等)不应重复弹成功提示, 必须传 silent。"""
+        self.assertIn("loadDistros({silent:true})", self.html)
+        # 显式按钮点击必须非 silent, 否则又变回"没反应"
+        self.assertIn('onclick="loadDistros()"', self.html)
+
+    def test_refresh_i18n_keys_exist(self):
+        """v1.2.8 新增文案必须真实存在于字典, 否则 UI 显示原始 key。"""
+        for k in ("'listRefreshed'", "'refreshFailed'"):
+            self.assertIn(k, self.html, f"缺少 i18n key {k}")
+            self.assertIn(f"t({k})", self.html, f"{k} 未被引用")
 
 
 if __name__ == "__main__":

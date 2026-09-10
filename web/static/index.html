@@ -57,6 +57,10 @@
   .btn-s:not(:disabled):hover{border-color:var(--brand2);color:var(--brand)}
   .btn-d{background:var(--badbg);color:var(--bad)}
   .btn-d:not(:disabled):hover{background:var(--badbg);filter:brightness(.94)}
+  /* 刷新按钮 loading 态: 让"点击已被受理"立刻可见(此前点了毫无反馈) */
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .btn-s.loading{opacity:.75;cursor:progress}
+  .btn-s.loading::before{content:'⟳';display:inline-block;animation:spin .8s linear infinite}
   /* tabs */
   .tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
   .tab{background:var(--panel);color:var(--ink2);border:1px solid var(--line);padding:7px 14px;border-radius:9px}
@@ -229,7 +233,7 @@
       </div>
     </div>
     <div class="actions" data-page-node-id="zHGBP88pVTrA0Nvoatp1Xd">
-      <button class="btn-s" onclick="loadDistros()" data-i18n="refresh" data-page-node-id="usHAHHDJwxecD5PUNJ2oBd">⟳ 刷新列表</button>
+      <button class="btn-s" id="btnRefresh" onclick="loadDistros()" data-i18n="refresh" data-page-node-id="usHAHHDJwxecD5PUNJ2oBd">⟳ 刷新列表</button>
       <button class="btn-s" id="btnSel" onclick="toggleAll()" data-i18n="selectAll" data-page-node-id="OT41xsc1FwPp6Gd3KrfACz">☑ 全选</button>
       <button class="btn-p" id="btnDown" onclick="downloadSel()" data-i18n="downloadSel" data-page-node-id="7FVROiyELUnV665bFgNNjF">⬇ 下载所选</button>
       <button class="btn-d" id="btnDel" onclick="deleteSel()" data-i18n="deleteSel" data-page-node-id="uLHauqdS39MIuquGOYE7nm">🗑 删除所选</button>
@@ -596,8 +600,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.2.7';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.2.7';
+const APP_VERSION='1.2.8';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.2.8';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -617,6 +621,8 @@ const I18N={
   'share':{zh:'网络共享',en:'Network Share'},
   'settings':{zh:'设置',en:'Settings'},
   'refresh':{zh:'刷新列表',en:'Refresh'},
+  'listRefreshed':{zh:'列表已刷新',en:'List refreshed'},
+  'refreshFailed':{zh:'刷新失败',en:'Refresh failed'},
   'selectAll':{zh:'全选',en:'Select All'},
   'deselectAll':{zh:'取消全选',en:'Deselect'},
   'downloadSel':{zh:'下载所选',en:'Download Selected'},
@@ -938,7 +944,7 @@ function applyLang(){
   });
   // 刷新动态内容
   if(typeof refreshSelState==='function')refreshSelState();
-  if(typeof loadDistros==='function')loadDistros();
+  if(typeof loadDistros==='function')loadDistros({silent:true});
   if(typeof loadSubs==='function')loadSubs();
 }
 
@@ -950,15 +956,49 @@ function askToken(){return false} // 认证改为登录会话(REQUIRE_LOGIN)后,
 // 登录接口自身返回的 401 是"凭据错误"的业务响应(带 code/error), 必须原样透传给调用方,
 // 否则会被下面的 401 兜底逻辑替换成笼统的"请先登录后再操作", 让用户看不出哪里错了。
 const AUTH_ENDPOINTS=['/api/user/login'];
-async function jget(u){let r=await fetch(u,{headers:authH(),cache:'no-store'});if(r.status===401&&!AUTH_ENDPOINTS.includes(u)){if(!askToken())return{};r=await fetch(u,{headers:authH(),cache:'no-store'})}return r.json()}
+// jget 的 401 分支过去无条件 `return {}`, 调用方拿到的空对象和"接口真的返回空"
+// 无法区分, 于是失败被静默吞掉(典型症状: 点「刷新列表」毫无反应也无报错)。
+// askToken() 现恒返回 false, 该分支实际上已经变成"无条件吞掉 401"。
+// 这里用一个模块级标记把失败信号暴露出来, 同时**保持返回 {} 的结构不变**,
+// 以免影响另外 20+ 个依赖"字段缺失即失败"的既有调用点。
+let LAST_GET_FAILED=null;   // null=成功, 否则 {status, url}
+async function jget(u){
+  LAST_GET_FAILED=null;
+  let r=await fetch(u,{headers:authH(),cache:'no-store'});
+  if(r.status===401&&!AUTH_ENDPOINTS.includes(u)){
+    if(GATE_OPEN||!askToken()){LAST_GET_FAILED={status:r.status,url:u};return{};}
+    r=await fetch(u,{headers:authH(),cache:'no-store'});
+  }
+  if(!r.ok){LAST_GET_FAILED={status:r.status,url:u};}
+  try{return await r.json()}catch(e){return{}}
+}
 async function jpost(u,b){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'});if(r.status===401&&!AUTH_ENDPOINTS.includes(u)){if(!askToken())return{s:401,j:{error:t('pleaseLogin')}};r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'})}return{s:r.status,j:await r.json()}}
 
 /* ---------- 数据渲染 ---------- */
-async function loadDistros(){
-  try{const sr=await jget('/api/subscriptions');SUBS=sr.subscriptions||[];}catch(e){}
-  const d=await jget('/api/distros');
-  GROUPS=d.groups||[];
-  render(d);
+/* 刷新镜像列表(「⟳ 刷新列表」按钮 / 各写操作完成后调用)。
+   silent=true 供"顺带刷新"的场景使用(如删除后自动刷新), 不弹成功提示。
+   注意: 本函数只重新读取当前状态, 不会联网抓取新元数据 —— 那是 updateMeta()。 */
+async function loadDistros(opts){
+  const silent=!!(opts&&opts.silent);
+  const btn=$('#btnRefresh');
+  if(btn&&!silent){btn.disabled=true;btn.classList.add('loading');}
+  try{
+    try{const sr=await jget('/api/subscriptions');SUBS=sr.subscriptions||[];}catch(e){}
+    const d=await jget('/api/distros');
+    // 请求失败必须说出来: 否则重绘结果与当前画面完全一致, 用户只会看到"点了没反应"
+    if(LAST_GET_FAILED){
+      const code=LAST_GET_FAILED.status;
+      toast(code===401?t('pleaseLogin'):(t('refreshFailed')+' (HTTP '+code+')'),'err');
+      return;
+    }
+    GROUPS=d.groups||[];
+    render(d);
+    if(!silent)toast(t('listRefreshed')+' · '+time2str(Math.floor(Date.now()/1000)));
+  }catch(e){
+    toast(t('refreshFailed')+': '+(e&&e.message?e.message:e),'err');
+  }finally{
+    if(btn){btn.disabled=false;btn.classList.remove('loading');}
+  }
 }
 // 生成某条目可选的镜像源下拉(仅当存在多个源时显示,默认"自动/跟随全局策略")
 function srcSelHtml(e){
@@ -1090,7 +1130,7 @@ async function prune(name,type){
   if(!confirm(`${t('pruneConfirm')}「${name}」${t('pruneConfirm2')}`))return;
   const r=await jpost('/api/prune',{distribution:name,type});
   toast(r.j.ok?(t('deleted')+' '+r.j.removed.length+' '+t('staleFiles')):(r.j.error||t('failed')),!r.j.ok);
-  loadDistros();
+  loadDistros({silent:true});
 }
 /* 删除所选: 只删除「已下载」的 ISO 文件(未下载的选中项自动忽略)。
    锁定(🔒)文件一律不删 —— 锁定优先级高于手动删除, 必须先在列表点解锁。
@@ -1138,7 +1178,7 @@ async function deleteSel(){
   let msg=t('deletedFmt').replace('{n}',rm);
   if(sk)msg+=' · '+sk+' '+t('skipped');
   toast(msg, rm===0);
-  loadDistros();
+  loadDistros({silent:true});
 }
 /* 单行删除: 直接调后端。锁定文件被硬拒绝(需先解锁), 前端给明确指引。 */
 async function deleteOne(type,name,filename,btn){
@@ -1155,7 +1195,7 @@ async function deleteOne(type,name,filename,btn){
   const rm=(r.j.removed||[]).length;
   if(rm)toast(t('deletedFmt').replace('{n}',rm));
   else toast((r.j.skipped||[]).join('; ')||t('delNothingRemoved'),'err');
-  loadDistros();
+  loadDistros({silent:true});
 }
 async function stopTask(){await jpost('/api/stop')}
 
@@ -1205,7 +1245,7 @@ async function poll(){
     // 避免频繁请求 /api/distros 造成卡顿。
     if(!window.__lastDistroRefresh||Date.now()-window.__lastDistroRefresh>5000){
       window.__lastDistroRefresh=Date.now();
-      loadDistros();
+      loadDistros({silent:true});
     }
     return;
   }
@@ -1215,7 +1255,7 @@ async function poll(){
   const _pf=$('#progfill');if(_pf)_pf.style.setProperty('--w','0%');
   const _pt=$('#progtext');if(_pt)_pt.textContent='0%';
   fetchLogs();
-  if(wasRunning)loadDistros();   // 任务结束,刷新本地磁盘状态
+  if(wasRunning)loadDistros({silent:true});   // 任务结束,刷新本地磁盘状态
   }catch(e){ /* 单次轮询出错不中断循环, 下一轮继续 */ }
 }
 async function fetchLogs(){
@@ -1341,7 +1381,7 @@ function unprotectFromList(p){
     PROTECTED=new Set(r.j.protected||[]);
     toast(t('unlocked')+' '+p);
     renderProtectedList();
-    if(typeof loadDistros==='function')loadDistros();
+    if(typeof loadDistros==='function')loadDistros({silent:true});
   });
 }
 async function loadUserState(){
@@ -1541,7 +1581,7 @@ function showLogin(){
   if($('#user-status').textContent===t('loggedIn')){
     jpost('/api/user/logout').then(r=>{
       UTOKEN='';localStorage.removeItem('iso_hub_user');
-      loadUserState();loadDistros();
+      loadUserState();loadDistros({silent:true});
     });
   }else{
     const u=prompt(t('loginUser'));
@@ -1551,7 +1591,7 @@ function showLogin(){
     jpost('/api/user/login',{username:u,password:p}).then(r=>{
       if(r.s!==200)return toast(loginErrMsg(r.j),'err');
       UTOKEN=r.j.token||'';localStorage.setItem('iso_hub_user',UTOKEN);
-      loadUserState();loadDistros();
+      loadUserState();loadDistros({silent:true});
     });
   }
 }
@@ -1630,12 +1670,12 @@ async function addCustomSource(){
   const r=await jpost('/api/custom-sources',{distribution,type,download_url:url,checksum_url:check});
   if(!r.j.ok)return toast(r.j.error||t('addFailed'),'err');
   toast(t('addedCustom'));$('#cs-dist').value=$('#cs-type').value=$('#cs-url').value=$('#cs-check').value='';
-  loadCustomSources();loadDistros();
+  loadCustomSources();loadDistros({silent:true});
 }
 async function delCustomSource(url){
   if(!confirm(t('delConfirm')))return;
   const r=await fetch('/api/custom-sources?url='+encodeURIComponent(url),{method:'DELETE',headers:authH()});
-  toast(t('deletedSrc'));loadCustomSources();loadDistros();
+  toast(t('deletedSrc'));loadCustomSources();loadDistros({silent:true});
 }
 async function refreshCustomSources(){
   const r=await jpost('/api/custom-sources/refresh');
@@ -1685,14 +1725,14 @@ async function addSrcRepo(){
   const r=await jpost('/api/custom-sources',p);
   if(!r.j.ok)return toast(r.j.error||t('addFailed'),'err');
   toast(t('addedRepo'));
-  loadCustomSources();loadDistros();
+  loadCustomSources();loadDistros({silent:true});
   // 展开改为后台任务执行(非阻塞), 完成后自动刷新列表
   if(r.j.pending_refresh||r.j.ok){AFTER=0;startPoll(true);}
 }
 async function delSrcRepo(dist,strategy){
   if(!confirm(`${t('delRepoConfirm1')}「${dist}」${t('delRepoConfirm2')}`))return;
   const r=await fetch('/api/custom-sources?distribution='+encodeURIComponent(dist)+'&strategy='+encodeURIComponent(strategy),{method:'DELETE',headers:authH()});
-  toast(t('deletedSrc'));loadCustomSources();loadDistros();
+  toast(t('deletedSrc'));loadCustomSources();loadDistros({silent:true});
 }
 async function applySrcEdit(dist,strategy){
   const r=await jget('/api/custom-sources');
@@ -1742,7 +1782,7 @@ let PROTECTED=new Set();
 function refreshProtected(){
   jget('/api/protected').then(r=>{
     PROTECTED=new Set(r.protected||[]);
-    if(typeof loadDistros==='function')loadDistros();
+    if(typeof loadDistros==='function')loadDistros({silent:true});
   });
 }
 function isProtected(name){
@@ -1828,7 +1868,7 @@ function applyFilter(){
     }
   }
 }
-function renderCurrent(){if(typeof GROUPS!=='undefined'&&GROUPS.length)loadDistros()}
+function renderCurrent(){if(typeof GROUPS!=='undefined'&&GROUPS.length)loadDistros({silent:true})}
 async function toggleSubscribe(name,type){
   const r=await jget('/api/subscriptions');
   let subs=r.subscriptions||[];
@@ -1843,7 +1883,7 @@ async function toggleSubscribe(name,type){
   const r2=await jpost('/api/subscriptions',{subscriptions:subs});
   if(r2.s!==200)return toast(r2.j.error||t('saveFailed'),'err');
   SUBS=subs;
-  loadDistros(); // 刷新列表更新订阅按钮状态
+  loadDistros({silent:true}); // 刷新列表更新订阅按钮状态
 }
 async function loadSubs(){
   const r=await jget('/api/subscriptions');
@@ -1874,7 +1914,7 @@ async function delSub(btn){
   let subs=SUBS.filter(s=>!(s.type===type&&s.distribution===name));
   const r=await jpost('/api/subscriptions',{subscriptions:subs});
   if(r.s!==200)return toast(r.j.error||t('delFailed'),'err');
-  SUBS=subs;toast(t('delSubDone')+' '+name);loadSubs();loadDistros();
+  SUBS=subs;toast(t('delSubDone')+' '+name);loadSubs();loadDistros({silent:true});
 }
 async function saveSubs(){
   const subs=[...document.querySelectorAll('#subs-list .sub-row')].map(row=>({
@@ -2072,7 +2112,7 @@ async function gateLogin(){
     toast(t('loginOk'));
     // 刷新登录状态与主数据, 等效于整页加载
     try{loadUserState()}catch(_){}
-    try{loadDistros()}catch(_){}
+    try{loadDistros({silent:true})}catch(_){}
     try{startPoll&&startPoll(true)}catch(_){}
     try{switchTab('mirror')}catch(_){}
   }catch(err){
