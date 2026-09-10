@@ -1831,6 +1831,83 @@ def api_prune():
     return jsonify({"ok": True, "removed": removed, "skipped": skipped})
 
 
+@app.post("/api/delete-files")
+def api_delete_files():
+    """删除清单内已下载的 ISO 文件。
+
+    请求体: {"items": [{"type": "linux", "distribution": "Ubuntu", "filename": "xxx.iso"}, ...],
+             "force": false}
+
+    安全约束(逐条对应):
+      1. 路径穿越: (type, distribution) 经 _safe_join 校验, 必须落在 DATA_DIR 内
+      2. 文件名: 拒绝空/含分隔符/为 . 或 ..; 且最终路径必须仍在目标目录内
+      3. 只删清单内文件: 文件名必须属于该发行版**当前清单**(expected), 否则拒绝
+         —— 防止误删用户手动放入的 ISO; 若要删除非清单文件请用「清理过期」接口
+      4. 受保护文件: 默认跳过; 只有显式 force=true 才允许删除(前端会二次确认)
+      5. 任务互斥: 有下载任务在跑时拒绝, 避免边下边删造成状态错乱
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    items = body.get("items") or []
+    force = bool(body.get("force"))
+    if not items:
+        return jsonify({"error": "没有选择任何文件"}), 400
+    if running_task():
+        return jsonify({"error": "已有任务在运行, 请稍后再试"}), 409
+
+    cur = load_json()
+    # 按 (type, distribution) 归集当前清单里的合法文件名
+    expected: dict[tuple[str, str], set[str]] = {}
+    for e in cur.get("distributions", []):
+        url = e.get("download_url", "") or ""
+        fname = url.rstrip("/").rsplit("/", 1)[-1]
+        if not fname:
+            continue
+        expected.setdefault((e.get("type", "linux"), e.get("distribution", "")), set()).add(fname)
+
+    protected = set(load_protected())
+    removed, skipped = [], []
+    for it in items:
+        typ = str(it.get("type") or "").strip()
+        name = str(it.get("distribution") or "").strip()
+        fname = str(it.get("filename") or "").strip()
+        label = f"{fname or '(空文件名)'}"
+        if not fname or "/" in fname or "\\" in fname or fname in (".", ".."):
+            skipped.append(f"{label}: 非法文件名")
+            continue
+        target = _safe_join(typ, name)
+        if target is None:
+            skipped.append(f"{label}: 非法的 type/distribution")
+            continue
+        # 只允许删除当前清单内声明的文件(防误删用户自有 ISO)
+        if fname not in expected.get((typ, name), set()):
+            skipped.append(f"{label}: 不在当前清单内, 已拒绝(如需清理请用「清理过期」)")
+            continue
+        rel = f"{typ}/{name}/{fname}"
+        if (rel in protected or fname in protected) and not force:
+            skipped.append(f"{label}: 受保护, 已跳过")
+            continue
+        fp = (target / fname)
+        # 二次确认最终路径仍在目标目录内(防 symlink / 拼接绕过)
+        try:
+            fp.resolve().relative_to(target.resolve())
+        except ValueError:
+            skipped.append(f"{label}: 路径越界, 已拒绝")
+            continue
+        if not fp.is_file():
+            skipped.append(f"{label}: 文件不存在")
+            continue
+        try:
+            fp.unlink()
+            removed.append(fname)
+        except OSError as e:  # noqa: BLE001
+            skipped.append(f"{label}: {e}")
+
+    log(f"[删除] 请求 {len(items)} 个, 成功 {len(removed)} 个, 跳过 {len(skipped)} 个"
+        + ("(force)" if force else ""))
+    return jsonify({"ok": True, "removed": removed, "skipped": skipped})
+
+
+
 # ---------- 受保护/锁定文件 ----------
 def _rel_of_file(abs_path: Path, typ: str = "", name: str = "") -> str:
     """把磁盘文件绝对路径规约成相对路径 type/name/文件名。"""

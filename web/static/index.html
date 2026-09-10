@@ -140,6 +140,8 @@
   .btn-lock{width:24px;height:24px;padding:0;border:none;background:transparent;font-size:13px;line-height:1;cursor:pointer;opacity:.55;flex:0 0 auto}
   .btn-lock:hover{opacity:1;transform:scale(1.15)}
   .btn-lock.on{opacity:1}
+  .btn-rowdel{width:26px;height:24px;padding:0;font-size:12px;line-height:1;opacity:.6}
+  .btn-rowdel:hover{opacity:1}
   .prot-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
   .prot-row:last-child{border-bottom:0}
   .prot-row .pn{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
@@ -228,6 +230,7 @@
       <button class="btn-s" onclick="loadDistros()" data-i18n="refresh">⟳ 刷新列表</button>
       <button class="btn-s" id="btnSel" onclick="toggleAll()" data-i18n="selectAll">☑ 全选</button>
       <button class="btn-p" id="btnDown" onclick="downloadSel()" data-i18n="downloadSel">⬇ 下载所选</button>
+      <button class="btn-d" id="btnDel" onclick="deleteSel()" data-i18n="deleteSel">🗑 删除所选</button>
       <button class="btn-s" id="btnMeta" onclick="updateMeta()" data-i18n="fetchMeta">⤓ 抓取最新版本元数据</button>
       <button class="btn-s" id="btnSync" onclick="syncSubs()" data-i18n="syncNow">🔄 订阅同步</button>
       <button class="btn-d" id="btnStop" onclick="stopTask()" disabled data-i18n="stopTask">■ 停止任务</button>
@@ -590,8 +593,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.2.1';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
-const VERSION_TAG='1.2.1';
+const APP_VERSION='1.2.2';   // 前端版本号: 每改一版递增, 刷新后右上角徽章显示
+const VERSION_TAG='1.2.2';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -637,6 +640,18 @@ const I18N={
   'logInfo':{zh:'信息',en:'Info'},
   'filterFav':{zh:'已收藏',en:'Favorited'},
   'filterBy':{zh:'筛选:',en:'Filter:'},
+  'filterNoMatch':{zh:'当前筛选条件下没有匹配的发行版 —— 换个筛选条件或切回「全部」',en:'No distributions match the current filter. Try another filter or switch back to All.'},
+  'deleteSel':{zh:'🗑 删除所选',en:'🗑 Delete Selected'},
+  'deleteOne':{zh:'删除这个已下载的 ISO 文件',en:'Delete this downloaded ISO'},
+  'deleteOneConfirm':{zh:'确定删除这个文件？此操作不可恢复。',en:'Delete this file? This cannot be undone.'},
+  'delSelectedConfirm':{zh:'确定删除所选文件？此操作不可恢复。',en:'Delete the selected files? This cannot be undone.'},
+  'delNoDownloaded':{zh:'所选项目中没有已下载的文件',en:'None of the selected items have been downloaded'},
+  'delSkippedNotDownloaded':{zh:'项未下载，已自动忽略',en:'item(s) not downloaded, skipped'},
+  'delLockedWarn':{zh:'个文件处于受保护(🔒)状态',en:'file(s) are locked (🔒)'},
+  'delLockedAsk':{zh:'仍要删除受保护文件吗？（点“确定”强制删除，点“取消”放弃）',en:'Delete the locked files anyway? (OK = force delete, Cancel = abort)'},
+  'deletedFmt':{zh:'已删除 {n} 个文件',en:'Deleted {n} file(s)'},
+  'skipped':{zh:'跳过',en:'skipped'},
+  'andMore':{zh:'还有',en:'and'},
   'favGroup':{zh:'收藏',en:'Favorite'},
   'unfavGroup':{zh:'取消收藏',en:'Unfavorite'},
   'subscribed':{zh:'已订阅',en:'Subscribed'},
@@ -759,6 +774,7 @@ const I18N={
   'copyCmd':{zh:'复制',en:'Copy'},
   'cmdCopied':{zh:'命令已复制',en:'Command copied'},
   'pleaseSel':{zh:'请先勾选要下载的版本',en:'Please select versions to download'},
+  'pleaseSelAny':{zh:'请先勾选要操作的版本',en:'Please select versions first'},
   'startFailed':{zh:'启动失败',en:'Failed to start'},
   'taskStarted':{zh:'任务已启动:',en:'Task started:'},
   'files':{zh:'个文件',en:'files'},
@@ -944,7 +960,13 @@ function render(d){
   $('#sLocal').textContent=fmt(groups.reduce((a,g)=>a+g.local_total,0));
   $('#sMeta').textContent=time2str(d.updated_at);
   const box=$('#groups');box.innerHTML='';
-  if(!groups.length){$('#empty').style.display='';return}
+  if(!groups.length){
+    // 清单本身为空: 显示默认空提示(还原被筛选提示借用的文案)
+    const e=$('#empty');
+    if(e.dataset.origText!==undefined){e.textContent=e.dataset.origText;delete e.dataset.origText}
+    e.style.display='';
+    return;
+  }
   $('#empty').style.display='none';
   groups.forEach(g=>{
     const card=document.createElement('div');card.className='card';
@@ -961,6 +983,7 @@ function render(d){
         <td class="src-cell">${srcSelHtml(e)}</td>
         <td class="td-r"><span class="badge ${st==='ok'?'ok':st==='old'?'old':'none'}">${label}</span></td>
         <td class="td-r"><button class="btn-lock ${isProtected(e.filename)?'on':''}" onclick="toggleProtect('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${isProtected(e.filename)?t('unlock'):t('lock')}">${isProtected(e.filename)?'🔒':'🔓'}</button></td>
+        <td class="td-r">${e.local_size>0?`<button class="btn-d btn-rowdel" onclick="deleteOne('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('deleteOne')}">🗑</button>`:''}</td>
       </tr>`;
     });
     let strayHtml='';
@@ -988,14 +1011,22 @@ function render(d){
   // 应用筛选(初始加载/重绘时)
   if(typeof applyFilter==='function')applyFilter();
 }
-function refreshSelState(){ // 全选按钮文案
-  const cks=[...document.querySelectorAll('.ck')];
+function refreshSelState(){ // 全选按钮文案: 只统计「当前可见(未被筛选隐藏)」的行, 与用户所见一致
+  const cks=[...document.querySelectorAll('#groups .ck')].filter(c=>c.closest('tr')&&c.closest('tr').style.display!=='none');
   const on=cks.filter(c=>c.checked).length;
   allChecked=!!cks.length&&on===cks.length;
   $('#btnSel').textContent=allChecked?('☐ '+t('deselectAll')):('☑ '+t('selectAll'));
 }
 function toggleAll(){document.querySelectorAll('.ckg').forEach(c=>c.checked=!allChecked);toggleAllGroups(!allChecked)}
-function toggleAllGroups(v){document.querySelectorAll('.ck').forEach(c=>c.checked=v);refreshSelState()}
+function toggleAllGroups(v){
+  // 全选/取消全选只作用于可见行, 避免选中被筛选隐藏的项
+  document.querySelectorAll('#groups .ck').forEach(c=>{
+    const tr=c.closest('tr');
+    if(tr&&tr.style.display==='none')return;
+    c.checked=v;
+  });
+  refreshSelState();
+}
 function toggleGroup(cb){const g=cb.closest('.card');g.querySelectorAll('.ck').forEach(c=>c.checked=cb.checked);refreshSelState()}
 document.addEventListener('change',e=>{if(e.target.classList.contains('ck'))refreshSelState()});
 
@@ -1028,6 +1059,68 @@ async function prune(name,type){
   if(!confirm(`${t('pruneConfirm')}「${name}」${t('pruneConfirm2')}`))return;
   const r=await jpost('/api/prune',{distribution:name,type});
   toast(r.j.ok?(t('deleted')+' '+r.j.removed.length+' '+t('staleFiles')):(r.j.error||t('failed')),!r.j.ok);
+  loadDistros();
+}
+/* 删除所选: 只删除「已下载」的 ISO 文件(未下载的选中项自动忽略)。
+   受保护(🔒)文件会先提示, 经用户二次确认后才带 force 重发。 */
+function filenameOf(e){
+  const u=(e.download_url||'').replace(/\/+$/,'');
+  return u.split('/').pop()||'';
+}
+async function deleteSel(){
+  const cks=[...document.querySelectorAll('.ck:checked')];
+  if(!cks.length)return toast(t('pleaseSelAny'),'err');
+  // 建立 download_url -> {entry, type} 映射(type 只在组层级, 需一并带上)
+  const map=new Map();
+  GROUPS.forEach(g=>g.entries.forEach(e=>map.set(e.download_url,{e:e,type:g.type})));
+  // 只挑「本地已有文件」的项
+  const items=cks.map(c=>{
+    const hit=map.get(c.dataset.url);if(!hit)return null;
+    if(!(hit.e.local_size>0))return null;               // 未下载 -> 跳过
+    return {type:hit.type||'linux', distribution:hit.e.distribution, filename:filenameOf(hit.e)};
+  }).filter(it=>it&&it.filename);
+  const skippedNotDownloaded=cks.length-items.length;
+  if(!items.length)return toast(t('delNoDownloaded'),'err');
+
+  // 受保护文件检测(前端先提示, 后端仍会二次校验)
+  const locked=items.filter(it=>isProtected(it.filename)).map(it=>it.filename);
+  let force=false;
+  const baseMsg=`${t('delSelectedConfirm')}\n\n${items.length} ${t('files')}`
+    + (skippedNotDownloaded?`\n(${skippedNotDownloaded} ${t('delSkippedNotDownloaded')})`:'')
+    + `\n\n${items.slice(0,10).map(i=>'· '+i.filename).join('\n')}`
+    + (items.length>10?`\n… ${t('andMore')} ${items.length-10}`:'');
+  if(locked.length){
+    if(!confirm(`${baseMsg}\n\n⚠ ${locked.length} ${t('delLockedWarn')}\n${locked.slice(0,5).join('\n')}${locked.length>5?'\n…':''}\n\n${t('delLockedAsk')}`))return;
+    force=true;
+  }else{
+    if(!confirm(baseMsg))return;
+  }
+  const r=await jpost('/api/delete-files',{items,force});
+  if(r.s===409)return toast(r.j.error,'err');
+  if(r.s!==200)return toast(r.j.error||t('failed'),'err');
+  const rm=(r.j.removed||[]).length, sk=(r.j.skipped||[]).length;
+  let msg=t('deletedFmt').replace('{n}',rm);
+  if(sk)msg+=' · '+sk+' '+t('skipped');
+  toast(msg, rm===0);
+  loadDistros();
+}
+/* 单行删除: 直接调后端, 受保护文件需二次确认(与批量删除共用后端约束) */
+async function deleteOne(type,name,filename,btn){
+  const locked=isProtected(filename);
+  let force=false;
+  const msg=`${t('deleteOneConfirm')}\n\n${filename}`
+    + (locked?`\n\n⚠ ${t('delLockedWarn')}\n${t('delLockedAsk')}`:'');
+  if(!confirm(msg))return;
+  if(locked)force=true;
+  if(btn)btn.disabled=true;
+  const r=await jpost('/api/delete-files',{items:[{type,distribution:name,filename}],force});
+  if(r.s!==200){
+    if(btn)btn.disabled=false;
+    return toast(r.j.error||t('failed'),'err');
+  }
+  const rm=(r.j.removed||[]).length;
+  if(rm)toast(t('deletedFmt').replace('{n}',rm));
+  else toast((r.j.skipped||[]).join('; ')||t('failed'),'err');
   loadDistros();
 }
 async function stopTask(){await jpost('/api/stop')}
@@ -1629,12 +1722,20 @@ function toggleProtect(type,name,file,btn){
   });
 }
 function setFilter(v){FILTER=v;localStorage.setItem('iso_hub_filter',v);renderCurrent()}
+/* 筛选只应作用于「镜像列表」里的发行版分组卡片(#groups 由 loadDistros 动态渲染)。
+   历史上这里用 document.querySelectorAll('.card') 全文档扫描, 而「自定义源 / 订阅同步 /
+   设置 / 种子下载」等面板也复用了 .card/.card-head/.g-name/.chip 结构, 于是被误当成分组
+   卡片参与筛选: 选「已收藏」时它们不在收藏集里 -> 整卡 display:none -> 面板空白。
+   同时逐行改 tr.style.display 也会污染这些面板里的表格。
+   修复: 用 #groups 容器收窄作用域, 只处理镜像列表的卡片。 */
 function applyFilter(){
   const f=FILTER;
-  document.querySelectorAll('.card').forEach(card=>{
+  const box=document.getElementById('groups');
+  if(!box)return;
+  box.querySelectorAll(':scope > .card').forEach(card=>{
     const chipEl=card.querySelector('.chip');
     const nameEl=card.querySelector('.g-name');
-    if(!chipEl||!nameEl)return;   // 跳过设置/共享等非发行版组卡片(它们无 .chip 或 .g-name)
+    if(!chipEl||!nameEl)return;   // 非发行版卡片(防御性跳过)
     const chip=chipEl.textContent;
     const name=nameEl.textContent;
     const key=chip+'|'+name;
@@ -1659,6 +1760,25 @@ function applyFilter(){
     }
     card.style.display=match?'':'none';
   });
+  // 空结果提示: 全部卡片被筛掉时给出明确反馈, 避免用户以为页面坏了。
+  // 注意 #empty 也被 render() 用于「清单本身为空」的场景 —— 这里只在「有卡片但全被筛掉」
+  // 时临时借用它显示筛选提示, 并保存原始文案以便还原(切回「全部」时不残留提示语)。
+  const allCards=box.querySelectorAll(':scope > .card');
+  const vis=[...allCards].filter(c=>c.style.display!=='none');
+  const emptyEl=document.getElementById('empty');
+  if(emptyEl && allCards.length){
+    if(!vis.length){
+      if(emptyEl.dataset.origText===undefined)emptyEl.dataset.origText=emptyEl.textContent;
+      emptyEl.textContent=t('filterNoMatch');
+      emptyEl.style.display='';
+    }else{
+      if(emptyEl.dataset.origText!==undefined){
+        emptyEl.textContent=emptyEl.dataset.origText;
+        delete emptyEl.dataset.origText;
+      }
+      emptyEl.style.display='none';
+    }
+  }
 }
 function renderCurrent(){if(typeof GROUPS!=='undefined'&&GROUPS.length)loadDistros()}
 async function toggleSubscribe(name,type){
