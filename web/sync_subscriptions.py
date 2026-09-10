@@ -144,7 +144,7 @@ def main() -> None:
     sys.modules["tqdm"] = _tqdm_stub
 
     # 复用上游下载器（必须在使用前导入，路径已加入 sys.path）
-    from download_linux import LinuxDistributionDownloader  # noqa: E402
+    from download_linux import LinuxDistributionDownloader, PART_SUFFIX  # noqa: E402
 
     # 可选: 先刷新官方源元数据
     if args.update_first:
@@ -236,10 +236,17 @@ def main() -> None:
         # 后端 web/app.py 拦截该行填充 task["targets"](path->字节数),
         # 再结合 running_task() 的 stat(size) 计算下载进度百分比。
         # 与手动勾选下载(web/iso_runner.py)走同一套行协议, 保持前端进度条一致。
-        # 真实下载路径 = download_dir/typ/name/<URL文件名>, 与 download_linux.py 一致。
+        #
+        # v1.3.2 修复(进度条卡住根因): 这里上报的路径必须是 **.part 路径**。
+        # download_linux.py 在下载期间把字节写在 <最终名>.part 上, 完成后才
+        # os.replace 成最终名。旧实现上报最终名, 于是 running_task() 对最终名
+        # stat(): 文件尚不存在 → size=0(进度恒 0%); 若该文件已下载完成, 则读到
+        # 一个静止的完整大小 → 分子被垫高后不再变化(实测卡在 50%)。
+        # 两种症状同源: 上报的名字和真正在增长的文件不是同一个。
         for _e in keep_entries:
             _fn = _e.get("download_url", "").rstrip("/").rsplit("/", 1)[-1]
             _fp = target / _fn
+            _part_fp = target / (_fn + PART_SUFFIX)
             _sz = 0
             try:
                 _r = requests.head(_e["download_url"], timeout=(10, 30), allow_redirects=True)
@@ -247,7 +254,17 @@ def main() -> None:
                 _sz = int(_r.headers.get("Content-Length", 0) or 0)
             except Exception:  # noqa: BLE001
                 _sz = 0
-            print(f"#TARGET {_fp} {_sz}", flush=True)
+            # 已存在完整文件 → 本轮不会重新下载(download_linux 会先校验再跳过),
+            # 它的贡献恒为满值。此时把目标大小夹到本地实际大小, 让这一条在聚合里
+            # 天然是 100%, 而不是"本地 1.5GB / 远端 1.5GB"这种看似在下载的幻象。
+            try:
+                if _fp.exists() and not _part_fp.exists():
+                    _local = _fp.stat().st_size
+                    if _local > 0:
+                        _sz = _local
+            except OSError:
+                pass
+            print(f"#TARGET {_part_fp} {_sz}", flush=True)
 
         # 下载最新 N 个
         downloader = LinuxDistributionDownloader(args.json_file, str(download_dir))

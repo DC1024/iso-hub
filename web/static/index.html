@@ -607,8 +607,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.3.1';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.3.1';
+const APP_VERSION='1.3.2';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.3.2';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -1241,8 +1241,15 @@ async function poll(){
     const _tk=$('#taskkind');if(_tk)_tk.textContent='['+(tk.kind==='meta'?t('taskMeta'):tk.kind==='custom-refresh'?t('csRefresh'):t('taskDownload'))+'] '+tk.title;
     if(tk.downloads&&tk.downloads.length){
       const now=Date.now();
+      // v1.3.2: 选"当前正在下载的文件"用于表头展示。
+      // 旧实现取 size 最大者, 于是已下载完成的那个文件(比如 1.5GB)会永远霸占表头,
+      // 而真正在增长的另一个文件(比如几百 MB)反而不显示 —— 用户看到的就是
+      // "文件名和大小都不动"。改为优先取"尚未完成且 size>0 的最大者", 全部完成
+      // (或都还没写入)时再退回 size 最大者。
+      const unfinished=tk.downloads.filter(d=>!(d.total>0&&d.size>=d.total));
+      const pickFrom=unfinished.length?unfinished:tk.downloads;
       let act=null;
-      for(const d of tk.downloads){if(d.size>0&&(!act||d.size>act.size))act=d}
+      for(const d of pickFrom){if(d.size>0&&(!act||d.size>act.size))act=d}
       const key=act?act.path:'';
       const p=prev[key];
       let rate=0;
@@ -1252,13 +1259,22 @@ async function poll(){
       if(cf)cf.textContent=act
         ?(t('curPrefix')+' '+esc(act.filename.split('/').pop())+' · '+fmt(act.size)+(rate>0?' · '+fmt(rate)+'/s':''))
         :'…';
-      // 进度条: 用所有文件的 已下载/目标大小 聚合计算整体百分比
+      // 进度条: 只统计"本轮还有活要干"的文件。
+      // v1.3.2 修复: 旧实现把所有文件(含已下载完成的)一起做 已下载/目标 聚合,
+      // 于是已完成文件会先把进度条垫到一个固定比例, 之后真正在下载的文件再怎么涨
+      // 也推不动指针 —— 实测"1.5GB 已完成 + 1.5GB 下载中"全程钉在 50%。
+      // 已完成文件对本轮进度已无贡献(它不会重下), 把它从分子分母中一起剔除,
+      // 剩下的才是"还能推进的进度"。若全部已完成, 直接显示 100%。
       let got=0,total=0;
-      tk.downloads.forEach(d=>{got+=d.size||0;total+=(d.total||0)});
+      tk.downloads.forEach(d=>{
+        const tot=d.total||0, sz=d.size||0;
+        if(tot>0&&sz>=tot)return;      // 已完成 → 不计入本轮进度
+        got+=sz; total+=tot;
+      });
       const pf=$('#progfill'),pt=$('#progtext');
-      const pct=(total>0?Math.min(100,got/total*100):0);
+      const pct=(total>0?Math.min(100,got/total*100):100);
       if(pf)pf.style.setProperty('--w',pct+'%');
-      if(pt)pt.textContent=(total>0?Math.round(pct):0)+'%';
+      if(pt)pt.textContent=(total>0?Math.round(pct):100)+'%';
     } else {const cf=$('#curfile');if(cf)cf.textContent='';}
     // 拉日志
     fetchLogs();

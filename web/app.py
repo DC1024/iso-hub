@@ -1594,14 +1594,32 @@ def running_task() -> dict | None:
     # 锁外做磁盘 IO(每文件一次 stat, 失败按 0 处理)
     for d in dl:
         p = Path(d["path"])
-        size = 0
-        try:
-            size = p.stat().st_size if p.exists() else 0
-        except OSError:
-            pass
+        size = _tracked_size(p)
         info["downloads"].append({"filename": d["filename"], "path": str(p),
                                   "size": size, "total": targets.get(str(p), 0)})
     return info
+
+
+def _tracked_size(p: Path) -> int:
+    """取"该条目当前已落盘的字节数"。
+
+    v1.3.2: targets 的键是 .part 路径(下载期间字节写在这里), 但要区分两种
+    "没有 .part" 的情形:
+      * 尚未开始下载  → 0
+      * 已下载完成    → .part 已被 os.replace 成最终名, 进度应算满值
+    因此 .part 不存在时回落到同名最终文件; 两者并存时以更可信的 .part 为准
+    (并存说明半成品没落定, 最终名那份是旧的/待覆盖)。
+    """
+    try:
+        if p.exists():
+            return p.stat().st_size
+        if p.name.endswith(PART_SUFFIX):
+            final = p.with_name(p.name[: -len(PART_SUFFIX)])
+            if final.exists():
+                return final.stat().st_size
+    except OSError:
+        pass
+    return 0
 
 
 def stop_task() -> bool:
