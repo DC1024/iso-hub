@@ -809,10 +809,13 @@ def set_share(proto: str, enabled: bool) -> bool:
 
 
 def _sync_disabled_shares() -> None:
-    """启动时同步共享 sidecar 容器状态: 若默认/配置为 disabled 但容器仍在运行, 则停止它。
+    """单次同步共享 sidecar 容器状态: 若默认/配置为 disabled 但容器仍在运行, 则停止它。
 
     这样即使 docker compose up 时自动拉起了 samba/webdav, 首次启动也会立即把它们停掉,
     让用户在 Web 面板里手动启用并设置凭据。
+
+    注意: 这是"单次快照"版本, 只适合在容器已确定存在的场景直接调用(如测试/手动)。
+    启动路径请用 _sync_disabled_shares_converge(), 它会重试以覆盖 compose 并发启动窗口。
     """
     try:
         shares = load_shares()
@@ -889,7 +892,10 @@ def set_qb(enabled: bool, username: str, password: str) -> bool:
 
 
 def _sync_disabled_qb() -> None:
-    """启动时同步 qBittorrent 容器状态: 若配置为 disabled 但容器在运行, 则停止它。"""
+    """单次同步 qBittorrent 容器状态: 若配置为 disabled 但容器在运行, 则停止它。
+
+    同 _sync_disabled_shares, 单次快照只适合容器已确定存在的场景; 启动路径用收敛版。
+    """
     try:
         qb = load_qb_settings()
         if not qb.get("enabled", True):
@@ -899,6 +905,95 @@ def _sync_disabled_qb() -> None:
                 set_qb(False, qb.get("username", ""), qb.get("password", ""))
     except Exception:  # noqa: BLE001
         pass
+
+
+def _converge_disabled_sidecars(attempts: int = 12, interval: float = 5.0) -> None:
+    """启动时收敛同步: 反复检查禁用中的 sidecar, 直到它们确实停止或次数耗尽。
+
+    为什么需要重试(修复启动时序竞态):
+      `docker compose up -d` 会并发创建多个容器, 主容器与 sidecar(samba/webdav/qbittorrent)
+      没有 depends_on 关系, 谁先起来不确定。旧实现只在应用启动最早期做"一次性快照"判断:
+      此刻 sidecar 往往尚未创建(查询返回 404/None), 判断被跳过; 随后 compose 才把它们拉起,
+      于是长期停留在"配置为禁用, 但容器在运行"的不一致状态。
+
+    收敛策略: 每轮对所有禁用 sidecar 检查一次, 发现 running 就发起停止; 只要还有
+    未就绪(容器尚未出现 / 停止尚未生效)的禁用容器就继续下一轮, 全部落定才退出。
+
+    幂等保护: 每个容器只发起一次停止请求(记入 handled), 避免同一容器被反复 stop。
+    停止请求返回后若下一轮仍见 running, 说明停止未生效(如 restart 策略未改成功),
+    此时只记录日志不再重复请求, 防止对 Sidecar 的无效冲击。
+
+    任何异常都不向外抛, 避免影响启动流程。
+    """
+    pending_handled: set[str] = set()  # 已发起停止的容器名, 防重复 stop
+    try:
+        for i in range(max(1, attempts)):
+            pending = False
+            # --- 共享 sidecar: samba / webdav ---
+            try:
+                shares = load_shares()
+                for proto in ("samba", "webdav"):
+                    if shares.get(proto, {}).get("enabled", True):
+                        continue  # 用户已启用, 不动
+                    cname = SHARE_CONTAINERS.get(proto)
+                    if not cname:
+                        continue
+                    st = share_container_state(cname)
+                    if st == "running":
+                        if cname in pending_handled:
+                            # 上一轮已请求停止但仍见 running: 不再重复请求, 仅提示
+                            log(f"[共享] 启动收敛: {proto} 停止请求已发出但仍在运行, 等待生效")
+                            pending = True
+                            continue
+                        log(f"[共享] 启动收敛({i + 1}/{attempts}): {proto} 配置为禁用但容器在运行, 正在停止")
+                        ok = set_share(proto, False)
+                        if ok:
+                            pending_handled.add(cname)
+                        pending = True
+                    elif st is None:
+                        # 容器尚未出现(Docker API 未响应)或代理暂不可达 —— 下一轮再看
+                        pending = True
+            except Exception as e:  # noqa: BLE001
+                log(f"[共享] 启动收敛检查异常: {e!r}")
+
+            # --- 种子 sidecar: qBittorrent ---
+            try:
+                qb = load_qb_settings()
+                if not qb.get("enabled", True):
+                    st = share_container_state(QB_CONTAINER)
+                    if st == "running":
+                        if QB_CONTAINER in pending_handled:
+                            log("[qB] 启动收敛: qBittorrent 停止请求已发出但仍在运行, 等待生效")
+                            pending = True
+                        else:
+                            log(f"[qB] 启动收敛({i + 1}/{attempts}): qBittorrent 配置为禁用但容器在运行, 正在停止")
+                            if set_qb(False, qb.get("username", ""), qb.get("password", "")):
+                                pending_handled.add(QB_CONTAINER)
+                            pending = True
+                    elif st is None:
+                        pending = True
+            except Exception as e:  # noqa: BLE001
+                log(f"[qB] 启动收敛检查异常: {e!r}")
+
+            if not pending:
+                log(f"[启动收敛] 第 {i + 1} 轮: 所有禁用 sidecar 状态已一致, 结束")
+                return
+            if i < attempts - 1:
+                time.sleep(interval)
+        log(f"[启动收敛] 已尝试 {attempts} 轮, 个别 sidecar 可能仍未就绪; 后续在设置页手动操作即可")
+    except Exception as e:  # noqa: BLE001
+        log(f"[启动收敛] 异常: {e!r}")
+
+
+def start_sidecar_convergence() -> threading.Thread:
+    """在后台守护线程里运行 _converge_disabled_sidecars, 不阻塞 web 服务启动。
+
+    收敛过程最长约 attempts*interval(默认 60 秒)。若放在主线程, waitress 会推迟监听端口,
+    健康检查可能失败、用户看到白屏。放后台线程则服务立即可用, 状态由收敛逻辑异步纠正。
+    """
+    t = threading.Thread(target=_converge_disabled_sidecars, name="sidecar-converge", daemon=True)
+    t.start()
+    return t
 
 
 # 每个 sidecar 容器内用于凭据的环境变量名 (samba 用; webdav 已改用挂载的 webdav.yml 明文)
@@ -2236,8 +2331,9 @@ if __name__ == "__main__":
     log(f"ISO Hub 启动  |  清单: {JSON_FILE}  数据目录: {DATA_DIR}")
     _sessions_load()  # 从磁盘恢复持久化会话(容器重建后 token 仍有效)
     seed_admin()  # 若设置 ISO_HUB_ADMIN_USER/PASS 则播种管理员
-    _sync_disabled_shares()  # 默认禁用的 sidecar 若被 compose 拉起, 启动后立即停止
-    _sync_disabled_qb()  # 默认禁用的 qBittorrent 若被 compose 拉起, 启动后立即停止
+    # 启动收敛: compose 并发拉起 sidecar 存在时序竞态, 用后台线程重试直到状态一致,
+    # 替代旧的一次性快照(_sync_disabled_shares/_sync_disabled_qb 仍保留供手动/测试调用)
+    start_sidecar_convergence()
     _bootstrap_webdav_conf()  # 首次部署时 ./webdav-config 为空, 按当前设置生成 webdav.yml
     schedule_auto_sync()  # 订阅自动同步调度器(默认每天; ISO_HUB_SYNC_INTERVAL 可改秒数)
     if os.environ.get("ISO_HUB_DEV"):

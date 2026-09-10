@@ -283,5 +283,132 @@ class TestComposeConfig(unittest.TestCase):
                     self.assertIn(profile, svc.get("profiles", []))
 
 
+class TestStartupConvergence(unittest.TestCase):
+    """回归: 启动时序竞态修复。
+
+    背景(Bug): `docker compose up -d` 并发创建容器, 主容器启动执行一次性同步检查时
+    sidecar 往往尚未创建(查询返回 None), 检查被跳过; 随后 sidecar 被拉起, 于是长期
+    停留在"配置为禁用但容器在运行"的不一致状态。
+
+    修复: _converge_disabled_sidecars 反复重试, 直到禁用 sidecar 全部停止或次数耗尽。
+    """
+
+    def _base_patches(self, shares, qb):
+        return [
+            patch.object(app, "load_shares", return_value=shares),
+            patch.object(app, "load_qb_settings", return_value=qb),
+        ]
+
+    def test_retries_until_sidecar_appears(self):
+        """sidecar 首轮不存在(None), 次轮变为 running -> 必须被发现并停止。
+
+        这是竞态的核心场景: 一次性快照会漏掉, 收敛重试必须兜住。
+        用一个 sleep 钩子推进"轮次", 精确模拟 compose 稍后才把 sidecar 拉起。
+        """
+        shares = {"samba": {"enabled": False}, "webdav": {"enabled": False}}
+        qb = {"enabled": False, "username": "u", "password": "p"}
+        round_no = {"n": 0}  # 0 = 第一轮
+
+        def fake_state(_name):
+            # 第 0 轮: 容器尚未创建; 第 1 轮起: 已被 compose 拉起
+            return None if round_no["n"] == 0 else "running"
+
+        def on_sleep(*_a, **_kw):
+            round_no["n"] += 1  # 每次进入下一轮前, 时钟前进一格
+
+        with self._base_patches(shares, qb)[0], self._base_patches(shares, qb)[1], \
+             patch.object(app, "share_container_state", side_effect=fake_state), \
+             patch.object(app, "set_share", return_value=True) as mock_set_share, \
+             patch.object(app, "set_qb", return_value=True) as mock_set_qb, \
+             patch.object(app.time, "sleep", side_effect=on_sleep):
+            app._converge_disabled_sidecars(attempts=4, interval=0)
+
+        self.assertEqual(mock_set_share.call_count, 2, "samba/webdav 应各被停止一次")
+        mock_set_qb.assert_called_once_with(False, "u", "p")
+
+    def test_no_repeated_stop_for_same_container(self):
+        """停止请求已发出但容器仍 running(如生效有延迟) -> 不得反复重复 stop。"""
+        shares = {"samba": {"enabled": False}, "webdav": {"enabled": False}}
+        qb = {"enabled": False, "username": "u", "password": "p"}
+        with self._base_patches(shares, qb)[0], self._base_patches(shares, qb)[1], \
+             patch.object(app, "share_container_state", return_value="running"), \
+             patch.object(app, "set_share", return_value=True) as mock_set_share, \
+             patch.object(app, "set_qb", return_value=True) as mock_set_qb, \
+             patch.object(app.time, "sleep"):
+            app._converge_disabled_sidecars(attempts=5, interval=0)
+        # 每个容器只应被请求停止一次, 而不是 5 轮各停一次
+        self.assertEqual(mock_set_share.call_count, 2, "samba/webdav 各只 stop 一次")
+        mock_set_qb.assert_called_once()
+
+    def test_stop_failure_is_retried(self):
+        """set_share 失败(返回 False) -> 视为未处理, 下一轮应再次尝试。"""
+        shares = {"samba": {"enabled": False}, "webdav": {"enabled": True}}
+        qb = {"enabled": True, "username": "u", "password": "p"}
+        # samba 一直 running; set_share 前两次失败, 第三次成功
+        with self._base_patches(shares, qb)[0], self._base_patches(shares, qb)[1], \
+             patch.object(app, "share_container_state", return_value="running"), \
+             patch.object(app, "set_share", side_effect=[False, False, True]) as mock_set_share, \
+             patch.object(app, "set_qb", return_value=True), \
+             patch.object(app.time, "sleep"):
+            app._converge_disabled_sidecars(attempts=5, interval=0)
+        self.assertEqual(mock_set_share.call_count, 3, "失败后应重试直到成功")
+
+    def test_stops_converging_when_all_consistent(self):
+        """所有禁用 sidecar 都已停止 -> 一轮即结束, 不做无谓重试。"""
+        shares = {"samba": {"enabled": False}, "webdav": {"enabled": False}}
+        qb = {"enabled": False, "username": "u", "password": "p"}
+        with self._base_patches(shares, qb)[0], self._base_patches(shares, qb)[1], \
+             patch.object(app, "share_container_state", return_value="exited"), \
+             patch.object(app, "set_share") as mock_set_share, \
+             patch.object(app, "set_qb") as mock_set_qb, \
+             patch.object(app.time, "sleep") as mock_sleep:
+            app._converge_disabled_sidecars(attempts=5, interval=0)
+        mock_set_share.assert_not_called()
+        mock_set_qb.assert_not_called()
+        mock_sleep.assert_not_called()
+
+    def test_enabled_sidecars_untouched(self):
+        """用户已启用的 sidecar 即便 running 也不得被停止。"""
+        shares = {"samba": {"enabled": True}, "webdav": {"enabled": True}}
+        qb = {"enabled": True, "username": "u", "password": "p"}
+        with self._base_patches(shares, qb)[0], self._base_patches(shares, qb)[1], \
+             patch.object(app, "share_container_state", return_value="running"), \
+             patch.object(app, "set_share") as mock_set_share, \
+             patch.object(app, "set_qb") as mock_set_qb, \
+             patch.object(app.time, "sleep"):
+            app._converge_disabled_sidecars(attempts=3, interval=0)
+        mock_set_share.assert_not_called()
+        mock_set_qb.assert_not_called()
+
+    def test_gives_up_after_attempts_without_raising(self):
+        """sidecar 始终未就绪 -> 耗尽次数后正常返回, 不抛异常。"""
+        shares = {"samba": {"enabled": False}, "webdav": {"enabled": False}}
+        qb = {"enabled": False, "username": "u", "password": "p"}
+        with self._base_patches(shares, qb)[0], self._base_patches(shares, qb)[1], \
+             patch.object(app, "share_container_state", return_value=None), \
+             patch.object(app, "set_share"), patch.object(app, "set_qb"), \
+             patch.object(app.time, "sleep"):
+            try:
+                app._converge_disabled_sidecars(attempts=3, interval=0)
+            except Exception as e:  # noqa: BLE001
+                self.fail(f"收敛逻辑不应抛异常, 实际: {e!r}")
+
+    def test_convergence_runs_in_daemon_thread(self):
+        """start_sidecar_convergence 必须在线程中启动且为 daemon(不阻塞/不阻止退出)。"""
+        with patch.object(app, "_converge_disabled_sidecars") as mock_conv:
+            t = app.start_sidecar_convergence()
+        self.assertTrue(t.daemon, "收敛线程必须是 daemon")
+        t.join(timeout=5)  # 等线程跑完, 避免残留
+        mock_conv.assert_called_once()
+
+    def test_main_entrypoint_uses_convergence(self):
+        """回归: __main__ 启动路径必须走收敛函数, 不得退回一次性快照。"""
+        import inspect
+        src = inspect.getsource(app)
+        main_src = src[src.index('if __name__ == "__main__":'):]
+        self.assertIn("start_sidecar_convergence()", main_src,
+                      "启动路径应调用 start_sidecar_convergence 以覆盖时序竞态")
+
+
 if __name__ == "__main__":
     unittest.main()
