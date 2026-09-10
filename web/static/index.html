@@ -596,8 +596,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.2.6';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.2.6';
+const APP_VERSION='1.2.7';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.2.7';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -663,6 +663,8 @@ const I18N={
   'delLockedHint':{zh:'如需删除，请先点击该行的解锁按钮（🔒 → 🔓）。',en:'To delete it, first click the unlock button (🔒 → 🔓) on that row.'},
   'delAllLockedFmt':{zh:'🔒 选中的 {n} 个文件全部处于锁定状态，未执行删除。',en:'🔒 All {n} selected file(s) are locked. Nothing was deleted.'},
   'deletedFmt':{zh:'已删除 {n} 个文件',en:'Deleted {n} file(s)'},
+  'delNothingRemoved':{zh:'没有删除任何文件，请查看下方原因',en:'Nothing was deleted. See the reason below.'},
+  'delNotFound':{zh:'文件不存在',en:'File not found'},
   'skipped':{zh:'跳过',en:'skipped'},
   'andMore':{zh:'还有',en:'and'},
   'favGroup':{zh:'收藏',en:'Favorite'},
@@ -1012,7 +1014,7 @@ function render(d){
         <td class="src-cell">${srcSelHtml(e)}</td>
         <td class="td-r"><span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${label}</span></td>
         <td class="td-r"><button class="btn-lock ${isProtected(e.filename)?'on':''}" onclick="toggleProtect('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${isProtected(e.filename)?t('unlock'):t('lock')}">${isProtected(e.filename)?'🔒':'🔓'}</button></td>
-        <td class="td-r">${isOk?`<button class="btn-d btn-rowdel" onclick="deleteOne('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('deleteOne')}">🗑</button>`:''}</td>
+        <td class="td-r">${(isOk||isStop||isFail)?`<button class="btn-d btn-rowdel" onclick="deleteOne('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('deleteOne')}">🗑</button>`:''}</td>
       </tr>`;
     });
     let strayHtml='';
@@ -1103,10 +1105,15 @@ async function deleteSel(){
   // 建立 download_url -> {entry, type} 映射(type 只在组层级, 需一并带上)
   const map=new Map();
   GROUPS.forEach(g=>g.entries.forEach(e=>map.set(e.download_url,{e:e,type:g.type})));
-  // 只挑「本地已有完整文件」的项
+  // 只挑「本地确实有数据」的项: 完整文件, 或下载中途留下的半成品(.part)。
+  // 半成品同样占着磁盘空间, 用户点删除就该能删掉 —— 否则会报"文件不存在"
+  // 被跳过, 而用户明明在列表里看得到它。
   const items=cks.map(c=>{
     const hit=map.get(c.dataset.url);if(!hit)return null;
-    if(!(hit.e.local_size>0))return null;               // 未下载 -> 跳过
+    const S=hit.e.status||'';
+    const hasLocal=(hit.e.local_size>0)||(hit.e.partial_size>0)
+      ||['downloaded','partial','stopped','failed'].includes(S);
+    if(!hasLocal)return null;                            // 未下载 -> 跳过
     return {type:hit.type||'linux', distribution:hit.e.distribution, filename:filenameOf(hit.e)};
   }).filter(it=>it&&it.filename);
   const skippedNotDownloaded=cks.length-items.length;
@@ -1147,7 +1154,7 @@ async function deleteOne(type,name,filename,btn){
   }
   const rm=(r.j.removed||[]).length;
   if(rm)toast(t('deletedFmt').replace('{n}',rm));
-  else toast((r.j.skipped||[]).join('; ')||t('failed'),'err');
+  else toast((r.j.skipped||[]).join('; ')||t('delNothingRemoved'),'err');
   loadDistros();
 }
 async function stopTask(){await jpost('/api/stop')}

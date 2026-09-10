@@ -413,7 +413,7 @@ class TestFrontendWiring(unittest.TestCase):
                           f"{fn} 的 401 分支缺少登录接口白名单判断")
 
     def test_version_bumped(self):
-        self.assertIn("APP_VERSION='1.2.6'", self.html)
+        self.assertIn("APP_VERSION='1.2.7'", self.html)
 
     def test_poll_refreshes_list_while_running(self):
         """回归: 任务运行期间也要刷新列表。
@@ -428,6 +428,33 @@ class TestFrontendWiring(unittest.TestCase):
         i_wasrunning = self.html.index("if(wasRunning)loadDistros()")
         self.assertTrue(i_running < i_refresh < i_wasrunning,
                         "运行中刷新列表的逻辑必须在 RUNNING 分支内")
+
+    def test_delete_sel_accepts_partial_states(self):
+        """v1.2.7 回归: 「删除所选」不能只认完整文件。
+
+        半成品(.part)/下载停止/下载失败 同样占着磁盘, 用户勾选删除时若被前端
+        guard 过滤掉, 就会落到后端报「文件不存在」-> 出现
+        「已删除 0 个文件 · 1 跳过」。
+        """
+        i = self.html.index("async function deleteSel()")
+        body = self.html[i:i + 1200]
+        self.assertIn("partial_size", body,
+                      "deleteSel 的 guard 必须把半成品算作本地已有数据")
+        for st in ("'partial'", "'stopped'", "'failed'"):
+            self.assertIn(st, body, f"deleteSel 应接受 {st} 状态")
+
+    def test_row_delete_button_shown_for_stopped_and_failed(self):
+        """v1.2.7 回归: 下载停止/失败的行也应显示行内删除按钮。"""
+        marker = 'class="btn-d btn-rowdel"'
+        i = self.html.index(marker)
+        line = self.html[max(0, i - 200):i]
+        self.assertIn("isOk||isStop||isFail", line,
+                      "行内删除按钮的显示条件应包含下载停止/失败")
+
+    def test_delete_nothing_hint_i18n_exists(self):
+        """v1.2.7: 「一个都没删掉」的提示文案必须真实存在, 否则 UI 显示原始 key。"""
+        self.assertIn("'delNothingRemoved'", self.html)
+        self.assertIn("t('delNothingRemoved')", self.html)
 
 
 if __name__ == "__main__":

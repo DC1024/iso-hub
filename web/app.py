@@ -2043,21 +2043,33 @@ def api_delete_files():
         if rel in protected or fname in protected:
             locked.append({"type": typ, "distribution": name, "filename": fname})
             continue
+        # 前端传的是"目标文件名"(如 xxx.iso), 但下载中的半成品实际叫
+        # xxx.iso.part。删除必须连带处理半成品: 否则"下载停止"的文件点删除会
+        # 报"文件不存在"被跳过(用户明明看得到它占着空间)。
         fp = (target / fname)
+        part_fp = target / (fname + PART_SUFFIX)
         # 二次确认最终路径仍在目标目录内(防 symlink / 拼接绕过)
-        try:
-            fp.resolve().relative_to(target.resolve())
-        except ValueError:
-            skipped.append(f"{label}: 路径越界, 已拒绝")
-            continue
-        if not fp.is_file():
-            skipped.append(f"{label}: 文件不存在")
-            continue
-        try:
-            fp.unlink()
-            removed.append(fname)
-        except OSError as e:
-            skipped.append(f"{label}: {e}")
+        for _p in (fp, part_fp):
+            try:
+                _p.resolve().relative_to(target.resolve())
+            except ValueError:
+                skipped.append(f"{label}: 路径越界, 已拒绝")
+                break
+        else:
+            victims = [p for p in (fp, part_fp) if p.is_file()]
+            if not victims:
+                skipped.append(f"{label}: 文件不存在")
+                continue
+            try:
+                for _p in victims:
+                    _p.unlink()
+                # 半成品被删掉后, 残留的"下载停止"失败记录也要清掉,
+                # 否则 UI 仍会显示「下载停止」而文件已经没了。
+                if part_fp in victims:
+                    clear_failure(f"{typ}/{name}/{fname}")
+                removed.append(fname + (PART_SUFFIX if fp not in victims else ""))
+            except OSError as e:
+                skipped.append(f"{label}: {e}")
 
     ok = not locked
     for lk in locked:

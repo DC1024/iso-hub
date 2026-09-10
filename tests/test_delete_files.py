@@ -230,6 +230,82 @@ class TestDeleteProtected(DeleteFilesTestBase):
         self.assertFalse((self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").exists())
 
 
+class TestDeletePartFiles(DeleteFilesTestBase):
+    """v1.2.7 回归: 「下载停止」的半成品(.part)也必须能删掉。
+
+    Bug 背景: 下载改用 .part 原子改名协议后, 半成品在磁盘上叫 xxx.iso.part,
+    而前端传的目标名是 xxx.iso。旧实现只查 target/xxx.iso -> 不存在 -> 报
+    「文件不存在」被跳过, 用户明明在列表里看得到这个占着空间的停止文件却删不掉。
+
+    同时删除后必须清掉 download_failures.json 里的失败记录, 否则 UI 会继续
+    显示「下载停止」而文件其实已经没了。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.failures = self.data / "download_failures.json"
+        self._patches.append(patch.object(app, "FAILURES_JSON", self.failures))
+        self._patches[-1].start()
+
+    def _put_part(self, fname, size=256):
+        p = self.data / "linux" / "Ubuntu" / (fname + ".part")
+        p.write_bytes(b"y" * size)
+        return p
+
+    def test_deletes_part_only_file(self):
+        """只有 .part 存在时(下载停止)也应删除成功, 而不是报文件不存在。"""
+        (self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").unlink()
+        part = self._put_part("ubuntu-26.04.iso")
+        r = self.post({"items": [{"type": "linux", "distribution": "Ubuntu",
+                                  "filename": "ubuntu-26.04.iso"}]})
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual(body["skipped"], [])
+        self.assertEqual(len(body["removed"]), 1)
+        self.assertFalse(part.exists(), "半成品必须被删除")
+
+    def test_deletes_both_final_and_part(self):
+        """完整文件与半成品并存时两者一起删除(先删干净再让用户重下)。"""
+        part = self._put_part("ubuntu-24.04.iso")
+        r = self.post({"items": [{"type": "linux", "distribution": "Ubuntu",
+                                  "filename": "ubuntu-24.04.iso"}]})
+        body = r.get_json()
+        self.assertEqual(body["skipped"], [])
+        self.assertFalse(part.exists())
+        self.assertFalse((self.data / "linux" / "Ubuntu" / "ubuntu-24.04.iso").exists())
+
+    def test_clears_failure_record_for_part(self):
+        """删除停止的半成品后, 「下载停止」失败记录必须被清理。"""
+        self.failures.write_text(json.dumps(
+            {"linux/Ubuntu/ubuntu-26.04.iso": {"at": 1, "kind": "stopped"}}),
+            encoding="utf-8")
+        (self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").unlink()
+        self._put_part("ubuntu-26.04.iso")
+        self.post({"items": [{"type": "linux", "distribution": "Ubuntu",
+                              "filename": "ubuntu-26.04.iso"}]})
+        left = json.loads(self.failures.read_text(encoding="utf-8"))
+        self.assertNotIn("linux/Ubuntu/ubuntu-26.04.iso", left,
+                         "失败记录应被清理, 否则 UI 仍显示「下载停止」")
+
+    def test_missing_both_still_skipped(self):
+        """完整文件与 .part 都不存在 -> 仍然如实报「文件不存在」。"""
+        (self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").unlink()
+        r = self.post({"items": [{"type": "linux", "distribution": "Ubuntu",
+                                  "filename": "ubuntu-26.04.iso"}]})
+        body = r.get_json()
+        self.assertEqual(body["removed"], [])
+        self.assertEqual(len(body["skipped"]), 1)
+        self.assertIn("文件不存在", body["skipped"][0])
+
+    def test_part_path_traversal_rejected(self):
+        """filename 本身非法时, .part 分支也不得绕过校验。"""
+        r = self.post({"items": [{"type": "linux", "distribution": "Ubuntu",
+                                  "filename": "../../../etc/passwd"}]})
+        body = r.get_json()
+        self.assertEqual(body["removed"], [])
+        self.assertTrue(any("非法文件名" in s for s in body["skipped"]))
+
+
 class TestDeleteTaskMutex(DeleteFilesTestBase):
     """任务互斥: 下载进行中不接受删除请求。"""
 
