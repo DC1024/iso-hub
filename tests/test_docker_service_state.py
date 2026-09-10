@@ -283,6 +283,133 @@ class TestComposeConfig(unittest.TestCase):
                     self.assertIn(profile, svc.get("profiles", []))
 
 
+class TestSetShareStrictResult(unittest.TestCase):
+    """回归: set_share 必须严格校验两步(start/stop + RestartPolicy update)。
+
+    旧实现用 `and` 判断 —— 只有两步**都**失败才返回 False。于是 start 成功但
+    update 失败时会误报成功, 静默留下 running + restart=no 的不一致: 面板显示
+    绿灯, 但宿主重启后容器不会被拉起。现在任一步失败都必须返回 False。
+    """
+
+    @patch.object(app, "_docker_request")
+    def test_enable_returns_false_when_update_fails(self, mock_docker):
+        """start 成功(204) 但 update 失败(500) -> 必须返回 False。"""
+        mock_docker.side_effect = [_docker_resp(204), _docker_resp(500)]
+        self.assertFalse(app.set_share("samba", True))
+
+    @patch.object(app, "_docker_request")
+    def test_enable_returns_false_when_start_fails(self, mock_docker):
+        """start 失败(500) 但 update 成功 -> 同样必须返回 False。"""
+        mock_docker.side_effect = [_docker_resp(500), _docker_resp(200)]
+        self.assertFalse(app.set_share("samba", True))
+
+    @patch.object(app, "_docker_request")
+    def test_enable_returns_true_when_both_ok(self, mock_docker):
+        """两步都成功 -> True(含 start 对已运行容器返回 304 的情形)。"""
+        mock_docker.side_effect = [_docker_resp(304), _docker_resp(200)]
+        self.assertTrue(app.set_share("samba", True))
+
+    @patch.object(app, "_docker_request")
+    def test_disable_returns_false_when_update_fails(self, mock_docker):
+        """停用: update 失败 但 stop 成功 -> 也必须返回 False。"""
+        mock_docker.side_effect = [_docker_resp(500), _docker_resp(204)]
+        self.assertFalse(app.set_share("samba", False))
+
+    @patch.object(app, "_docker_request")
+    def test_disable_returns_true_when_both_ok(self, mock_docker):
+        mock_docker.side_effect = [_docker_resp(200), _docker_resp(304)]
+        self.assertTrue(app.set_share("samba", False))
+
+
+class TestEnabledSidecarConvergence(unittest.TestCase):
+    """回归: 启动收敛的**反向**分支(配置为启用的 sidecar 也要收敛)。
+
+    补齐原先"只管禁用"的半边缺口。两种漂移:
+      1) 容器在运行, 但 RestartPolicy 被 recreate 打回 no(自愈能力丢失)
+      2) 容器存在但未运行(宿主重启后没被拉起)却配置为启用
+
+    底线: 无论哪种, 启用的容器**绝不能被停止**。
+    """
+
+    def _patches(self, shares, qb, state, policy):
+        return [
+            patch.object(app, "load_shares", return_value=shares),
+            patch.object(app, "load_qb_settings", return_value=qb),
+            patch.object(app, "share_container_state", return_value=state),
+            patch.object(app, "container_restart_policy", return_value=policy),
+        ]
+
+    def test_running_but_policy_no_is_repaired(self):
+        """running + restart=no -> 补 update 为 unless-stopped, 且不停止容器。"""
+        shares = {"samba": {"enabled": True}, "webdav": {"enabled": True}}
+        qb = {"enabled": True, "username": "u", "password": "p"}
+        p = self._patches(shares, qb, "running", "no")
+        with p[0], p[1], p[2], p[3], \
+             patch.object(app, "_docker_request") as mock_docker, \
+             patch.object(app, "set_share") as mock_set_share, \
+             patch.object(app, "set_qb") as mock_set_qb, \
+             patch.object(app.time, "sleep"):
+            app._converge_disabled_sidecars(attempts=2, interval=0)
+
+        # 三个 sidecar 各补一次 update, 且补的必须是 unless-stopped
+        self.assertGreaterEqual(mock_docker.call_count, 1, "应发出补策略请求")
+        for c in mock_docker.call_args_list:
+            self.assertEqual(c[0][0], "POST")
+            self.assertIn("/update", c[0][1])
+            self.assertEqual(c[0][2], {"RestartPolicy": {"Name": "unless-stopped"}})
+        # 底线: 启用的容器绝不能被停止
+        mock_set_share.assert_not_called()
+        mock_set_qb.assert_not_called()
+
+    def test_stopped_but_enabled_is_started(self):
+        """配置启用但容器未运行 -> 必须拉起, 且以 enabled=True 调用。"""
+        shares = {"samba": {"enabled": True}, "webdav": {"enabled": True}}
+        qb = {"enabled": True, "username": "u", "password": "p"}
+        p = self._patches(shares, qb, "exited", "no")
+        with p[0], p[1], p[2], p[3], \
+             patch.object(app, "_docker_request"), \
+             patch.object(app, "set_share", return_value=True) as mock_set_share, \
+             patch.object(app, "set_qb", return_value=True) as mock_set_qb, \
+             patch.object(app.time, "sleep"):
+            app._converge_disabled_sidecars(attempts=3, interval=0)
+
+        self.assertEqual(mock_set_share.call_count, 2, "samba/webdav 各应被启动一次")
+        for c in mock_set_share.call_args_list:
+            self.assertEqual(c[0][1], True, "必须以 enabled=True 启动, 绝不能是停用")
+        mock_set_qb.assert_called_once_with(True, "u", "p")
+
+    def test_policy_unknown_is_skipped_conservatively(self):
+        """重启策略查不到(None) -> 保守跳过, 不据此启停任何容器。"""
+        shares = {"samba": {"enabled": True}, "webdav": {"enabled": True}}
+        qb = {"enabled": True, "username": "u", "password": "p"}
+        p = self._patches(shares, qb, "running", None)
+        with p[0], p[1], p[2], p[3], \
+             patch.object(app, "_docker_request") as mock_docker, \
+             patch.object(app, "set_share") as mock_set_share, \
+             patch.object(app, "set_qb") as mock_set_qb, \
+             patch.object(app.time, "sleep"):
+            app._converge_disabled_sidecars(attempts=2, interval=0)
+
+        mock_docker.assert_not_called()
+        mock_set_share.assert_not_called()
+        mock_set_qb.assert_not_called()
+
+    def test_disabled_sidecar_still_stops(self):
+        """反向分支不得削弱原有能力: 禁用的容器仍要被停止。"""
+        shares = {"samba": {"enabled": False}, "webdav": {"enabled": True}}
+        qb = {"enabled": False, "username": "u", "password": "p"}
+        p = self._patches(shares, qb, "running", "unless-stopped")
+        with p[0], p[1], p[2], p[3], \
+             patch.object(app, "_docker_request"), \
+             patch.object(app, "set_share", return_value=True) as mock_set_share, \
+             patch.object(app, "set_qb", return_value=True) as mock_set_qb, \
+             patch.object(app.time, "sleep"):
+            app._converge_disabled_sidecars(attempts=2, interval=0)
+
+        mock_set_share.assert_called_once_with("samba", False)
+        mock_set_qb.assert_called_once_with(False, "u", "p")
+
+
 class TestStartupConvergence(unittest.TestCase):
     """回归: 启动时序竞态修复。
 
@@ -367,12 +494,18 @@ class TestStartupConvergence(unittest.TestCase):
         mock_set_qb.assert_not_called()
         mock_sleep.assert_not_called()
 
-    def test_enabled_sidecars_untouched(self):
-        """用户已启用的 sidecar 即便 running 也不得被停止。"""
+    def test_enabled_sidecars_never_stopped(self):
+        """用户已启用的 sidecar 绝不能被停止。
+
+        语义演进: 早期收敛只管"禁用", 对启用的容器完全不动。现在补了反向收敛
+        (补自愈能力/拉起停摆容器), 因此不再断言"完全不触碰", 而是断言**永远
+        不会被停用** —— 这是该测试真正要守的底线。
+        """
         shares = {"samba": {"enabled": True}, "webdav": {"enabled": True}}
         qb = {"enabled": True, "username": "u", "password": "p"}
         with self._base_patches(shares, qb)[0], self._base_patches(shares, qb)[1], \
              patch.object(app, "share_container_state", return_value="running"), \
+             patch.object(app, "container_restart_policy", return_value="unless-stopped"), \
              patch.object(app, "set_share") as mock_set_share, \
              patch.object(app, "set_qb") as mock_set_qb, \
              patch.object(app.time, "sleep"):

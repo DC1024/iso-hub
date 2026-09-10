@@ -951,6 +951,28 @@ def service_state(name: str) -> str:
         return "unknown"
 
 
+def container_restart_policy(name: str) -> str | None:
+    """读取容器的 RestartPolicy.Name(如 unless-stopped / no / on-failure)。
+
+    用途: 识别"容器在运行但自愈能力已丢失"的静默不一致 —— 例如运维执行
+    `docker compose up -d` 触发 recreate 后, compose 里写死的 `restart: no`
+    会重新生效, 而容器仍在运行、面板仍显示绿灯, 直到宿主重启才暴露。
+
+    查询失败/容器不存在一律返回 None, 由调用方**保守跳过**(不据此动作),
+    避免在 Docker API 不可达时误判。
+    """
+    try:
+        r = _docker_request("GET", f"/containers/{name}/json", None, 15)
+        if r.status != 200:
+            return None
+        payload = json.loads(r.text)
+        policy = ((payload.get("HostConfig") or {}).get("RestartPolicy") or {}).get("Name")
+        return policy or None
+    except Exception as e:  # noqa: BLE001
+        log(f"[docker] 查询容器 {name} 重启策略异常: {e!r}")
+        return None
+
+
 def share_container_state(name: str) -> str | None:
     """返回 sidecar 容器原始运行状态: running/created/exited/None。失败时记录日志。
 
@@ -972,25 +994,33 @@ def share_container_state(name: str) -> str | None:
 
 
 def set_share(proto: str, enabled: bool) -> bool:
-    """通过 docker.sock 启动/停止对应 sidecar 容器。"""
+    """通过 docker.sock 启动/停止对应 sidecar 容器。
+
+    两步缺一不可: start/stop 负责"当下", RestartPolicy 负责"持久化"(让状态在
+    宿主/compose 重启后不反弹)。因此**任一步失败都必须视为未完全成功** ——
+    否则会留下 running + restart=no 的静默不一致: 面板显示绿灯, 但宿主重启后
+    容器不会被拉起(见 _converge_sidecars 对启用态的反向收敛)。
+    """
     cname = SHARE_CONTAINERS.get(proto)
     if not cname:
         return False
     try:
         if enabled:
-            # 先恢复自动重启策略(启用时让容器随 compose 自启), 再启动
+            # 先启动, 再恢复自动重启策略(启用时让容器随 compose 自启)
             r1 = _docker_request("POST", f"/containers/{cname}/start", None, 20)
             r2 = _docker_request("POST", f"/containers/{cname}/update", {"RestartPolicy": {"Name": "unless-stopped"}}, 20)
-            # L5 修复: 检查响应状态码; start 对已运行容器返回 304, 也算成功
-            if r1.status not in (200, 204, 304) and r2.status not in (200, 204, 304):
-                return False
         else:
             # 停用: 设 restart=no 防止自动拉起, 再停止
             r1 = _docker_request("POST", f"/containers/{cname}/update", {"RestartPolicy": {"Name": "no"}}, 20)
             r2 = _docker_request("POST", f"/containers/{cname}/stop", None, 20)
-            # stop 对已停止容器返回 304, update 正常返回 200
-            if r1.status not in (200, 204, 304) and r2.status not in (200, 204, 304):
-                return False
+        # start/stop 对已处于目标状态的容器返回 304, update 正常返回 200/204
+        ok1 = r1.status in (200, 204, 304)
+        ok2 = r2.status in (200, 204, 304)
+        if not (ok1 and ok2):
+            log(f"[共享] {proto} {'启用' if enabled else '停用'}未完全成功: "
+                f"步骤1={'OK' if ok1 else 'HTTP %s' % r1.status}, "
+                f"步骤2={'OK' if ok2 else 'HTTP %s' % r2.status}")
+            return False
         return True
     except Exception:  # noqa: BLE001
         return False
@@ -1057,8 +1087,12 @@ def set_qb(enabled: bool, username: str, password: str) -> bool:
             r1 = _docker_request("POST", f"/containers/{QB_CONTAINER}/start", None, 20)
             if r1.status not in (200, 204, 304):
                 return False
-            # 2. 恢复自动重启策略
-            _docker_request("POST", f"/containers/{QB_CONTAINER}/update", {"RestartPolicy": {"Name": "unless-stopped"}}, 20)
+            # 2. 恢复自动重启策略(与 start 同等重要: 缺失会留下 running + restart=no,
+            #    面板绿灯但宿主重启后不自启, 故必须校验, 不能静默忽略)
+            r2 = _docker_request("POST", f"/containers/{QB_CONTAINER}/update", {"RestartPolicy": {"Name": "unless-stopped"}}, 20)
+            if r2.status not in (200, 204, 304):
+                log(f"[qB] 恢复自动重启策略失败 HTTP {r2.status}, 启用视为未完全成功")
+                return False
             # 3. 等待 conf 生成并写入密码
             for _ in range(15):
                 if QB_CONF_PATH.exists() and _set_qb_password(username, password):
@@ -1071,9 +1105,13 @@ def set_qb(enabled: bool, username: str, password: str) -> bool:
             rr = _docker_request("POST", f"/containers/{QB_CONTAINER}/restart", None, 30)
             return rr.status in (200, 204, 304)
         else:
-            _docker_request("POST", f"/containers/{QB_CONTAINER}/update", {"RestartPolicy": {"Name": "no"}}, 20)
+            ru = _docker_request("POST", f"/containers/{QB_CONTAINER}/update", {"RestartPolicy": {"Name": "no"}}, 20)
             r = _docker_request("POST", f"/containers/{QB_CONTAINER}/stop", None, 20)
-            return r.status in (200, 204, 304)
+            if ru.status not in (200, 204, 304) or r.status not in (200, 204, 304):
+                log(f"[qB] 停用未完全成功: update={'OK' if ru.status in (200, 204, 304) else 'HTTP %s' % ru.status}, "
+                    f"stop={'OK' if r.status in (200, 204, 304) else 'HTTP %s' % r.status}")
+                return False
+            return True
     except Exception as e:  # noqa: BLE001
         log(f"[qB] 启停异常: {e!r}")
         return False
@@ -1093,6 +1131,45 @@ def _sync_disabled_qb() -> None:
                 set_qb(False, qb.get("username", ""), qb.get("password", ""))
     except Exception:  # noqa: BLE001
         pass
+
+
+def _heal_enabled_sidecar(cname: str, start_fn, handled: set[str]) -> bool:
+    """对"配置为启用"的 sidecar 做反向收敛, 返回 True 表示本轮仍需继续观察。
+
+    补齐 _converge_disabled_sidecars 只管"禁用"的半边缺口。两种不一致:
+
+      1) 容器在运行, 但 RestartPolicy != unless-stopped
+         成因: compose 里 sidecar 写死 `restart: no`, 任何 recreate(镜像更新 /
+         --force-recreate / down+up) 都会让它重新生效; 而容器仍在跑、面板仍绿灯,
+         要到宿主重启才暴露成"共享消失"。
+         处理: 只补 update, **绝不碰运行状态**(不停止、不重启), 因此不会违背
+         "启用的容器不得被停止"这一既有约束。
+
+      2) 容器存在但未运行
+         成因: 宿主重启后 restart=no 的容器不会被拉起, 而面板配置仍是"启用"。
+         处理: 调 start_fn(True) 拉起 —— 配置 enabled 即表达"期望在运行"。
+
+    保守原则: 运行状态或重启策略查询失败(返回 None) 时一律跳过, 绝不据此启停,
+    避免 Docker API 不可达(socket-proxy 未就绪)时误动作。
+    """
+    st = share_container_state(cname)
+    if st is None:
+        return True  # 容器尚未出现或查询失败 -> 下一轮再看
+    if st == "running":
+        policy = container_restart_policy(cname)
+        if policy is None or policy == "unless-stopped":
+            return False  # 策略查不到(保守跳过) 或已一致
+        log(f"[启动收敛] {cname} 在运行但重启策略为 {policy}, 补设为 unless-stopped")
+        _docker_request("POST", f"/containers/{cname}/update",
+                        {"RestartPolicy": {"Name": "unless-stopped"}}, 20)
+        return False
+    # stopped / created / exited / dead 等: 配置要求启用, 予以拉起
+    if cname in handled:
+        return True  # 已发起过启动, 等待生效, 不重复冲击
+    log(f"[启动收敛] {cname} 配置为启用但未运行(状态={st}), 正在启动")
+    start_fn(True)
+    handled.add(cname)
+    return True
 
 
 def _converge_disabled_sidecars(attempts: int = 12, interval: float = 5.0) -> None:
@@ -1121,10 +1198,14 @@ def _converge_disabled_sidecars(attempts: int = 12, interval: float = 5.0) -> No
             try:
                 shares = load_shares()
                 for proto in ("samba", "webdav"):
-                    if shares.get(proto, {}).get("enabled", True):
-                        continue  # 用户已启用, 不动
                     cname = SHARE_CONTAINERS.get(proto)
                     if not cname:
+                        continue
+                    if shares.get(proto, {}).get("enabled", True):
+                        # 已启用: 反向收敛 —— 补自愈能力 / 拉起停摆的容器
+                        if _heal_enabled_sidecar(cname, lambda on, p=proto: set_share(p, on),
+                                                 pending_handled):
+                            pending = True
                         continue
                     st = share_container_state(cname)
                     if st == "running":
@@ -1147,7 +1228,15 @@ def _converge_disabled_sidecars(attempts: int = 12, interval: float = 5.0) -> No
             # --- 种子 sidecar: qBittorrent ---
             try:
                 qb = load_qb_settings()
-                if not qb.get("enabled", True):
+                if qb.get("enabled", True):
+                    # 已启用: 反向收敛
+                    if _heal_enabled_sidecar(
+                        QB_CONTAINER,
+                        lambda on: set_qb(on, qb.get("username", ""), qb.get("password", "")),
+                        pending_handled,
+                    ):
+                        pending = True
+                else:
                     st = share_container_state(QB_CONTAINER)
                     if st == "running":
                         if QB_CONTAINER in pending_handled:

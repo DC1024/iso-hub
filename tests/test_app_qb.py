@@ -124,6 +124,38 @@ class TestSetQb(unittest.TestCase):
         self.assertEqual(calls[1][0][0], "POST")
         self.assertIn(f"/containers/{app.QB_CONTAINER}/stop", calls[1][0][1])
 
+    @patch.object(app, "_docker_request")
+    @patch.object(app, "QB_CONF_PATH")
+    def test_enable_returns_false_when_restart_update_fails(self, mock_conf_path, mock_docker):
+        """回归: start 成功但 update restart 失败 -> 必须返回 False。
+
+        旧实现不检查 update 的返回值, 于是"启用成功"实际留下 running + 旧策略,
+        宿主重启后 qB 不会被拉起, 而面板仍显示绿灯。
+
+        注意: 必须把 conf/密码环节一并 mock 成成功, 否则函数会(无论 update 成败)
+        因"写密码失败"而返回 False, 测试就抓不到 update 校验的缺失 —— 这个盲区
+        是变异测试发现的。
+        """
+        mock_docker.side_effect = [
+            self._fake_docker_resp(204),  # start OK
+            self._fake_docker_resp(500),  # update restart FAILED
+            self._fake_docker_resp(204),  # restart(仅在校验缺失时才会走到, 且会成功)
+        ]
+        mock_conf_path.exists.return_value = True
+        with patch.object(app, "_set_qb_password", return_value=True):
+            result = app.set_qb(True, "admin", "adminadmin")
+        self.assertFalse(result, "update restart 失败时启用不得报成功")
+
+    @patch.object(app, "_docker_request")
+    def test_disable_returns_false_when_restart_update_fails(self, mock_docker):
+        """回归: 停用时 update restart=no 失败 -> 也必须返回 False。"""
+        mock_docker.side_effect = [
+            self._fake_docker_resp(500),  # update restart FAILED
+            self._fake_docker_resp(204),  # stop OK
+        ]
+        result = app.set_qb(False, "admin", "adminadmin")
+        self.assertFalse(result, "update restart 失败时停用不得报成功")
+
 
 class TestSyncDisabledQb(unittest.TestCase):
     """验证启动同步 _sync_disabled_qb。"""
