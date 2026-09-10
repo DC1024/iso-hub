@@ -21,4 +21,7 @@ Thumbs.db
 
 # ===== 编辑器 =====
 .idea/
-.vscode/
+.vscode/.git_commit_msg.txt
+.workbuddy_push.py
+.workbuddy_e2e_*.py
+.workbuddy_*.py
