@@ -19,6 +19,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -29,6 +30,57 @@ ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 
 def natural_key(value: str):
     return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", value)]
+
+
+def _failures_path(download_dir: Path) -> Path:
+    return Path(download_dir) / "download_failures.json"
+
+
+def _record_failure(download_dir: Path, typ: str, name: str, fname: str, kind: str) -> None:
+    """记录文件级下载失败(供前端显示「下载失败 / 下载停止」)。"""
+    try:
+        jf = _failures_path(download_dir)
+        data = {}
+        if jf.exists():
+            try:
+                data = json.loads(jf.read_text(encoding="utf-8")) or {}
+            except Exception:  # noqa: BLE001
+                data = {}
+        data[f"{typ}/{name}/{fname}"] = {"at": int(time.time()), "kind": kind}
+        tmp = jf.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(jf)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clear_failure(download_dir: Path, typ: str, name: str, fname: str) -> None:
+    try:
+        jf = _failures_path(download_dir)
+        if not jf.exists():
+            return
+        data = json.loads(jf.read_text(encoding="utf-8")) or {}
+        rel = f"{typ}/{name}/{fname}"
+        if rel in data:
+            data.pop(rel, None)
+            tmp = jf.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(jf)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _last_run_verified(downloader, entry: dict, fp: Path) -> bool:
+    """判断某文件本次下载后是否已通过校验(通过则说明是完整文件, 不是半成品)。"""
+    if not fp.exists():
+        return False
+    try:
+        ok, _msg = downloader.verify_checksum_smart(
+            fp, entry.get("checksum_url"), entry.get("checksum")
+        )
+        return bool(ok)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
@@ -201,9 +253,34 @@ def main() -> None:
         downloader = LinuxDistributionDownloader(args.json_file, str(download_dir))
         downloader.cleanup_distribution_dir = lambda *a, **k: None
         downloader.distributions = {"distributions": keep_entries}
+        # 逐文件记录失败: 订阅同步用的是上游 download_distribution(多文件循环),
+        # 无法从返回值区分是哪个文件失败, 故先快照再逐条比对。
+        _before = {}
+        for _e in keep_entries:
+            _fn = _e.get("download_url", "").rstrip("/").rsplit("/", 1)[-1]
+            _fp = target / _fn
+            try:
+                _before[_fn] = _fp.stat().st_size if _fp.exists() else -1
+            except OSError:
+                _before[_fn] = -1
         ok = downloader.download_distribution(name, verify_checksum=True)
         if not ok:
             failed = True
+        for _e in keep_entries:
+            _fn = _e.get("download_url", "").rstrip("/").rsplit("/", 1)[-1]
+            _fp = target / _fn
+            try:
+                _after = _fp.stat().st_size if _fp.exists() else -1
+            except OSError:
+                _after = -1
+            if _after < 0:
+                # 文件未落盘: 完全没能下载 → 下载失败(不可续传)
+                _record_failure(download_dir, typ, name, _fn, "hard")
+            elif _after != _before.get(_fn, -1) and not _last_run_verified(downloader, _e, _fp):
+                # 本次有变动但校验未过 → 半成品保留, 可续传 → 下载停止
+                _record_failure(download_dir, typ, name, _fn, "stopped")
+            else:
+                _clear_failure(download_dir, typ, name, _fn)
 
         # 清理该组不在最新 N 内的过期 ISO
         # target 已由 _safe_dist_dir 校验, 确定落在 download_dir 内

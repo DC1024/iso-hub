@@ -131,20 +131,56 @@ def _pick_candidates(strategy: str, entry: dict, headers: dict):
     return list(zip(urls, cs))
 
 
+def _record_failure(data_dir, typ: str, name: str, fname: str, kind: str) -> None:
+    """把文件级失败写进 download_failures.json(供前端显示「下载失败/下载停止」)。
+
+    kind="hard"    半成品已清理, 下次只能从头下 → 下载失败
+    kind="stopped" 半成品保留, 下次可续传     → 下载停止
+    """
+    try:
+        jf = Path(data_dir) / "download_failures.json"
+        data = {}
+        if jf.exists():
+            try:
+                data = json.loads(jf.read_text(encoding="utf-8")) or {}
+            except Exception:  # noqa: BLE001
+                data = {}
+        data[f"{typ}/{name}/{fname}"] = {"at": int(time.time()), "kind": kind}
+        tmp = jf.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(jf)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clear_failure(data_dir, typ: str, name: str, fname: str) -> None:
+    """下载成功后清除该文件的失败记录。"""
+    try:
+        jf = Path(data_dir) / "download_failures.json"
+        if not jf.exists():
+            return
+        data = json.loads(jf.read_text(encoding="utf-8")) or {}
+        rel = f"{typ}/{name}/{fname}"
+        if rel in data:
+            data.pop(rel, None)
+            tmp = jf.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(jf)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _download_file_with_failover(downloader, target_dist: dict, candidates, filename: str,
                                  dist_dir, filepath) -> tuple:
     """逐个候选源下载同一文件, 失败/校验失败自动切换下一候选源。
 
     返回 (成功与否, 实际使用的下载URL)。全部候选失败返回 (False, None)。
+
+    失败时保留半成品文件(不删), 供下次运行尝试继续; 后端据此把该文件标记为
+    「下载停止」(可续传) 而非「下载失败」。
     """
     last_err = None
     for idx, (url, checksum_url) in enumerate(candidates):
-        # 清除上一候选留下的不完整文件
-        if filepath.exists():
-            try:
-                filepath.unlink()
-            except Exception:  # noqa: BLE001
-                pass
         print(f"  候选源 {idx + 1}/{len(candidates)}: {url}")
         try:
             resp = requests.get(url, headers=downloader.headers, stream=True, timeout=60)
@@ -247,6 +283,7 @@ def main() -> None:
                 )
                 if ok:
                     print(f"✓ {msg}")
+                    _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)
                     continue
                 print(f"✗ {msg}")
                 print("校验和验证失败, 将重新下载")
@@ -256,6 +293,11 @@ def main() -> None:
             )
             if not ok:
                 failed = True
+                # 半成品保留 → 下次可续传, 记 stopped; 文件不存在(未写入任何数据)记 hard
+                kind = "stopped" if filepath.exists() else "hard"
+                _record_failure(args.download_dir, entry.get("type", "linux"), name, fname, kind)
+            else:
+                _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)
 
     if failed:
         sys.exit(1)

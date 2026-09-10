@@ -166,33 +166,68 @@ class TestDeleteSecurity(DeleteFilesTestBase):
 
 
 class TestDeleteProtected(DeleteFilesTestBase):
-    """受保护文件: 默认跳过, 显式 force 才删除。"""
+    """锁定(受保护)文件: 硬拒绝删除, 无任何绕过参数。
 
-    def test_protected_file_skipped_without_force(self):
-        """受保护文件默认跳过, 磁盘文件保留。"""
+    锁定优先级高于手动删除 —— 用户必须先解锁才能删。
+    """
+
+    def test_locked_file_is_rejected(self):
+        """锁定文件不删, 磁盘文件保留, 返回 locked 列表。"""
         with patch.object(app, "load_protected", return_value=["linux/Ubuntu/ubuntu-26.04.iso"]):
             r = self.post({"items": [{"type": "linux", "distribution": "Ubuntu",
                                       "filename": "ubuntu-26.04.iso"}]})
         body = r.get_json()
         self.assertEqual(body["removed"], [])
-        self.assertTrue(any("受保护" in s for s in body["skipped"]))
+        self.assertEqual(len(body["locked"]), 1)
+        self.assertEqual(body["locked"][0]["filename"], "ubuntu-26.04.iso")
+        self.assertFalse(body["ok"], "含锁定文件时 ok 应为 False")
+        self.assertTrue(any("锁定" in s for s in body["skipped"]))
         self.assertTrue((self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").exists())
 
-    def test_protected_file_deleted_with_force(self):
-        """force=true 时可删除受保护文件。"""
+    def test_force_param_is_ignored(self):
+        """即使传入 force=true 也不能删除锁定文件(force 后门已移除)。"""
         with patch.object(app, "load_protected", return_value=["linux/Ubuntu/ubuntu-26.04.iso"]):
             r = self.post({"items": [{"type": "linux", "distribution": "Ubuntu",
                                       "filename": "ubuntu-26.04.iso"}], "force": True})
         body = r.get_json()
-        self.assertEqual(body["removed"], ["ubuntu-26.04.iso"])
-        self.assertFalse((self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").exists())
+        self.assertEqual(body["removed"], [])
+        self.assertEqual(len(body["locked"]), 1)
+        self.assertTrue((self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").exists())
+
+    def test_locked_skipped_but_others_deleted(self):
+        """混合场景: 锁定文件跳过, 未锁定文件照删, ok 为 False。"""
+        with patch.object(app, "load_protected", return_value=["linux/Ubuntu/ubuntu-26.04.iso"]):
+            r = self.post({"items": [
+                {"type": "linux", "distribution": "Ubuntu", "filename": "ubuntu-26.04.iso"},
+                {"type": "linux", "distribution": "Ubuntu", "filename": "ubuntu-24.04.iso"},
+            ]})
+        body = r.get_json()
+        self.assertEqual(body["removed"], ["ubuntu-24.04.iso"])
+        self.assertEqual(len(body["locked"]), 1)
+        self.assertEqual(body["locked"][0]["filename"], "ubuntu-26.04.iso")
+        self.assertFalse(body["ok"])
+        # 锁定的保留, 未锁定的删除
+        self.assertTrue((self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").exists())
+        self.assertFalse((self.data / "linux" / "Ubuntu" / "ubuntu-24.04.iso").exists())
 
     def test_protected_by_bare_filename(self):
-        """受保护名单按裸文件名匹配时同样生效。"""
+        """锁定名单按裸文件名匹配时同样硬拒绝。"""
         with patch.object(app, "load_protected", return_value=["ubuntu-26.04.iso"]):
             r = self.post({"items": [{"type": "linux", "distribution": "Ubuntu",
                                       "filename": "ubuntu-26.04.iso"}]})
-        self.assertEqual(r.get_json()["removed"], [])
+        body = r.get_json()
+        self.assertEqual(body["removed"], [])
+        self.assertEqual(len(body["locked"]), 1)
+
+    def test_unlock_then_delete_works(self):
+        """解锁(名单不再含该文件)后即可正常删除。"""
+        with patch.object(app, "load_protected", return_value=[]):
+            r = self.post({"items": [{"type": "linux", "distribution": "Ubuntu",
+                                      "filename": "ubuntu-26.04.iso"}]})
+        body = r.get_json()
+        self.assertEqual(body["removed"], ["ubuntu-26.04.iso"])
+        self.assertEqual(body["locked"], [])
+        self.assertFalse((self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").exists())
 
 
 class TestDeleteTaskMutex(DeleteFilesTestBase):

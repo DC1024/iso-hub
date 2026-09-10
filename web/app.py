@@ -56,6 +56,7 @@ CUSTOM_JSON = DATA_DIR / "custom_sources.json"      # 用户自定义镜像源(�
 CUSTOM_CACHE_JSON = DATA_DIR / "custom_repo_cache.json"  # 自定义发行版源展开结果的持久化缓存(仅后台刷新写入)
 SUBS_JSON = DATA_DIR / "subscriptions.json"          # 订阅配置: 自动拉最新+删旧
 SETTINGS_JSON = DATA_DIR / "settings.json"           # 网络共享开关+凭据(网页可改, 覆盖 compose env)
+FAILURES_JSON = DATA_DIR / "download_failures.json"  # 下载失败记录 {rel: {"at":ts,"kind":"hard"|"stopped"}}
 SHARE_CONTAINERS = {"samba": "iso-hub-samba", "webdav": "iso-hub-webdav"}
 ISO_SUFFIXES = {".iso", ".img", ".qcow2", ".vmdk"}
 # 下载目录类型白名单(路径穿越防护)
@@ -199,8 +200,55 @@ def meta_updated_at() -> float:
         return 0.0
 
 
+def write_fail_record(rel: str, kind: str = "hard") -> None:
+    """记录一次下载失败到 download_failures.json: {rel: {"at": ts, "kind": kind}}。
+
+    由各下载 runner 在文件级失败时调用(子进程写)。kind 语义由调用方决定:
+      * "hard"    — 不可续传的失败(半成品已被清理), 下次只能从头下 → 下载失败
+      * "stopped" — 已停止/被中断, 半成品保留, 下次可续传 → 下载停止
+    """
+    try:
+        data = {}
+        if FAILURES_JSON.exists():
+            data = json.loads(FAILURES_JSON.read_text(encoding="utf-8")) or {}
+        data[rel] = {"at": int(time.time()), "kind": kind}
+        tmp = FAILURES_JSON.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(FAILURES_JSON)
+    except Exception as e:  # noqa: BLE001
+        log(f"[WARN] 写下载失败记录失败: {e}")
+
+
+def load_failures() -> dict:
+    """读取下载失败记录 {rel: {"at": ts, "kind": kind}}。"""
+    try:
+        if FAILURES_JSON.exists():
+            data = json.loads(FAILURES_JSON.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        log(f"[WARN] 解析下载失败记录失败: {e}")
+    return {}
+
+
+def clear_failure(rel: str) -> None:
+    """下载成功后清除该文件的失败记录。"""
+    try:
+        data = load_failures()
+        if rel in data:
+            data.pop(rel, None)
+            tmp = FAILURES_JSON.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(FAILURES_JSON)
+    except Exception as e:  # noqa: BLE001
+        log(f"[WARN] 清除下载失败记录失败: {e}")
+
+
 def disk_inventory() -> dict:
-    """扫描数据卷 -> {(type, name): [files]}"""
+    """扫描数据卷 -> {(type, name): [files]}
+
+    同时识别下载中的半成品文件(.part / .aria2 / .!qB / *.tmp), 它们在条目里
+    以 partial 标记返回, 供前端区分「下载失败 / 下载停止」与「未下载」。
+    """
     inv = {}
     if not DATA_DIR.exists():
         return inv
@@ -215,10 +263,38 @@ def disk_inventory() -> dict:
                     if f.is_file():
                         try:
                             st = f.stat()
-                            inv[key].append({"name": f.name, "size": st.st_size, "mtime": st.st_mtime})
+                            inv[key].append({"name": f.name, "size": st.st_size,
+                                             "mtime": st.st_mtime, "partial": False})
                         except OSError:
                             pass
+                # 半成品: 单独一趟, 把 xxx.iso.part 归到 xxx.iso 名下
+                for f in ddir.iterdir():
+                    if not f.is_file():
+                        continue
+                    base = _partial_base_name(f.name)
+                    if not base:
+                        continue
+                    try:
+                        st = f.stat()
+                    except OSError:
+                        continue
+                    inv[key].append({"name": base, "size": st.st_size,
+                                     "mtime": st.st_mtime, "partial": True,
+                                     "partial_name": f.name})
     return inv
+
+
+def _partial_base_name(fname: str) -> str:
+    """把半成品文件名还原成目标文件名; 不是半成品返回空串。
+
+    识别: name.part / name.aria2 / name.!qB / name.tmp
+    (download_linux 与 failover runner 都先写目标名再落盘, 半成品仅此几类后缀)
+    """
+    low = fname.lower()
+    for suf in (".part", ".aria2", ".!qb", ".tmp"):
+        if low.endswith(suf):
+            return fname[: -len(suf)]
+    return ""
 
 
 # --------------------------------------------------------------------------- custom sources / subscriptions
@@ -379,9 +455,35 @@ def merge_custom_entries(entries: list) -> list:
     return list(merged.values())
 
 
+def _entry_status(key: tuple, fname: str, local: dict | None, failures: dict) -> tuple:
+    """判定条目下载状态, 返回 (status, partial_size)。
+
+    status 取值:
+      * "downloaded" — 完整文件已落盘
+      * "partial"    — 发现半成品(.part 等), 任务中断过, 可尝试续传
+      * "stopped"    — 有失败记录且 kind=stopped(半成品曾保留) → 下载停止
+      * "failed"     — 有失败记录且 kind=hard(半成品已清理) → 下载失败
+      * "none"       — 从未下载过
+
+    partial 判定优先于失败记录: 只要半成品还在, 就说明可续传 → 归入「下载停止」语义。
+    """
+    if local and not local.get("partial"):
+        return "downloaded", 0
+    rel = f"{key[0]}/{key[1]}/{fname}"
+    rec = failures.get(rel) or {}
+    if local and local.get("partial"):
+        # 半成品存在: 无论历史失败记录为何, 都视为可续传的中断
+        return "partial", int(local.get("size") or 0)
+    if rec:
+        kind = rec.get("kind")
+        return ("stopped" if kind == "stopped" else "failed"), 0
+    return "none", 0
+
+
 def build_distros() -> dict:
     data = load_json()
     inv = disk_inventory()
+    failures = load_failures()
     groups = {}
     for e in data.get("distributions", []):
         name, typ = e.get("distribution", "?"), e.get("type", "linux")
@@ -389,7 +491,12 @@ def build_distros() -> dict:
         groups.setdefault(key, {"name": name, "type": typ, "entries": []})
         url = e.get("download_url", "")
         fname = url.rstrip("/").rsplit("/", 1)[-1] if url else "?"
-        local = next((f for f in inv.get(key, []) if f["name"] == fname), None)
+        files = inv.get(key, [])
+        # 完整文件优先; 其次是半成品(.part 记录也以 fname 为 name)
+        local = next((f for f in files if f["name"] == fname and not f.get("partial")), None)
+        if local is None:
+            local = next((f for f in files if f["name"] == fname), None)
+        status, partial_size = _entry_status(key, fname, local, failures)
         groups[key]["entries"].append(
             {
                 "distribution": name,
@@ -402,6 +509,8 @@ def build_distros() -> dict:
                 "checksum": e.get("checksum", ""),
                 "local_size": local["size"] if local else 0,
                 "local_mtime": int(local["mtime"]) if local else 0,
+                "status": status,
+                "partial_size": partial_size,
             }
         )
 
@@ -660,11 +769,22 @@ def seed_admin():
 
 
 def _check_login(username: str, password: str) -> bool:
+    return _verify_login(username, password) == "ok"
+
+
+def _verify_login(username: str, password: str) -> str:
+    """校验登录, 返回精确结果: 'ok' | 'no_user' | 'bad_pass'。
+
+    分开返回两种失败原因, 让前端能提示"用户名不存在"还是"密码错误"。
+    注意: 这会暴露账号是否存在(用户枚举)。本应用是自建私有面板、公网通常还有
+    反代/防火墙兜底, 可读性优先; 如后续要抗枚举, 可改为统一话术+恒定耗时。
+    """
     u = load_users().get(username)
     if not u:
-        return False
-    return secrets.compare_digest(_hash_pw(password, u.get("salt", "")),
-                                  u.get("password_hash", ""))
+        return "no_user"
+    ok = secrets.compare_digest(_hash_pw(password, u.get("salt", "")),
+                                u.get("password_hash", ""))
+    return "ok" if ok else "bad_pass"
 
 
 def _issue_token(username: str) -> str:
@@ -1835,20 +1955,19 @@ def api_prune():
 def api_delete_files():
     """删除清单内已下载的 ISO 文件。
 
-    请求体: {"items": [{"type": "linux", "distribution": "Ubuntu", "filename": "xxx.iso"}, ...],
-             "force": false}
+    请求体: {"items": [{"type": "linux", "distribution": "Ubuntu", "filename": "xxx.iso"}, ...]}
 
     安全约束(逐条对应):
       1. 路径穿越: (type, distribution) 经 _safe_join 校验, 必须落在 DATA_DIR 内
       2. 文件名: 拒绝空/含分隔符/为 . 或 ..; 且最终路径必须仍在目标目录内
       3. 只删清单内文件: 文件名必须属于该发行版**当前清单**(expected), 否则拒绝
          —— 防止误删用户手动放入的 ISO; 若要删除非清单文件请用「清理过期」接口
-      4. 受保护文件: 默认跳过; 只有显式 force=true 才允许删除(前端会二次确认)
+      4. **受保护(🔒锁定)文件一律拒绝删除**: 无任何绕过参数。锁定优先级高于手动删除,
+         用户必须先点解锁按钮才可删除。命中时以 locked 列表单独返回, 供前端给出明确指引。
       5. 任务互斥: 有下载任务在跑时拒绝, 避免边下边删造成状态错乱
     """
     body = request.get_json(force=True, silent=True) or {}
     items = body.get("items") or []
-    force = bool(body.get("force"))
     if not items:
         return jsonify({"error": "没有选择任何文件"}), 400
     if running_task():
@@ -1865,7 +1984,7 @@ def api_delete_files():
         expected.setdefault((e.get("type", "linux"), e.get("distribution", "")), set()).add(fname)
 
     protected = set(load_protected())
-    removed, skipped = [], []
+    removed, skipped, locked = [], [], []
     for it in items:
         typ = str(it.get("type") or "").strip()
         name = str(it.get("distribution") or "").strip()
@@ -1883,8 +2002,9 @@ def api_delete_files():
             skipped.append(f"{label}: 不在当前清单内, 已拒绝(如需清理请用「清理过期」)")
             continue
         rel = f"{typ}/{name}/{fname}"
-        if (rel in protected or fname in protected) and not force:
-            skipped.append(f"{label}: 受保护, 已跳过")
+        # 锁定文件: 硬拒绝, 无 force 后门
+        if rel in protected or fname in protected:
+            locked.append({"type": typ, "distribution": name, "filename": fname})
             continue
         fp = (target / fname)
         # 二次确认最终路径仍在目标目录内(防 symlink / 拼接绕过)
@@ -1899,13 +2019,16 @@ def api_delete_files():
         try:
             fp.unlink()
             removed.append(fname)
-        except OSError as e:  # noqa: BLE001
+        except OSError as e:
             skipped.append(f"{label}: {e}")
 
-    log(f"[删除] 请求 {len(items)} 个, 成功 {len(removed)} 个, 跳过 {len(skipped)} 个"
-        + ("(force)" if force else ""))
-    return jsonify({"ok": True, "removed": removed, "skipped": skipped})
-
+    ok = not locked
+    for lk in locked:
+        skipped.append(f"{lk['filename']}: 文件已被锁定, 已跳过")
+    resp = {"ok": ok, "removed": removed, "skipped": skipped, "locked": locked}
+    if locked:
+        resp["error"] = f"{len(locked)} 个文件已被锁定"
+    return jsonify(resp)
 
 
 # ---------- 受保护/锁定文件 ----------
@@ -2032,8 +2155,11 @@ def api_user_login():
         save_users(users)
         log(f"[用户] 首次创建管理员账号: {u}")
         return jsonify({"ok": True, "token": _issue_token(u), "username": u})
-    if not _check_login(u, p):
-        return jsonify({"error": "用户名或密码错误"}), 401
+    v = _verify_login(u, p)
+    if v == "no_user":
+        return jsonify({"error": "用户名不存在", "code": "no_user"}), 401
+    if v == "bad_pass":
+        return jsonify({"error": "密码错误", "code": "bad_pass"}), 401
     return jsonify({"ok": True, "token": _issue_token(u), "username": u})
 
 
