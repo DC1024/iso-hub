@@ -75,8 +75,9 @@ def _last_run_verified(downloader, entry: dict, fp: Path) -> bool:
     if not fp.exists():
         return False
     try:
+        # 必须传 dist=entry: 否则 GPG 验签被静默跳过(漏传 dist 的回归)
         ok, _msg = downloader.verify_checksum_smart(
-            fp, entry.get("checksum_url"), entry.get("checksum")
+            fp, entry.get("checksum_url"), entry.get("checksum"), dist=entry
         )
         return bool(ok)
     except Exception:  # noqa: BLE001

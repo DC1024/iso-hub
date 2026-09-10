@@ -56,7 +56,7 @@ class _FakeDownloader:
         self.checksum_ok = checksum_ok
         self.verified_paths = []
 
-    def verify_checksum_smart(self, filepath, checksum_url, stored):
+    def verify_checksum_smart(self, filepath, checksum_url, stored, dist=None):
         self.verified_paths.append(Path(filepath))
         if self.checksum_ok:
             return True, "校验通过(测试桩)"

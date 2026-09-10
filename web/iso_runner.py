@@ -304,8 +304,9 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                 print("  ⚠ 服务器未提供文件总大小, 无法核对完整性, 直接交由校验和判定")
 
             # 校验和优先跟随当前候选源自身; 无则回退 entry 存储值
+            # 必须传 dist=target_dist: 否则 GPG 验签会被静默跳过(漏传 dist 的回归)
             success, msg = downloader.verify_checksum_smart(
-                part, checksum_url, target_dist.get("checksum")
+                part, checksum_url, target_dist.get("checksum"), dist=target_dist
             )
             if success:
                 print(f"  ✓ {msg}")
@@ -432,8 +433,9 @@ def main() -> None:
 
             if filepath.exists():
                 print(f"文件已存在: {filepath}")
+                # 必须传 dist=entry: 否则 GPG 验签被静默跳过(漏传 dist 的回归)
                 ok, msg = downloader.verify_checksum_smart(
-                    filepath, entry.get("checksum_url"), entry.get("checksum")
+                    filepath, entry.get("checksum_url"), entry.get("checksum"), dist=entry
                 )
                 if ok:
                     print(f"✓ {msg}")
