@@ -21,7 +21,6 @@
 修复后: 上报 .part 路径; 聚合时把已完成文件从分子分母一起剔除。
 """
 
-import re
 import sys
 import tempfile
 import unittest
