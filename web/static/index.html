@@ -166,6 +166,12 @@
   .badge.bad{background:var(--badbg);color:var(--bad)}
   .badge.none{background:#f1f5f9;color:var(--ink3)}
   .badge.wrk{background:var(--chip);color:var(--brand)}
+  /* v1.3.1「下载中」: 区别于「下载停止」的静态灰, 用品牌色 + 呼吸动画表示"活的" */
+  .badge.run{background:var(--chip);color:var(--brand);font-weight:600}
+  @media (prefers-reduced-motion: no-preference){
+    .badge.run{animation:runpulse 1.6s ease-in-out infinite}
+  }
+  @keyframes runpulse{0%,100%{opacity:1}50%{opacity:.55}}
   td.size,.td-r{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
   td.size{color:var(--ink2);font-size:12.5px;padding-right:16px!important}
   /* stray rows */
@@ -266,6 +272,7 @@
       <option value="all" data-i18n="filterAll" data-page-node-id="CGopUIkdvAYs4rlACsbuHN">全部</option>
       <option value="downloaded" data-i18n="filterDownloaded" data-page-node-id="lwjzT53x77R62xRF2T3l7J">已下载</option>
       <option value="not_downloaded" data-i18n="filterNotDownloaded" data-page-node-id="nHGBoArlnG9znFMJtOdR1c">未下载</option>
+      <option value="downloading" data-i18n="downloading" data-page-node-id="dl0wnl0ad1ng0">下载中</option>
       <option value="dl_incomplete" data-i18n="filterDlFailed" data-page-node-id="dlinc0mpl3te0">下载失败/停止</option>
       <option value="fav" data-i18n="filterFav" data-page-node-id="gmtlxY3wZaCancexWDuBQ4">已收藏</option>
     </select>
@@ -600,8 +607,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.2.9';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.2.9';
+const APP_VERSION='1.3.1';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.3.1';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -640,6 +647,8 @@ const I18N={
   'notDownloaded':{zh:'未下载',en:'Not Downloaded'},
   'dlFailed':{zh:'下载失败',en:'Download Failed'},
   'dlStopped':{zh:'下载停止',en:'Download Stopped'},
+  'downloading':{zh:'下载中',en:'Downloading'},
+  'downloadingTip':{zh:'下载中：正在写入文件，请等待完成。',en:'Downloading: the file is being written right now, please wait.'},
   'dlFailedTip':{zh:'下载失败：文件下载到一半还需从头开始。重新点击下载即可重试。',en:'Download failed: the partial file must be restarted from scratch. Click download again to retry.'},
   'dlStoppedTip':{zh:'下载停止：已保留半成品，可断点续传。重新点击下载即可继续。',en:'Download stopped: partial data kept and resumable. Click download again to continue.'},
   'dlPartialSize':{zh:'已下载部分',en:'Partial'},
@@ -868,6 +877,7 @@ const I18N={
   'stratActiveB':{zh:'当前: B 实测选最快(下载前 HEAD 探测,自动剔除不可达源)',en:'Now: B probe fastest (HEAD-checks each mirror, skips unreachable)'},
   'stratSaved':{zh:'选源策略已保存',en:'Source strategy saved'},
   'stratNone':{zh:'自动(跟随全局策略)',en:'Auto (follow global strategy)'},
+  'srcPrimary':{zh:'主源',en:'primary'},
   'protectList':{zh:'受保护文件',en:'Protected Files'},
   'protectEmpty':{zh:'暂无受保护文件 —— 在镜像列表每行点 🔒 锁定',en:'No protected files — click 🔒 on any ISO row to lock it'},
   /* ---------- 定时任务 ---------- */
@@ -1000,12 +1010,22 @@ async function loadDistros(opts){
     if(btn){btn.disabled=false;btn.classList.remove('loading');}
   }
 }
-// 生成某条目可选的镜像源下拉(仅当存在多个源时显示,默认"自动/跟随全局策略")
+// 生成某条目可选的镜像源下拉(仅当存在多个源时显示)。
+// 默认选中「自动(跟随全局策略)」—— 仅当用户显式指定过源(entry.pin)时才预选该项。
+// v1.3.1 修复: 旧实现把 `u===e.download_url`(配置里的主源)标成 selected, 于是下拉
+// 永远默认显示清华源, 「自动」选项虽渲染出来却从未被选中。更糟的是 submit 时会把
+// 它当作用户的显式选择提交为 pin, 在「策略B(实测选最快源)」下会跳过测速、锁死该源。
 function srcSelHtml(e){
   const urls=(e.download_urls||[]).filter(Boolean);
   if(urls.length<2)return'';
-  const opts=['<option value="">'+esc(t('stratNone'))+'</option>']
-    .concat(urls.map(u=>'<option value="'+esc(u)+'"'+(u===e.download_url?' selected':'')+'>'+esc(shortSrc(u))+'</option>'));
+  const pin=(e.pin||'').trim();
+  const opts=['<option value=""'+(!pin?' selected':'')+'>'+esc(t('stratNone'))+'</option>']
+    .concat(urls.map(u=>{
+      const isPin=(u===pin), isPrimary=(u===e.download_url);
+      // 标出配置里的主源, 让用户知道"自动"会优先用它, 而不是靠默认选中来暗示
+      const label=esc(shortSrc(u))+(isPrimary?' ('+t('srcPrimary')+')':'');
+      return '<option value="'+esc(u)+'"'+(isPin?' selected':'')+'>'+label+'</option>';
+    }));
   return'<select class="src-sel" data-url="'+esc(e.download_url)+'">'+opts.join('')+'</select>';
 }
 // 截取镜像源的主机名用于下拉展示(如 mirrors.tuna.tsinghua.edu.cn → tuna.tsinghua.edu.cn)
@@ -1033,18 +1053,20 @@ function render(d){
     const stray=g.stray_files||[];
     let rows='';
     g.entries.forEach(e=>{
-      // 状态: downloaded / partial / stopped / failed / none
+      // 状态: downloading / downloaded / partial / stopped / failed / none
       const S=e.status||(e.local_size>0?'downloaded':'none');
       const isOk=S==='downloaded';
+      const isRun=S==='downloading';
       const isFail=S==='failed', isStop=(S==='partial'||S==='stopped');
       let dot, cls, label, tip;
-      if(isOk){dot='●';cls='ok';label='✓ '+t('downloaded');tip='';}
+      if(isRun){dot='▼';cls='run';label=t('downloading');tip=t('downloadingTip');}
+      else if(isOk){dot='●';cls='ok';label='✓ '+t('downloaded');tip='';}
       else if(isFail){dot='✕';cls='bad';label=t('dlFailed');tip=t('dlFailedTip');}
       else if(isStop){dot='⏸';cls='warn';label=t('dlStopped');tip=t('dlStoppedTip');}
       else{dot='○';cls='none';label=t('notDownloaded');tip='';}
-      const shownSize=isOk?e.local_size:(isStop?(e.partial_size||e.local_size||0):0);
+      const shownSize=(isOk||isRun)?(e.partial_size||e.local_size||0):(isStop?(e.partial_size||e.local_size||0):0);
       const sizeCell=shownSize>0
-        ?(t('local')+' '+fmt(shownSize)+(isStop?' <span class="muted">('+t('dlPartialSize')+')</span>':''))
+        ?(t('local')+' '+fmt(shownSize)+((isStop||isRun)?' <span class="muted">('+t('dlPartialSize')+')</span>':''))
         :'<span class="muted">—</span>';
       rows+=`<tr data-url="${esc(e.download_url)}" data-rel="${esc(g.type)}/${esc(g.name)}/${esc(e.filename)}" data-status="${S}">
         <td><input type="checkbox" class="ck" data-url="${esc(e.download_url)}"></td>
@@ -1054,7 +1076,7 @@ function render(d){
         <td class="src-cell">${srcSelHtml(e)}</td>
         <td class="td-r"><span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${label}</span></td>
         <td class="td-r"><button class="btn-lock ${isProtected(e.filename)?'on':''}" onclick="toggleProtect('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${isProtected(e.filename)?t('unlock'):t('lock')}">${isProtected(e.filename)?'🔒':'🔓'}</button></td>
-        <td class="td-r">${(isOk||isStop||isFail)?`<button class="btn-d btn-rowdel" onclick="deleteOne('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('deleteOne')}">🗑</button>`:''}</td>
+        <td class="td-r">${(isOk||isStop||isFail||isRun)?`<button class="btn-d btn-rowdel" onclick="deleteOne('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('deleteOne')}">🗑</button>`:''}</td>
       </tr>`;
     });
     let strayHtml='';
@@ -1152,7 +1174,7 @@ async function deleteSel(){
     const hit=map.get(c.dataset.url);if(!hit)return null;
     const S=hit.e.status||'';
     const hasLocal=(hit.e.local_size>0)||(hit.e.partial_size>0)
-      ||['downloaded','partial','stopped','failed'].includes(S);
+      ||['downloading','downloaded','partial','stopped','failed'].includes(S);
     if(!hasLocal)return null;                            // 未下载 -> 跳过
     return {type:hit.type||'linux', distribution:hit.e.distribution, filename:filenameOf(hit.e)};
   }).filter(it=>it&&it.filename);
@@ -1817,9 +1839,11 @@ function applyFilter(){
   const ROW_STATES={
     downloaded:['downloaded'],
     not_downloaded:['none'],
-    dl_incomplete:['partial','stopped','failed'],
+    // 「下载失败/停止」含正在下载: 它们同属"本地有半成品、尚未完成"的范畴
+    dl_incomplete:['downloading','partial','stopped','failed'],
     failed:['failed'],
-    stopped:['partial','stopped'],
+    stopped:['downloading','partial','stopped'],
+    downloading:['downloading'],
   };
   const wanted=ROW_STATES[f]||null;
   box.querySelectorAll(':scope > .card').forEach(card=>{

@@ -468,15 +468,43 @@ def merge_custom_entries(entries: list) -> list:
     return list(merged.values())
 
 
-def _entry_status(key: tuple, fname: str, local: dict | None, failures: dict) -> tuple:
+def active_download_paths() -> set:
+    """快照"当前正准备写入的 .part 路径"集合, 供状态判定用。
+
+    v1.3.1 新增: 此前列表状态完全由磁盘推断, 无法区分"下载被中断"和
+    "此刻正在下载" —— 正在下载的文件同样表现为一个 .part 文件, 于是被显示成
+    「下载停止」。这里从运行中任务的 targets/downloads 取活跃路径。
+
+    必须在 **_lock 之外**调用(见 D2 教训: 锁内做磁盘 IO 会拖垮 waitress)。
+    本函数自身只持有锁读内存字段, 不做任何 stat()。
+    """
+    with _lock:
+        if not task.get("proc"):
+            return set()
+        paths = set()
+        for p in (task.get("targets") or {}):
+            paths.add(str(p))
+        for d in (task.get("downloads") or []):
+            if d.get("path"):
+                paths.add(str(d["path"]))
+    return paths
+
+
+def _entry_status(key: tuple, fname: str, local: dict | None, failures: dict,
+                  active_paths: frozenset = frozenset()) -> tuple:
     """判定条目下载状态, 返回 (status, partial_size)。
 
     status 取值:
-      * "downloaded" — 完整文件已落盘
-      * "partial"    — 发现半成品(.part 等), 任务中断过, 可尝试续传
-      * "stopped"    — 有失败记录且 kind=stopped(半成品曾保留) → 下载停止
-      * "failed"     — 有失败记录且 kind=hard(半成品已清理) → 下载失败
-      * "none"       — 从未下载过
+      * "downloaded"  — 完整文件已落盘
+      * "downloading" — 该文件的 .part 正被运行中的任务写入 → 下载中
+      * "partial"     — 发现半成品(.part 等), 任务中断过, 可尝试续传
+      * "stopped"     — 有失败记录且 kind=stopped(半成品曾保留) → 下载停止
+      * "failed"      — 有失败记录且 kind=hard(半成品已清理) → 下载失败
+      * "none"        — 从未下载过
+
+    v1.3.1: "downloading" 必须**最先**判定 —— 只有它来自运行中任务的实时信息,
+    其余状态都是事后推断。没有这一步时, 正在下载的文件会因为"磁盘上有个 .part"
+    而被误报成「下载停止」(用户实际遇到的现象)。
 
     partial 判定优先于失败记录: 只要半成品还在, 就说明可续传 → 归入「下载停止」语义。
 
@@ -487,6 +515,10 @@ def _entry_status(key: tuple, fname: str, local: dict | None, failures: dict) ->
     """
     if local and not local.get("partial"):
         return "downloaded", 0
+    # 运行中的任务正写这个 .part → 下载中(而非"下载停止")
+    part_rel = str(DATA_DIR / key[0] / key[1] / (fname + PART_SUFFIX))
+    if part_rel in active_paths:
+        return "downloading", int(local.get("size") or 0) if local else 0
     rel = f"{key[0]}/{key[1]}/{fname}"
     rec = failures.get(rel) or {}
     if local and local.get("partial"):
@@ -502,6 +534,8 @@ def build_distros() -> dict:
     data = load_json()
     inv = disk_inventory()
     failures = load_failures()
+    # v1.3.1: 活跃下载路径快照(锁外获取, 只读内存), 用于把"正在下载"从"下载停止"里分出来
+    active_paths = frozenset(active_download_paths())
     groups = {}
     for e in data.get("distributions", []):
         name, typ = e.get("distribution", "?"), e.get("type", "linux")
@@ -516,7 +550,7 @@ def build_distros() -> dict:
         # 误判成已下载。
         candidates = [f for f in files if f["name"] == fname]
         local = max(candidates, key=lambda f: f.get("mtime") or 0) if candidates else None
-        status, partial_size = _entry_status(key, fname, local, failures)
+        status, partial_size = _entry_status(key, fname, local, failures, active_paths)
         groups[key]["entries"].append(
             {
                 "distribution": name,
@@ -527,6 +561,7 @@ def build_distros() -> dict:
                 "checksum_url": e.get("checksum_url", ""),
                 "checksum_urls": e.get("checksum_urls", []),
                 "checksum": e.get("checksum", ""),
+                "pin": e.get("pin", ""),
                 "local_size": local["size"] if local else 0,
                 "local_mtime": int(local["mtime"]) if local else 0,
                 "status": status,

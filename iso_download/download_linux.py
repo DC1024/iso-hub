@@ -20,6 +20,10 @@ from tqdm import tqdm
 
 
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+# 下载期间写 <最终名>.part, 全部校验通过后才原子改名为最终名(见 os.replace)。
+# 校验阶段拿到的文件名因此可能带这个后缀, 凡是要拿文件名去外部数据源
+# (sha256sums.txt 等)查表的地方, 都必须先剥离它。
+PART_SUFFIX = ".part"
 
 
 def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
@@ -117,61 +121,110 @@ class LinuxDistributionDownloader:
             print("-" * 80)
     
     def get_checksum_from_url(self, checksum_url: str, filename: str) -> Optional[str]:
-        """从校验和URL获取指定文件的校验和"""
+        """从校验和URL获取指定文件的校验和。
+
+        v1.3.1 修复(重要): 下载期间的校验对象是 ``xxx.iso.part``, 而
+        sha256sums.txt 里登记的是 ``xxx.iso``。旧实现在行内做子串包含判断
+        (``if filename in line``), 查询串比行内容更长("...iso.part" 不在
+        "...iso" 里) → 永远匹配不上 → 返回 None → 每个源都报"校验和验证失败"。
+        这正是"清华源和科大源都校验失败"的真因(与镜像站质量无关)。
+
+        现在: 查表前先剥离 .part 后缀, 并改为**按空白切分后比对文件名字段**
+        (而非子串包含), 避免 "archlinux-x86_64.iso" 误命中
+        "archlinux-2026.09.01-x86_64.iso" 这类前缀相同的行。
+        """
+        # .part 是本地原子落盘的中间名, 任何外部查表都必须用最终文件名
+        query_name = filename
+        if query_name.endswith(PART_SUFFIX):
+            query_name = query_name[: -len(PART_SUFFIX)]
+
         try:
             response = requests.get(checksum_url, headers=self.headers, timeout=30)
             response.raise_for_status()
-            
+
             checksum_content = response.text
-            
+
             # 处理PGP签名的CHECKSUM格式
             lines = checksum_content.split('\n')
             in_pgp_section = False
             pgp_lines = []
-            
+
             for line in lines:
                 line = line.strip()
-                
+
                 # 检测PGP签名开始
                 if line.startswith('-----BEGIN PGP SIGNED MESSAGE-----'):
                     in_pgp_section = True
                     continue
-                
+
                 # 检测PGP签名结束
                 if line.startswith('-----BEGIN PGP SIGNATURE-----'):
                     in_pgp_section = False
                     break
-                
+
                 # 如果在PGP签名区域内，收集内容
                 if in_pgp_section and line and not line.startswith('Hash:'):
                     pgp_lines.append(line)
-            
+
             # 如果有PGP内容，使用PGP内容；否则使用原始内容
             content_to_parse = '\n'.join(pgp_lines) if pgp_lines else checksum_content
-            
-            # 查找对应的校验和
-            for line in content_to_parse.split('\n'):
-                if filename in line:
-                    # 处理标准格式: checksum filename
-                    parts = line.strip().split()
-                    if len(parts) >= 2:
-                        potential_checksum = parts[0]
-                        # 验证是否为有效的SHA256校验和（64位十六进制）
-                        if len(potential_checksum) == 64 and all(c in '0123456789abcdefABCDEF' for c in potential_checksum):
-                            return potential_checksum.lower()
-                    
-                    # 处理PGP签名格式: SHA256 (filename) = checksum
-                    if 'SHA256' in line and filename in line and '=' in line:
-                        # 提取等号后面的校验和
-                        checksum_part = line.split('=')[1].strip()
-                        if len(checksum_part) == 64 and all(c in '0123456789abcdefABCDEF' for c in checksum_part):
-                            return checksum_part.lower()
+
+            found = self._extract_checksum_for(content_to_parse, query_name)
+            if found:
+                return found
+
+            # 精确匹配未命中时, 给出可诊断的原因(区分"文件名不存在"与"格式异常"),
+            # 而不是让调用方笼统地报"校验和验证失败"。
+            if query_name != filename:
+                print(f"  校验文件中未找到 {query_name} (本地文件为 {filename}, 已按最终名查表)")
+            else:
+                print(f"  校验文件中未找到文件名 {query_name}")
             return None
-            
+
         except Exception as e:
             print(f"  从URL获取校验和失败: {e}")
             return None
-    
+
+    @staticmethod
+    def _is_sha256_hex(s: str) -> bool:
+        """是否为合法的 64 位十六进制 SHA256 摘要。"""
+        return len(s) == 64 and all(c in '0123456789abcdefABCDEF' for c in s)
+
+    @classmethod
+    def _extract_checksum_for(cls, content: str, name: str) -> Optional[str]:
+        """在校验和文本中查找 ``name`` 的 SHA256, 找不到返回 None。
+
+        支持两种格式:
+          * 标准格式      `<64hex>  <filename>`
+          * BSD/PGP 格式  `SHA256 (<filename>) = <64hex>`
+
+        匹配一律**按字段精确比对文件名**, 不用子串包含 —— 否则
+        `archlinux-x86_64.iso` 会错误命中 `archlinux-2026.09.01-x86_64.iso`。
+        """
+        for raw in content.split('\n'):
+            line = raw.strip()
+            if not line or name not in line:
+                # 先用廉价的包含判断粗筛(名字是行的子串才有可能), 再精判
+                continue
+
+            # 格式一: <checksum>  <filename>
+            parts = line.split()
+            if len(parts) >= 2 and cls._is_sha256_hex(parts[0]):
+                if parts[-1] == name:          # 文件名字段精确相等
+                    return parts[0].lower()
+                # 某些清单用 "checksum *filename" 形式, 去掉前导星号再比
+                if parts[-1].lstrip('*') == name:
+                    return parts[0].lower()
+
+            # 格式二: SHA256 (filename) = checksum
+            if line.upper().startswith('SHA256') and '=' in line and '(' in line:
+                inside = line[line.index('(') + 1: line.index(')')] if ')' in line else ''
+                if inside == name:
+                    candidate = line.split('=', 1)[1].strip()
+                    if cls._is_sha256_hex(candidate):
+                        return candidate.lower()
+        return None
+
     # 指纹只保留十六进制字符, 归一化后应为 40 位(OpenPGP v4 fingerprint)
     _FINGERPRINT_HEX = frozenset("0123456789ABCDEF")
 
@@ -486,21 +539,30 @@ class LinuxDistributionDownloader:
                 if self.verify_checksum(filepath, url_checksum):
                     return True, f"URL校验和验证通过: {url_checksum}"
                 else:
-                    print("  URL校验和验证失败")
-        
+                    print("  URL校验和验证失败(内容与清单声明不一致)")
+                    got = self.sha256_of(filepath)
+                    return False, (f"内容校验不符: 期望 {url_checksum}, 实际 {got}"
+                                   " —— 文件内容与官方清单不一致(下载损坏或镜像同步中)")
+            else:
+                # 解析不到校验和 ≠ 校验不通过。分开报, 避免"两个可信源都失败"式的误判。
+                got = self.sha256_of(filepath)
+                return False, (f"未能在清单中找到该文件名, 无法校验"
+                               f"(本地实际 SHA256={got}, 来源 {checksum_url})")
+
         # 第二优先级：使用JSON中存储的checksum
         if stored_checksum:
             print(f"  使用存储的校验和: {stored_checksum}")
             if self.verify_checksum(filepath, stored_checksum):
                 return True, f"存储校验和验证通过: {stored_checksum}"
             else:
-                print("  存储校验和验证失败")
-        
+                got = self.sha256_of(filepath)
+                return False, (f"内容校验不符: 期望 {stored_checksum}, 实际 {got}")
+
         # 第三优先级：两个都没有，跳过验证
         if not checksum_url and not stored_checksum:
             print("  警告: 没有可用的校验和信息，跳过验证")
             return True, "跳过校验和验证（无可用信息）"
-        
+
         return False, "所有校验和验证都失败"
     
     def cleanup_distribution_dir(self, dist_dir: Path, expected_files: List[str]) -> None:
@@ -708,20 +770,27 @@ class LinuxDistributionDownloader:
         print(f"下载完成！成功下载 {success_count}/{len(matching_dists)} 个版本")
         return success_count > 0
     
+    def sha256_of(self, filepath: Path) -> str:
+        """计算文件的 SHA256(小写十六进制)。供校验与诊断日志复用。"""
+        sha256_hash = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(chunk)
+        return sha256_hash.hexdigest()
+
     def verify_checksum(self, filepath: Path, expected_checksum: str) -> bool:
-        """验证文件的SHA256校验和"""
+        """验证文件的SHA256校验和。
+
+        v1.3.1: 两侧统一转小写并去空白后比较。旧实现直接 `==`, 一旦清单里
+        是大写摘要、或带首尾空白, 就会被误判成"内容不符"。
+        """
         try:
-            sha256_hash = hashlib.sha256()
-            with open(filepath, "rb") as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    sha256_hash.update(chunk)
-            
-            actual_checksum = sha256_hash.hexdigest()
-            return actual_checksum == expected_checksum
+            actual_checksum = self.sha256_of(filepath)
+            return actual_checksum == (expected_checksum or "").strip().lower()
         except Exception as e:
             print(f"校验和验证错误: {e}")
             return False
-    
+
     def download_all(self, verify_checksum: bool = True) -> None:
         """下载所有发行版"""
         print("开始下载所有发行版...")
