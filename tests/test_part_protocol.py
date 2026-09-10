@@ -268,6 +268,123 @@ class TestResumeSupport(unittest.TestCase):
         self.assertFalse(self.part.exists(), "损坏的半成品应被丢弃")
 
 
+class TestTotalResolution(unittest.TestCase):
+    """v1.2.9: 期望长度的三级兜底解析 —— 修复"total=0 时跳过完整性校验"。"""
+
+    class _H:
+        def __init__(self, d):
+            self._d = d
+
+        def get(self, k, default=None):
+            return self._d.get(k, default)
+
+    def _r(self, headers):
+        return type("R", (), {"headers": self._H(headers)})()
+
+    def test_content_range_wins(self):
+        """Content-Range 的全长最可信, 优先采用。"""
+        n = iso_runner._resolve_total(
+            self._r({"content-range": "bytes 1000-1499/1500",
+                     "content-length": "500"}), have=1000, head_total=99999)
+        self.assertEqual(n, 1500)
+
+    def test_content_length_plus_have_for_resume(self):
+        """续传时只有 Content-Length(剩余量) -> 加上已下的 have 才是全长。"""
+        n = iso_runner._resolve_total(self._r({"content-length": "500"}),
+                                      have=1000, head_total=0)
+        self.assertEqual(n, 1500)
+
+    def test_head_total_fallback(self):
+        """Content-Range/Content-Length 都没有 -> 用 HEAD 预取的大小兜底。"""
+        n = iso_runner._resolve_total(self._r({}), have=0, head_total=2048)
+        self.assertEqual(n, 2048, "这是修复前 total 会被算成 0 的分支")
+
+    def test_returns_zero_when_truly_unknown(self):
+        """三级全无 -> 返回 0(语义: 确实无从判断, 而非静默放行)。"""
+        n = iso_runner._resolve_total(self._r({}), have=0, head_total=0)
+        self.assertEqual(n, 0)
+
+    def test_bad_content_length_is_tolerated(self):
+        """非法 Content-Length 不应抛异常, 应继续走兜底。"""
+        n = iso_runner._resolve_total(self._r({"content-length": "abc"}),
+                                      have=0, head_total=77)
+        self.assertEqual(n, 77)
+
+
+class TestTruncationVsCorruption(unittest.TestCase):
+    """v1.2.9: 截断(保留 .part 续传) 与 损坏(丢弃 .part) 必须区分对待。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.final = self.dir / "big.iso"
+        self.part = self.dir / "big.iso.part"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _run(self, resp, downloader=None, head_total=0):
+        with patch.object(iso_runner.requests, "get", lambda url, **kw: resp):
+            return iso_runner._download_file_with_failover(
+                downloader or _FakeDownloader(), {"checksum": ""},
+                [("https://mirror.test/big.iso", None)], "big.iso", self.dir,
+                self.final, head_total=head_total
+            )
+
+    def test_truncation_keeps_part_for_resume(self):
+        """有预期长度但写入不足 = 截断 -> 保留 .part, 下次续传。"""
+        resp = _FakeResp([b"a" * 30], {"content-length": "100"})
+        (ok, _) = self._run(resp)
+        self.assertFalse(ok)
+        self.assertTrue(self.part.exists(), "截断半成品是有效前缀, 必须保留")
+        self.assertEqual(self.part.stat().st_size, 30)
+        self.assertFalse(self.final.exists())
+
+    def test_size_ok_but_checksum_bad_discards_part(self):
+        """尺寸达标却校验不过 = 内容损坏 -> 丢弃, 避免坏数据被续传。"""
+        resp = _FakeResp([b"a" * 100], {"content-length": "100"})
+        (ok, _) = self._run(resp, downloader=_FakeDownloader(checksum_ok=False))
+        self.assertFalse(ok)
+        self.assertFalse(self.part.exists(), "内容损坏的半成品应丢弃")
+
+    def test_unknown_length_bad_checksum_conservatively_keeps_part(self):
+        """长度未知且校验不过 -> 无法区分截断/损坏 -> 保守保留(宁多占磁盘不误删进度)。"""
+        resp = _FakeResp([b"a" * 100], {})  # 无任何长度信息
+        (ok, _) = self._run(resp, downloader=_FakeDownloader(checksum_ok=False))
+        self.assertFalse(ok)
+        self.assertTrue(self.part.exists(), "长度未知时应保守保留半成品")
+
+    def test_head_total_used_to_detect_truncation(self):
+        """服务器不给长度, 但调用方 HEAD 预取了大小 -> 仍能判定截断并保留 .part。"""
+        resp = _FakeResp([b"a" * 30], {})  # 无长度头
+        (ok, _) = self._run(resp, head_total=100)
+        self.assertFalse(ok)
+        self.assertTrue(self.part.exists())
+        self.assertEqual(self.part.stat().st_size, 30)
+
+    def test_oversized_payload_is_treated_as_corrupt(self):
+        """写入超过预期长度 = 内容不可信 -> 丢弃。"""
+        resp = _FakeResp([b"a" * 150], {"content-length": "100"})
+        (ok, _) = self._run(resp)
+        self.assertFalse(ok)
+        self.assertFalse(self.part.exists(), "超长内容应被丢弃")
+
+    def test_full_and_verified_succeeds(self):
+        """对照组: 长度达标 + 校验通过 -> 正常改名成功。"""
+        resp = _FakeResp([b"a" * 100], {"content-length": "100"})
+        (ok, _) = self._run(resp)
+        self.assertTrue(ok)
+        self.assertTrue(self.final.exists())
+        self.assertFalse(self.part.exists())
+
+    def test_head_total_zero_and_no_headers_still_checksums(self):
+        """长度完全未知时不应抛"大小不匹配", 而是交给校验和判定(能过就成功)。"""
+        resp = _FakeResp([b"a" * 100], {})
+        (ok, _) = self._run(resp)
+        self.assertTrue(ok, "长度未知但校验通过应算成功(v1.2.9 不再误判)")
+        self.assertTrue(self.final.exists())
+
+
 class TestRunnerSourceContract(unittest.TestCase):
     """源码静态断言: 防止回归到"直接写最终名"的旧实现。"""
 
@@ -323,6 +440,40 @@ class TestRunnerSourceContract(unittest.TestCase):
     def test_cleanup_preserves_part_files(self):
         """目录清理不得删除半成品(.part), 否则续传数据丢失。"""
         self.assertIn('f.lower().endswith((".part", ".aria2"))', self.dl_src)
+
+    # ---- v1.2.9: 完整性判据回归护栏 ----
+
+    def test_runner_uses_three_tier_total_resolution(self):
+        """回归: total 必须经 _resolve_total 三级兜底, 不得退回只看 content-length。"""
+        self.assertIn("def _resolve_total(", self.src)
+        self.assertIn("_resolve_total(resp", self.src)
+
+    def test_runner_never_skips_size_check_silently(self):
+        """回归: 不得再出现 `if total and ...` 形式的静默短路(这正是本次 bug 根因)。"""
+        self.assertNotIn("if total and part.stat().st_size != total:", self.src)
+        self.assertIn("if total and written < total:", self.src)
+
+    def test_runner_distinguishes_truncation_from_corruption(self):
+        """必须有两类异常, 且截断分支保留 .part。"""
+        self.assertIn("class TruncatedTransfer(Exception):", self.src)
+        self.assertIn("class CorruptPayload(Exception):", self.src)
+        self.assertIn("except TruncatedTransfer as e:", self.src)
+        self.assertIn("except CorruptPayload as e:", self.src)
+
+    def test_runner_probes_candidate_sources_for_size(self):
+        """默认源拿不到大小时应继续探测候选源, 避免 UI 进度条失去基准。"""
+        self.assertIn("for _u, _c in candidates[1:]:", self.src)
+
+    def test_head_total_threaded_into_download(self):
+        """HEAD 预取的大小必须真正传入下载函数, 否则兜底形同虚设。"""
+        self.assertIn("head_total=total", self.src)
+
+    def test_upstream_has_head_fallback(self):
+        """订阅同步走的 download_linux 也必须能补长度判据, 且不得出现未定义变量。"""
+        self.assertIn("def _head_content_length(self, url: str) -> int:", self.dl_src)
+        self.assertIn('total_size = self._head_content_length(target_dist["download_url"])',
+                      self.dl_src)
+        self.assertNotIn("self._head_content_length(url)", self.dl_src)
 
 
 if __name__ == "__main__":

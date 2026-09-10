@@ -21,6 +21,22 @@ ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 PART_SUFFIX = ".part"
 
 
+class TruncatedTransfer(Exception):
+    """响应流提前结束: 有预期长度但实际写入不足。
+
+    语义: 传输被截断, 已写入的字节仍是**有效前缀**, 应保留 .part 供下次续传,
+    不能当作"文件损坏"丢弃 —— 否则一次网络抖动就丢掉全部已下进度。
+    """
+
+
+class CorruptPayload(Exception):
+    """传输完成(或长度未知)但内容校验不通过。
+
+    语义: 落盘数据不可信, 应丢弃 .part 重下, 避免下次拿着坏数据续传。
+    """
+
+
+
 def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
     """把 (type, name) 安全拼接为 download_dir 下的路径, 拒绝路径穿越/非法字符。"""
     if not typ or not name or typ not in ALLOWED_TYPES:
@@ -172,8 +188,43 @@ def _clear_failure(data_dir, typ: str, name: str, fname: str) -> None:
         pass
 
 
+def _resolve_total(resp, have: int, head_total: int) -> int:
+    """确定这次传输的**完整文件应有字节数**, 三级兜底, 拿不到返回 0。
+
+    优先级(从最可靠到最兜底):
+      1. Content-Range: bytes a-b/TOTAL —— 服务器明确告知全长, 最可信;
+      2. Content-Length + have —— 续传时是"本次剩余量", 加上已下部分即全长;
+      3. head_total —— 调用方事先 HEAD 探测的大小, 服务器不给长度时的兜底。
+
+    v1.2.8 及以前只看 1/2, 两者都缺失时 total=0, 导致后续完整性检查被
+    `if total and ...` 短路跳过 —— 这正是"没下载完就去算校验和"的根因。
+    引入第 3 级 + 显式返回 0 的语义(0 = 确实无从判断), 让调用方能区分
+    "确定不完整"与"无法判断"。
+    """
+    # 1) Content-Range 全长
+    cr = resp.headers.get("content-range") or ""
+    if "/" in cr:
+        try:
+            n = int(cr.rsplit("/", 1)[-1])
+            if n > 0:
+                return n
+        except ValueError:
+            pass
+    # 2) Content-Length(+ 已下的 have)
+    try:
+        cl = int(resp.headers.get("content-length") or 0)
+    except ValueError:
+        cl = 0
+    if cl > 0:
+        return have + cl
+    # 3) HEAD 预取大小兜底
+    if head_total > 0:
+        return head_total
+    return 0
+
+
 def _download_file_with_failover(downloader, target_dist: dict, candidates, filename: str,
-                                 dist_dir, filepath) -> tuple:
+                                 dist_dir, filepath, head_total: int = 0) -> tuple:
     """逐个候选源下载同一文件, 失败/校验失败自动切换下一候选源。
 
     返回 (成功与否, 实际使用的下载URL)。全部候选失败返回 (False, None)。
@@ -185,7 +236,14 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
         后端 disk_inventory() 能识别为半成品 → 显示「下载停止」而不是「已下载」;
       * 半成品绝不会以最终文件名出现在磁盘上, 杜绝"残缺文件被当成完整 ISO"。
 
-    失败时保留 .part(不删), 供下次运行尝试继续(可续传)。
+    完整性判据(v1.2.9 修复):
+      * 期望长度由 ``_resolve_total()`` 三级兜底解析, 不再是"拿不到就跳过检查";
+      * 实际不足 → TruncatedTransfer: **保留 .part 供续传**, 不计为损坏;
+      * 长度达标但校验和不符 → CorruptPayload: 丢弃 .part 重下;
+      * 长度完全未知且校验和不符 → 无法区分截断与损坏 → **保守保留 .part**,
+        只切下一个候选源(宁可多占点磁盘, 也不误删用户已下的进度)。
+
+    head_total: 调用方 HEAD 预取的大小, 长度信息缺失时用于兜底判据。
     """
     part = Path(str(filepath) + PART_SUFFIX)
     last_err = None
@@ -202,21 +260,17 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
             resp = requests.get(url, headers=headers, stream=True, timeout=60)
             if have and resp.status_code == 206:
                 # 服务器支持 Range: 追加写入
-                cr = resp.headers.get("content-range", "")
-                total = 0
-                if "/" in cr:
-                    try:
-                        total = int(cr.rsplit("/", 1)[-1])
-                    except ValueError:
-                        total = 0
-                if not total:
-                    cl = int(resp.headers.get("content-length", 0) or 0)
-                    total = have + cl
-                print(f"  续传: 从 {have/1024/1024:.1f} MiB 继续 (共 {total/1024/1024:.1f} MiB)")
+                total = _resolve_total(resp, have, head_total)
+                if total:
+                    print(f"  续传: 从 {have/1024/1024:.1f} MiB 继续 "
+                          f"(共 {total/1024/1024:.1f} MiB)")
+                else:
+                    print(f"  续传: 从 {have/1024/1024:.1f} MiB 继续 "
+                          f"(服务器未提供总大小, 将无法核对完整性)")
                 mode = "ab"
             elif have and resp.status_code == 200:
                 # 服务器不支持 Range(返回 200 全量) → 只能从头下, 截断重写
-                total = int(resp.headers.get("content-length", 0) or 0)
+                total = _resolve_total(resp, 0, head_total)
                 print(f"  服务器不支持断点续传, 从头下载 (已丢弃 {have/1024/1024:.1f} MiB)")
                 have = 0
                 mode = "wb"
@@ -224,7 +278,7 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                 # 无 .part(全新下载) 或 Range 返回 416(断点已越界)等
                 if resp.status_code == 416:
                     raise Exception("断点位置越界(416), 将重下")
-                total = int(resp.headers.get("content-length", 0) or 0)
+                total = _resolve_total(resp, 0, head_total)
                 mode = "wb"
                 have = 0
             resp.raise_for_status()
@@ -234,8 +288,21 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            if total and part.stat().st_size != total:
-                raise Exception(f"大小不匹配: 期望 {total}B, 实际 {part.stat().st_size}B")
+            written = part.stat().st_size
+
+            # ---- 完整性判据(v1.2.9) ----
+            # 期望长度已知却不足 → 传输被截断。注意这里**不再跳过检查**:
+            # 只有 total 确实为 0(三级兜底全都拿不到)时才无从判断。
+            if total and written < total:
+                raise TruncatedTransfer(
+                    f"传输未完成: 期望 {total}B, 实际 {written}B "
+                    f"(缺 {total - written}B, 可续传)")
+            if total and written > total:
+                # 超出预期长度: 落盘内容不可信, 丢弃重下
+                raise CorruptPayload(f"大小超出预期: 期望 {total}B, 实际 {written}B")
+            if not total:
+                print("  ⚠ 服务器未提供文件总大小, 无法核对完整性, 直接交由校验和判定")
+
             # 校验和优先跟随当前候选源自身; 无则回退 entry 存储值
             success, msg = downloader.verify_checksum_smart(
                 part, checksum_url, target_dist.get("checksum")
@@ -247,8 +314,28 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                     filepath.unlink()
                 os.replace(part, filepath)
                 return True, url
-            # 校验失败: 半成品已损坏, 删掉避免下一轮拿着坏数据做续传
-            print(f"  ✗ 校验和验证失败, 丢弃半成品重试: {msg}")
+
+            # 校验和不符: 区分"尺寸已达标 → 内容损坏"与"尺寸未知 → 无法判定"
+            print(f"  ✗ 校验和验证失败: {msg}")
+            if total:
+                # 尺寸与预期一致却校验不过 → 内容确实损坏, 丢弃避免坏数据被续传
+                try:
+                    if part.exists():
+                        part.unlink()
+                except OSError:
+                    pass
+                print("  半成品尺寸正确但内容校验不符, 已丢弃(避免坏数据被续传)")
+            else:
+                # 尺寸未知: 可能是截断(可续传)也可能是损坏, 无法区分 → 保守保留
+                print("  无法确认是否为传输截断, 保守保留半成品供下次续传")
+                raise TruncatedTransfer("校验失败且长度未知, 保守保留半成品")
+        except TruncatedTransfer as e:
+            # 传输截断: 半成品是有效前缀, **保留**供下次续传, 不当作损坏
+            last_err = e
+            print(f"  ✗ 传输被截断, 保留半成品待续传: {e}")
+        except CorruptPayload as e:
+            last_err = e
+            print(f"  ✗ 响应内容不可信, 丢弃半成品: {e}")
             try:
                 if part.exists():
                     part.unlink()
@@ -326,12 +413,22 @@ def main() -> None:
             # 预先 HEAD 探测默认源的目标文件大小, 供 UI 显示下载进度条。
             # 注意上报的是 .part 路径: 下载期间字节都写在 .part 上(完成后才改名为
             # filepath), 后端 running_task() 对该路径 stat() 才能得到真实进度。
+            # HEAD 失败时回退到候选源逐个探测(v1.2.9): 只探测第一个源的话, 该源
+            # 恰好故障就会让 total=0, UI 进度条失去百分比基准(与"卡 0%"同类症状)。
             total = _head_target_size(primary, downloader.headers)
+            if not total:
+                for _u, _c in candidates[1:]:
+                    total = _head_target_size(_u, downloader.headers)
+                    if total:
+                        print(f"  默认源未返回大小, 改用候选源探测: {total/1024/1024:.1f} MiB")
+                        break
             part_path = Path(str(filepath) + PART_SUFFIX)
             # 标记行由后端拦截收集, 不写入任务日志
             print(f"#TARGET {part_path} {total}")
             if total:
                 print(f"  目标大小: {total/1024/1024:.1f} MiB")
+            else:
+                print("  ⚠ 所有候选源均未返回文件大小, 进度条将无法显示百分比")
 
             if filepath.exists():
                 print(f"文件已存在: {filepath}")
@@ -346,7 +443,7 @@ def main() -> None:
                 print("校验和验证失败, 将重新下载")
 
             ok, used_url = _download_file_with_failover(
-                downloader, entry, candidates, fname, dist_dir, filepath
+                downloader, entry, candidates, fname, dist_dir, filepath, head_total=total
             )
             if not ok:
                 failed = True

@@ -431,6 +431,20 @@ class LinuxDistributionDownloader:
                 return checksum_url  # 已是签名文件
         return checksum_url + ".gpg"
 
+    def _head_content_length(self, url: str) -> int:
+        """HEAD 探测目标文件总字节数, 用于 Size 校验兜底。失败返回 0。
+
+        v1.2.9 新增: 服务器不给 Content-Length/chunked 时, 过去会导致大小校验被
+        整段跳过, 不完整文件直接去算校验和。这里提供一条独立的长度来源作兜底。
+        """
+        try:
+            r = requests.head(url, headers=self.headers, timeout=15, allow_redirects=True)
+            if r.status_code < 400:
+                return int(r.headers.get("content-length") or 0)
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+
     def verify_checksum_smart(self, filepath: Path, checksum_url: Optional[str],
                              stored_checksum: Optional[str],
                              dist: Optional[dict] = None) -> tuple[bool, str]:
@@ -640,12 +654,20 @@ class LinuxDistributionDownloader:
                                 pbar.update(len(chunk))
 
                 print(f"\n下载完成: {part_path}")
-                
-                # 大小校验: 声明了 content-length 就必须一致(截断的流不算完成)
-                if total_size and part_path.stat().st_size != total_size:
+
+                # 大小校验: 声明了 content-length 就必须一致(截断的流不算完成)。
+                # v1.2.9: total_size==0 时过去会**整段跳过**校验, 让不完整文件直接进入
+                # 校验和比对 → 必然失败 → 日志表现为"没下载完就开始校验"。现补 HEAD 兜底:
+                # 仍拿不到就明确告警"无法核对完整性", 不再静默放行。
+                actual_bytes = part_path.stat().st_size
+                if not total_size:
+                    total_size = self._head_content_length(target_dist["download_url"])
+                if total_size and actual_bytes != total_size:
                     raise Exception(
-                        f"大小不匹配: 期望 {total_size}B, 实际 {part_path.stat().st_size}B"
+                        f"大小不匹配: 期望 {total_size}B, 实际 {actual_bytes}B"
                     )
+                if not total_size:
+                    print("⚠ 服务器未提供文件总大小, 无法核对完整性, 直接交由校验和判定")
 
                 # 智能校验和验证(对 .part 校验, 通过后才改名)
                 if verify_checksum:
