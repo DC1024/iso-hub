@@ -226,6 +226,16 @@ class TestComposeConfig(unittest.TestCase):
                 self.assertIn("socket-proxy", svc)
                 self.assertNotIn("profiles", svc["socket-proxy"])
 
+    def test_socket_proxy_image_digest_pinned(self):
+        """socket-proxy 镜像必须以 digest 锁定, 不得使用 :latest(上游 ACL 变更会改变放行范围)。"""
+        for name, doc in self._docs.items():
+            with self.subTest(compose=name):
+                image = str(doc["services"]["socket-proxy"].get("image", ""))
+                self.assertIn("@sha256:", image, f"{name}: socket-proxy 镜像未锁定 digest")
+                self.assertNotIn(":latest", image, f"{name}: socket-proxy 镜像不得使用 :latest")
+                digest = image.split("@sha256:", 1)[1]
+                self.assertEqual(len(digest), 64, f"{name}: digest 长度应为 64 位十六进制")
+
     def test_socket_proxy_whitelist(self):
         """socket-proxy 白名单: CONTAINERS/POST=1, 镜像/卷/网络/exec/系统=0。"""
         for name, doc in self._docs.items():

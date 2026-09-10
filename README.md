@@ -133,7 +133,7 @@ services:
 
   # Docker socket 代理: 收窄主容器对 Docker API 的访问权限(核心依赖, 不设 profile)
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:latest
+    image: tecnativa/docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     container_name: iso-hub-socket-proxy
     restart: unless-stopped
     environment:
@@ -285,7 +285,7 @@ services:
 
   # Docker socket 代理: 收窄主容器对 Docker API 的访问权限(核心依赖, 不设 profile)
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:latest
+    image: tecnativa/docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     container_name: iso-hub-socket-proxy
     restart: unless-stopped
     environment:
