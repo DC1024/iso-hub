@@ -402,7 +402,7 @@ docker compose pull && docker compose up -d
 
 #### 说明
 
-- 想锁定版本，把 `latest` 换成具体版本号，如 `registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:1.0.6`。
+- 想锁定版本，把 `latest` 换成具体版本号，如 `registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:1.2.0`。
 - 公网部署请确认防火墙放行 `8899`（或改用 80 等已放行端口）。
 - iso-hub 主镜像为**单容器**，上面的 samba / webdav 是**独立 sidecar 容器**，与本项目的源码构建版一致。
 - 注意：`samba` / `webdav` 两个镜像来自 Docker Hub（`dperson/samba`、`hacdias/webdav`），国内拉取可能较慢；只有 iso-hub 主镜像走阿里云。若这两个也拉不动，可改用 [方式 2 源码构建](#2-使用源码构建部署含-smbwebdav-共享) 或给 sidecar 配 Docker Hub 加速。
