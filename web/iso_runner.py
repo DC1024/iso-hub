@@ -9,6 +9,7 @@ ISO Hub - 选择部分发行版/版本下载的辅助 runner。
 """
 import argparse
 import json
+import os
 import sys
 import time
 import types
@@ -17,6 +18,7 @@ from pathlib import Path
 import requests
 
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+PART_SUFFIX = ".part"
 
 
 def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
@@ -176,9 +178,16 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
 
     返回 (成功与否, 实际使用的下载URL)。全部候选失败返回 (False, None)。
 
-    失败时保留半成品文件(不删), 供下次运行尝试继续; 后端据此把该文件标记为
-    「下载停止」(可续传) 而非「下载失败」。
+    落盘协议(关键): 下载期间一律写 ``<最终名>.part``, 只有"大小校验 + 校验和"
+    全部通过后才 ``os.replace`` 原子改名为最终文件名。这样:
+
+      * 进程被「停止任务」SIGTERM/SIGKILL 杀掉时, 磁盘上留下的是 ``xxx.iso.part``,
+        后端 disk_inventory() 能识别为半成品 → 显示「下载停止」而不是「已下载」;
+      * 半成品绝不会以最终文件名出现在磁盘上, 杜绝"残缺文件被当成完整 ISO"。
+
+    失败时保留 .part(不删), 供下次运行尝试继续(可续传)。
     """
+    part = Path(str(filepath) + PART_SUFFIX)
     last_err = None
     for idx, (url, checksum_url) in enumerate(candidates):
         print(f"  候选源 {idx + 1}/{len(candidates)}: {url}")
@@ -186,18 +195,23 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
             resp = requests.get(url, headers=downloader.headers, stream=True, timeout=60)
             resp.raise_for_status()
             total = int(resp.headers.get("content-length", 0))
-            with open(filepath, "wb") as f:
+            # 下载到 .part; 下载途中被 kill 也会留下 .part 供识别
+            with open(part, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            if total and filepath.stat().st_size != total:
-                raise Exception(f"大小不匹配: 期望 {total}B, 实际 {filepath.stat().st_size}B")
+            if total and part.stat().st_size != total:
+                raise Exception(f"大小不匹配: 期望 {total}B, 实际 {part.stat().st_size}B")
             # 校验和优先跟随当前候选源自身; 无则回退 entry 存储值
             success, msg = downloader.verify_checksum_smart(
-                filepath, checksum_url, target_dist.get("checksum")
+                part, checksum_url, target_dist.get("checksum")
             )
             if success:
                 print(f"  ✓ {msg}")
+                # 全部校验通过 → 原子改名为最终文件名(此刻才"看起来"下载完成)
+                if filepath.exists():
+                    filepath.unlink()
+                os.replace(part, filepath)
                 return True, url
             raise Exception(f"校验和验证失败: {msg}")
         except Exception as e:  # noqa: BLE001
@@ -269,10 +283,13 @@ def main() -> None:
             candidates = _pick_candidates(args.strategy, entry, downloader.headers)
             primary = candidates[0][0] if candidates else entry["download_url"]
 
-            # 预先 HEAD 探测默认源的目标文件大小, 供 UI 显示下载进度条
+            # 预先 HEAD 探测默认源的目标文件大小, 供 UI 显示下载进度条。
+            # 注意上报的是 .part 路径: 下载期间字节都写在 .part 上(完成后才改名为
+            # filepath), 后端 running_task() 对该路径 stat() 才能得到真实进度。
             total = _head_target_size(primary, downloader.headers)
+            part_path = Path(str(filepath) + PART_SUFFIX)
             # 标记行由后端拦截收集, 不写入任务日志
-            print(f"#TARGET {filepath} {total}")
+            print(f"#TARGET {part_path} {total}")
             if total:
                 print(f"  目标大小: {total/1024/1024:.1f} MiB")
 
@@ -293,8 +310,8 @@ def main() -> None:
             )
             if not ok:
                 failed = True
-                # 半成品保留 → 下次可续传, 记 stopped; 文件不存在(未写入任何数据)记 hard
-                kind = "stopped" if filepath.exists() else "hard"
+                # 半成品(.part)保留 → 下次可续传, 记 stopped; 连 .part 都没有记 hard
+                kind = "stopped" if part_path.exists() else "hard"
                 _record_failure(args.download_dir, entry.get("type", "linux"), name, fname, kind)
             else:
                 _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)

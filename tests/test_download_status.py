@@ -186,11 +186,41 @@ class TestBuildDistrosStatus(BaselineTestBase):
         self.assertEqual(e["local_size"], 0)
 
     def test_complete_file_wins_over_partial_leftover(self):
-        """完整文件与残留半成品同时存在时, 判定为已下载。"""
+        """完整文件比残留半成品新 → 已下载(.part 是过期残留, 已被 rename 覆盖)。"""
+        self._manifest("both.iso")
+        (self.data / "linux" / "Ubuntu" / "both.iso.part").write_bytes(b"x" * 7)
+        (self.data / "linux" / "Ubuntu" / "both.iso").write_bytes(b"x" * 100)
+        # 让完整文件的 mtime 明确晚于 .part
+        import os as _os
+        t = (self.data / "linux" / "Ubuntu" / "both.iso.part").stat().st_mtime
+        _os.utime(self.data / "linux" / "Ubuntu" / "both.iso", (t + 10, t + 10))
+        self.assertEqual(self._statuses()["both.iso"]["status"], "downloaded")
+
+    def test_part_newer_than_stale_file_is_stopped(self):
+        """半成品比完整文件新 → 下载被中断, 应显示「下载停止」而非「已下载」。
+
+        回归用例: 手动点「停止任务」后, iso_runner 留下 xxx.iso.part;
+        若目录里恰好还有一份旧的同名 xxx.iso(上次残留), 旧实现固定优先完整文件,
+        会把残缺文件误判为已下载。
+        """
         self._manifest("both.iso")
         (self.data / "linux" / "Ubuntu" / "both.iso").write_bytes(b"x" * 100)
         (self.data / "linux" / "Ubuntu" / "both.iso.part").write_bytes(b"x" * 7)
-        self.assertEqual(self._statuses()["both.iso"]["status"], "downloaded")
+        import os as _os
+        t = (self.data / "linux" / "Ubuntu" / "both.iso").stat().st_mtime
+        _os.utime(self.data / "linux" / "Ubuntu" / "both.iso.part", (t + 10, t + 10))
+        e = self._statuses()["both.iso"]
+        self.assertEqual(e["status"], "partial")
+        self.assertEqual(e["partial_size"], 7)
+
+    def test_stopped_download_never_reported_as_downloaded(self):
+        """核心回归: 只有 .part 存在(无完整文件)时绝不能是 downloaded/stopped 以外的态。"""
+        self._manifest("cut.iso")
+        (self.data / "linux" / "Ubuntu" / "cut.iso.part").write_bytes(b"x" * 61825024)
+        e = self._statuses()["cut.iso"]
+        self.assertEqual(e["status"], "partial")
+        self.assertNotEqual(e["status"], "downloaded")
+        self.assertEqual(e["partial_size"], 61825024)
 
 
 class TestFailuresPersistence(BaselineTestBase):
@@ -335,7 +365,7 @@ class TestFrontendWiring(unittest.TestCase):
                           f"{fn} 的 401 分支缺少登录接口白名单判断")
 
     def test_version_bumped(self):
-        self.assertIn("APP_VERSION='1.2.4'", self.html)
+        self.assertIn("APP_VERSION='1.2.5'", self.html)
 
 
 if __name__ == "__main__":

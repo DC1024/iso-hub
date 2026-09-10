@@ -503,8 +503,12 @@ class LinuxDistributionDownloader:
         # 获取目录中的所有文件
         existing_files = [f.name for f in dist_dir.iterdir() if f.is_file()]
         
-        # 找出需要删除的文件
-        files_to_delete = [f for f in existing_files if f not in expected_files]
+        # 找出需要删除的文件。半成品(.part / .aria2)一律保留:
+        # 它们是正在下载或可续传的数据, 既不是"过时 ISO", 也不能当作完整文件处理。
+        files_to_delete = [
+            f for f in existing_files
+            if f not in expected_files and not f.lower().endswith((".part", ".aria2"))
+        ]
         
         if files_to_delete:
             print(f"  清理目录 {dist_dir.name}，删除 {len(files_to_delete)} 个过时文件:")
@@ -589,8 +593,12 @@ class LinuxDistributionDownloader:
                 except (TypeError, ValueError):
                     total_size = 0
                 
+                # 下载期间写 <最终名>.part, 全部校验通过后才原子改名(见下方 os.replace)。
+                # 这样任务被「停止」kill 或网络中断时, 磁盘上留下的是 .part 半成品,
+                # 后端能识别为「下载停止」, 而不会被误判为已下载的完整 ISO。
+                part_path = filepath.with_name(filepath.name + ".part")
                 # 使用tqdm创建进度条
-                with open(filepath, 'wb') as f:
+                with open(part_path, 'wb') as f:
                     with tqdm(
                         total=total_size,
                         unit='B',
@@ -603,34 +611,43 @@ class LinuxDistributionDownloader:
                             if chunk:
                                 f.write(chunk)
                                 pbar.update(len(chunk))
+
+                print(f"\n下载完成: {part_path}")
                 
-                print(f"\n下载完成: {filepath}")
-                
-                # 智能校验和验证
+                # 大小校验: 声明了 content-length 就必须一致(截断的流不算完成)
+                if total_size and part_path.stat().st_size != total_size:
+                    raise Exception(
+                        f"大小不匹配: 期望 {total_size}B, 实际 {part_path.stat().st_size}B"
+                    )
+
+                # 智能校验和验证(对 .part 校验, 通过后才改名)
                 if verify_checksum:
                     success, message = self.verify_checksum_smart(
-                        filepath, 
+                        part_path, 
                         target_dist.get("checksum_url"), 
                         target_dist.get("checksum"),
                         dist=target_dist
                     )
                     if success:
                         print(f"✓ {message}")
+                        # 校验通过 → 原子改名为最终文件名, 此刻才算真正下载完成
+                        if filepath.exists():
+                            filepath.unlink()
+                        os.replace(part_path, filepath)
                         success_count += 1
                     else:
                         print(f"✗ {message}")
                 else:
+                    if filepath.exists():
+                        filepath.unlink()
+                    os.replace(part_path, filepath)
                     success_count += 1
                 
             # 风险5修复: 除网络错误外, 也捕获磁盘/IO 错误(磁盘满/权限不足/文件被占用),
-            # 避免下载中断且不清理不完整文件
+            # 避免下载中断且不清理不完整文件。
+            # 半成品保留为 .part(不删): 供后端识别为「下载停止」并支持续传。
             except (requests.exceptions.RequestException, OSError, IOError) as e:
                 print(f"\n下载失败: {e}")
-                try:
-                    if filepath.exists():
-                        filepath.unlink()  # 删除不完整的文件
-                except OSError as ue:
-                    print(f"清理不完整文件失败: {ue}")
         
         # 清理发行版目录，删除不在JSON中维护的文件
         if matching_dists:

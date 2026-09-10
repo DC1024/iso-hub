@@ -255,30 +255,45 @@ def main() -> None:
         downloader.distributions = {"distributions": keep_entries}
         # 逐文件记录失败: 订阅同步用的是上游 download_distribution(多文件循环),
         # 无法从返回值区分是哪个文件失败, 故先快照再逐条比对。
+        # 注意: 下载中途数据写在 <最终名>.part 上, 完成后才改名为 _fp。
+        # 所以快照要把两处大小相加, 否则"下载中 .part 增长"会被当成无变化。
+        def _size_of(fp):
+            n = 0
+            for p in (fp, fp.with_name(fp.name + ".part")):
+                try:
+                    n += p.stat().st_size if p.exists() else 0
+                except OSError:
+                    pass
+            return n
+
         _before = {}
         for _e in keep_entries:
             _fn = _e.get("download_url", "").rstrip("/").rsplit("/", 1)[-1]
-            _fp = target / _fn
-            try:
-                _before[_fn] = _fp.stat().st_size if _fp.exists() else -1
-            except OSError:
-                _before[_fn] = -1
+            _before[_fn] = _size_of(target / _fn)
         ok = downloader.download_distribution(name, verify_checksum=True)
         if not ok:
             failed = True
         for _e in keep_entries:
             _fn = _e.get("download_url", "").rstrip("/").rsplit("/", 1)[-1]
             _fp = target / _fn
+            _part = _fp.with_name(_fp.name + ".part")
             try:
                 _after = _fp.stat().st_size if _fp.exists() else -1
             except OSError:
                 _after = -1
-            if _after < 0:
-                # 文件未落盘: 完全没能下载 → 下载失败(不可续传)
-                _record_failure(download_dir, typ, name, _fn, "hard")
-            elif _after != _before.get(_fn, -1) and not _last_run_verified(downloader, _e, _fp):
-                # 本次有变动但校验未过 → 半成品保留, 可续传 → 下载停止
+            _part_exists = _part.exists()
+            if _after >= 0 and _part_exists:
+                # 最终文件与 .part 并存(异常残留): 半成品未落定 → 下载停止
                 _record_failure(download_dir, typ, name, _fn, "stopped")
+            elif _after < 0 and _part_exists:
+                # 只留下 .part: 下载被中断/停止, 可续传 → 下载停止
+                _record_failure(download_dir, typ, name, _fn, "stopped")
+            elif _after < 0:
+                # 文件未落盘且无半成品: 完全没能下载 → 下载失败(不可续传)
+                _record_failure(download_dir, typ, name, _fn, "hard")
+            elif _size_of(_fp) != _before.get(_fn, -1) and not _last_run_verified(downloader, _e, _fp):
+                # 本次有变动但校验未过 → 下载失败
+                _record_failure(download_dir, typ, name, _fn, "hard")
             else:
                 _clear_failure(download_dir, typ, name, _fn)
 

@@ -466,6 +466,11 @@ def _entry_status(key: tuple, fname: str, local: dict | None, failures: dict) ->
       * "none"       — 从未下载过
 
     partial 判定优先于失败记录: 只要半成品还在, 就说明可续传 → 归入「下载停止」语义。
+
+    注意 local 的传入约定(build_distros 保证): 若同名的完整文件与 .part 半成品
+    同时存在, local 会是"二者中较新的那个"。因此:
+      * local 为 partial → 半成品比完整文件更新(或压根没有完整文件) → 下载被中断
+      * local 为完整文件 → 半成品已落定 → 已下载
     """
     if local and not local.get("partial"):
         return "downloaded", 0
@@ -492,10 +497,12 @@ def build_distros() -> dict:
         url = e.get("download_url", "")
         fname = url.rstrip("/").rsplit("/", 1)[-1] if url else "?"
         files = inv.get(key, [])
-        # 完整文件优先; 其次是半成品(.part 记录也以 fname 为 name)
-        local = next((f for f in files if f["name"] == fname and not f.get("partial")), None)
-        if local is None:
-            local = next((f for f in files if f["name"] == fname), None)
+        # 同名可能同时存在完整文件与 .part 半成品。取"最近改动"的那个作为代表:
+        # 半成品更新说明下载正在/曾在进行(显示下载停止), 完整文件更新说明已落定(已下载)。
+        # 旧实现固定优先完整文件, 会把"下载中断后残留的旧文件 + 正在写的 .part"
+        # 误判成已下载。
+        candidates = [f for f in files if f["name"] == fname]
+        local = max(candidates, key=lambda f: f.get("mtime") or 0) if candidates else None
         status, partial_size = _entry_status(key, fname, local, failures)
         groups[key]["entries"].append(
             {
