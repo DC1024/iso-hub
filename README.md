@@ -50,6 +50,32 @@
 
 直接拉取现成镜像，**无需本地构建**。以下两种镜像源内容相同，按网络情况任选其一。
 
+> **前置要求：Compose v2（`docker compose`，带空格）**
+>
+> 本项目的 sidecar（samba / webdav / qbittorrent）使用 compose **profiles** 管理，需要 **Compose v2**（Docker 20.10+ 自带 `docker compose` 插件）。
+> Python 版旧命令 `docker-compose`（v1，带连字符）**不支持 profiles 且已 EOL**，请勿使用。
+>
+> ```bash
+> docker compose version          # 期望输出 Docker Compose version v2.x.x
+> ```
+>
+> 若只有 v1，请升级 Docker 或单独安装 Compose v2 插件后再继续。
+
+#### 服务开关与按需启用（profiles）
+
+`samba` / `webdav` 归入 profile `share`，`qbittorrent` 归入 profile `bt`。**未启用的服务不会创建容器、也不会拉取镜像**（根治旧版预创建 stopped 容器被 `docker prune` 删除后网页开关点了没反应的问题）。
+
+```bash
+docker compose up -d                                   # 仅核心(iso-hub + socket-proxy)
+docker compose --profile share up -d                   # + SMB/WebDAV 共享
+docker compose --profile bt up -d                      # + qBittorrent 种子下载
+docker compose --profile share --profile bt up -d      # 全部启用
+```
+
+启用后，网页「设置」页的四个共享/下载服务开关即可实时启停（状态四态：运行中 ● / 已停止 ○ / 未部署 ✗ / 未知 ?）。
+
+> **权限收窄**：主容器不再挂载裸 `/var/run/docker.sock`，改由 `socket-proxy`（`tecnativa/docker-socket-proxy`）按白名单转发 `/containers/*` 端点（禁掉镜像 / 卷 / 网络 / exec / 系统五类高危端点）。socket-proxy 是核心依赖，**不加 profile**，随 `docker compose up -d` 一并启动。
+
 ### 1.1 Docker Hub 源部署方式
 
 已发布到 Docker Hub（镜像由 GitHub Actions 在每次 push 到 `master` 时自动构建并推送）。
@@ -67,7 +93,7 @@ docker run -d --name iso-hub \
   dcchendockeruser/iso-hub:latest
 ```
 
-**docker compose 方式**（保存为 `docker-compose.yml`，含 SMB/WebDAV/种子下载，四个容器）**：
+**docker compose 方式**（保存为 `docker-compose.yml`，含 SMB/WebDAV/种子下载 sidecar + socket-proxy）**：
 
 ```yaml
 services:
@@ -81,10 +107,11 @@ services:
     volumes:
       # 所有 ISO 与发行版清单持久化到宿主机 ./data
       - ./data:/data
-      # 挂载 docker.sock 以便网页端控制 SMB/WebDAV 共享容器(不需要可删除此行)
-      - /var/run/docker.sock:/var/run/docker.sock
+      # 安全: 不再挂载裸 docker.sock, 经 socket-proxy(TCP) 受限访问 Docker API
     environment:
       - TZ=Asia/Shanghai
+      # 通过 socket-proxy 访问 Docker Engine API(白名单端点)
+      - DOCKER_HOST=tcp://socket-proxy:2375
       # 需要鉴权时在同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
       # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
@@ -101,15 +128,34 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    depends_on:
+      - socket-proxy
+
+  # Docker socket 代理: 收窄主容器对 Docker API 的访问权限(核心依赖, 不设 profile)
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: iso-hub-socket-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1     # 仅放行 /containers/* 端点
+      - POST=1           # 允许写操作(start/stop 是 POST)
+      - IMAGES=0         # 禁止镜像操作
+      - VOLUMES=0        # 禁止卷操作
+      - NETWORKS=0       # 禁止网络操作
+      - EXEC=0           # 禁止 exec
+      - SYSTEM=0         # 禁止系统级操作
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
   # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso
-  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
+  # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
   samba:
     image: dperson/samba:latest
     container_name: iso-hub-samba
     restart: no
+    profiles: ["share"]
     ports:
       - "${SAMBA_PORT:-1445}:445"
       - "${SAMBA_NETBIOS:-1137}:137/udp"
@@ -127,11 +173,12 @@ services:
       -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
 
   # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav
-  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
+  # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   webdav:
     image: hacdias/webdav:latest
     container_name: iso-hub-webdav
     restart: no
+    profiles: ["share"]
     ports:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
@@ -145,11 +192,12 @@ services:
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
   # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
   # WebUI: http://<服务器IP>:8090
-  # 默认禁用: 请在 iso-hub 面板「设置→qBittorrent」中手动启用并设置 WebUI 账号密码
+  # 默认不部署, 需启用 compose profile "bt":  docker compose --profile bt up -d
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: iso-hub-qbittorrent
     restart: unless-stopped
+    profiles: ["bt"]
     ports:
       - "${QB_PORT:-8090}:8080"
     volumes:
@@ -167,10 +215,12 @@ services:
 ```bash
 mkdir -p /opt/iso-hub/data && cd /opt/iso-hub
 docker compose pull
-docker compose up -d
+docker compose up -d                                   # 仅核心(iso-hub + socket-proxy)
+docker compose --profile share up -d                   # 需要 SMB/WebDAV 时追加
+docker compose --profile share --profile bt up -d      # 需要种子下载时
 ```
 
-打开 `http://<服务器IP>:8899` 即可使用。SMB 共享地址 `smb://<服务器IP>:1445/iso`，WebDAV `http://<服务器IP>:8081/dav`（账号 `iso` / 密码 `iso123`）。
+打开 `http://<服务器IP>:8899` 即可使用。SMB 共享地址 `smb://<服务器IP>:1445/iso`，WebDAV `http://<服务器IP>:8081/dav`（**需先 `--profile share` 启用**；账号 `iso` / 密码 `iso123`）。
 
 - 仓库地址：https://hub.docker.com/r/dcchendockeruser/iso-hub
 - 构建 workflow：`.github/workflows/docker-push.yml`，每次 push 到 `master` 自动重建并推送 `latest` 标签。
@@ -209,10 +259,11 @@ services:
     volumes:
       # 所有 ISO 与发行版清单持久化到宿主机 ./data
       - ./data:/data
-      # 挂载 docker.sock 以便网页端控制 SMB/WebDAV 共享容器(不需要可删除此行)
-      - /var/run/docker.sock:/var/run/docker.sock
+      # 安全: 不再挂载裸 docker.sock, 经 socket-proxy(TCP) 受限访问 Docker API
     environment:
       - TZ=Asia/Shanghai
+      # 通过 socket-proxy 访问 Docker Engine API(白名单端点)
+      - DOCKER_HOST=tcp://socket-proxy:2375
       # 需要鉴权时在同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
       # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
@@ -229,15 +280,34 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    depends_on:
+      - socket-proxy
+
+  # Docker socket 代理: 收窄主容器对 Docker API 的访问权限(核心依赖, 不设 profile)
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: iso-hub-socket-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1     # 仅放行 /containers/* 端点
+      - POST=1           # 允许写操作(start/stop 是 POST)
+      - IMAGES=0         # 禁止镜像操作
+      - VOLUMES=0        # 禁止卷操作
+      - NETWORKS=0       # 禁止网络操作
+      - EXEC=0           # 禁止 exec
+      - SYSTEM=0         # 禁止系统级操作
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
   # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso
-  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
+  # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
   samba:
     image: dperson/samba:latest
     container_name: iso-hub-samba
     restart: no
+    profiles: ["share"]
     ports:
       - "${SAMBA_PORT:-1445}:445"
       - "${SAMBA_NETBIOS:-1137}:137/udp"
@@ -255,11 +325,12 @@ services:
       -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
 
   # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav
-  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
+  # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   webdav:
     image: hacdias/webdav:latest
     container_name: iso-hub-webdav
     restart: no
+    profiles: ["share"]
     ports:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
@@ -273,11 +344,12 @@ services:
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
   # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
   # WebUI: http://<服务器IP>:8090
-  # 默认禁用: 请在 iso-hub 面板「设置→qBittorrent」中手动启用并设置 WebUI 账号密码
+  # 默认不部署, 需启用 compose profile "bt":  docker compose --profile bt up -d
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: iso-hub-qbittorrent
     restart: unless-stopped
+    profiles: ["bt"]
     ports:
       - "${QB_PORT:-8090}:8080"
     volumes:
@@ -296,13 +368,14 @@ services:
 
 ```bash
 mkdir -p /opt/iso-hub/data && cd /opt/iso-hub
-docker compose pull          # 从阿里云拉取 iso-hub, 从 Docker Hub 拉取 samba/webdav/qbittorrent
-docker compose up -d         # 启动
+docker compose pull          # 从阿里云拉取 iso-hub, 从 Docker Hub 拉取 socket-proxy/sidecar
+docker compose up -d         # 启动核心(iso-hub + socket-proxy)
+docker compose --profile share up -d      # 需要 SMB/WebDAV 时追加
 ```
 
 打开 `http://<服务器IP>:8899` 即可使用。**首次登录后建议先点右上角「抓取最新版本元数据」**。
 
-SMB 共享地址 `smb://<服务器IP>:1445/iso`，WebDAV `http://<服务器IP>:8081/dav`（账号 `iso` / 密码 `iso123`）。
+SMB 共享地址 `smb://<服务器IP>:1445/iso`，WebDAV `http://<服务器IP>:8081/dav`（**需先 `--profile share` 启用**；账号 `iso` / 密码 `iso123`）。
 
 > 管理员账号：公网部署请先在 compose 同目录 `.env` 设置 `ISO_HUB_ADMIN_USER` / `ISO_HUB_ADMIN_PASS` 再 `docker compose up -d` 播种管理员；不设的话登录页会报「管理员账号未设置」（防抢注，仅允许从服务器本机首次登录建号，或用 `ssh -L 8899:127.0.0.1:8899 <user>@<服务器IP>` 隧道建号）。账号建好后改 `.env` 重启不会改密码，改密走面板「设置→修改密码」。
 

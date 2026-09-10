@@ -6,9 +6,11 @@
 #   /data               [VOLUME] 发行版清单 distributions.json + 下载的 ISO
 #
 # ⚠️ 安全提示:
-#   1. 本镜像默认以 root 运行, 且 compose 会挂载宿主机 /var/run/docker.sock。
-#      这意味着容器内进程拥有宿主机 Docker(近似 root)控制权。请仅在可信内网使用。
+#   1. 本镜像默认以 root 运行。新版 compose 中主容器不再挂载宿主机 /var/run/docker.sock,
+#      而是设 DOCKER_HOST=tcp://socket-proxy:2375 经 socket-proxy(tecnativa/docker-socket-proxy)
+#      按白名单访问 /containers/* 端点, 权限已收窄。仍请仅在可信内网使用。
 #   2. 生产部署务必设置 ISO_HUB_TOKEN / ISO_HUB_REQUIRE_LOGIN=1, 并修改默认共享/种子凭据。
+#   3. 旧版部署(DOCKER_HOST 未设置)会回退到 Unix socket /var/run/docker.sock, 保持向后兼容。
 FROM python:3.12-slim
 
 # 国内构建可传 --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/

@@ -693,26 +693,81 @@ def _valid_session() -> str | None:
     return user
 
 
+# Docker Engine API 连接方式:
+#   * DOCKER_HOST=tcp://host:port 时, 走 TCP 连 socket-proxy(主容器不再持有裸 docker.sock)
+#   * 否则回退到既有 Unix socket 路径(DOCKER_SOCK), 存量部署零影响
+# 设计意图: 主容器为 slim 精简镜像, 不安装 docker CLI / docker Python 包,
+# 直接用 Python 标准库(socket + http.client)直连 Docker REST API。
+DOCKER_HOST = os.environ.get("DOCKER_HOST", "")
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 
 
-def _docker_request(method, path, body, timeout):
-    """通过 docker.sock 调 Docker REST API, 主容器内无需 docker CLI。"""
+def _docker_conn(timeout):
+    """按 DOCKER_HOST 创建 Docker Engine API 连接: tcp:// 走 HTTP, 否则走 Unix socket。"""
     import socket
     import http.client
-    payload = json.dumps(body).encode() if body is not None else None
+    if DOCKER_HOST.startswith("tcp://"):
+        return http.client.HTTPConnection(DOCKER_HOST[6:], timeout=timeout)
     conn = http.client.HTTPConnection("localhost", timeout=timeout)
     conn.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.sock.connect(DOCKER_SOCK)
-    conn.request(method, path, body=payload, headers={"Content-Type": "application/json"})
-    resp = conn.getresponse()
-    data = resp.read()
-    conn.close()
+    return conn
+
+
+def _docker_request(method, path, body, timeout):
+    """通过 docker.sock 或 DOCKER_HOST(TCP) 调 Docker REST API, 主容器内无需 docker CLI。"""
+    import json
+    payload = json.dumps(body).encode() if body is not None else None
+    conn = _docker_conn(timeout)
+    try:
+        conn.request(method, path, body=payload, headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        data = resp.read()
+    finally:
+        conn.close()
     return type("R", (), {"status": resp.status, "text": data.decode()})()
 
 
+# sidecar 服务四态: 与前端 UI 映射约定(见需求文档 N4)
+#   running       运行中
+#   stopped       已停止(容器存在但未运行)
+#   not_deployed  未部署(容器根本不存在 —— compose profile 未启用)
+#   unknown       未知(Docker API 不通/查询失败, 如 socket-proxy 挂掉; 不能误报未部署)
+SERVICE_STATES = ("running", "stopped", "not_deployed", "unknown")
+# Docker 容器 State.Status 值 -> 服务四态(created/restarting/paused/dead 均归为 stopped)
+_CONTAINER_STATUS_TO_STATE = {"running": "running", "created": "stopped", "restarting": "stopped",
+                              "paused": "stopped", "exited": "stopped", "dead": "stopped"}
+
+
+def service_state(name: str) -> str:
+    """查询 sidecar 容器并归并为四态之一。任何异常/API 不通都返回 unknown, 绝不抛错。
+
+    懒加载原则: 只在设置页/相关接口被调用时才查询 Docker; 查询失败降级为 unknown,
+    不崩溃、不影响主流程。
+    """
+    try:
+        r = _docker_request("GET", f"/containers/{name}/json", None, 15)
+        if r.status == 404:
+            return "not_deployed"  # 容器不存在 -> compose profile 未启用
+        if r.status != 200:
+            log(f"[docker] 查询容器 {name} 状态失败: HTTP {r.status}, body={r.text[:500]!r}")
+            return "unknown"
+        payload = json.loads(r.text)
+        st = payload.get("State", {}).get("Status")
+        if not st:
+            log(f"[docker] 容器 {name} 返回异常结构: State={payload.get('State')!r}")
+            return "unknown"
+        return _CONTAINER_STATUS_TO_STATE.get(st, "stopped")
+    except Exception as e:  # noqa: BLE001
+        log(f"[docker] 查询容器 {name} 异常: {e!r}")
+        return "unknown"
+
+
 def share_container_state(name: str) -> str | None:
-    """返回 sidecar 容器运行状态: running/created/exited/None。失败时记录日志。"""
+    """返回 sidecar 容器原始运行状态: running/created/exited/None。失败时记录日志。
+
+    保持旧语义(供启动同步等内部逻辑与既有测试使用); 面向 UI 的四态判定用 service_state。
+    """
     try:
         r = _docker_request("GET", f"/containers/{name}/json", None, 15)
         if r.status != 200:
@@ -1849,9 +1904,9 @@ def api_stop():
 @app.get("/api/shares")
 def api_shares():
     shares = load_shares()
-    # 附带每个 sidecar 容器实时状态
+    # 附带每个 sidecar 容器实时四态(running/stopped/not_deployed/unknown)
     for proto, s in shares.items():
-        s["container"] = share_container_state(SHARE_CONTAINERS[proto])
+        s["container"] = service_state(SHARE_CONTAINERS[proto])
     return jsonify({"shares": shares})
 
 
@@ -1880,22 +1935,27 @@ def api_shares_save():
                 # L4 修复: 此处尚未 save_shares, 凭据并未落盘 —— 修正与实际不符的错误文案
                 return jsonify({"error": f"{proto} 凭据同步到容器失败, 设置未保存, 请检查 sidecar 是否运行"}), 500
         if "enabled" in p:
-            # 启停 sidecar 容器
+            # 启停 sidecar 容器; 未部署时给出命令提示(应用读不到宿主 compose 文件, 无法自动创建)
             want = bool(p["enabled"])
             cur["enabled"] = want
             ok = set_share(proto, want)
             if not ok:
-                return jsonify({"error": f"{proto} 容器操作失败(是否已部署 sidecar? 需挂载 docker.sock)"}), 500
+                st = service_state(SHARE_CONTAINERS[proto])
+                if st == "not_deployed":
+                    return jsonify({"error": f"{proto} 未部署: 请用 docker compose --profile share up -d 先创建该容器"}), 500
+                if st == "unknown":
+                    return jsonify({"error": f"{proto} 容器状态未知(请检查 socket-proxy 是否运行)"}), 500
+                return jsonify({"error": f"{proto} 容器操作失败(是否已部署 sidecar?)"}), 500
     save_shares(shares)
     log(f"[共享] 设置已保存: SMB={shares['samba']['enabled']} WebDAV={shares['webdav']['enabled']}")
-    return jsonify({"ok": True, "shares": {k: {**v, "container": share_container_state(SHARE_CONTAINERS[k])} for k, v in shares.items()}})
+    return jsonify({"ok": True, "shares": {k: {**v, "container": service_state(SHARE_CONTAINERS[k])} for k, v in shares.items()}})
 
 
 @app.get("/api/qb/settings")
 def api_qb_settings_get():
-    """获取 qBittorrent 设置及容器实时状态。"""
+    """获取 qBittorrent 设置及容器实时四态状态。"""
     qb = load_qb_settings()
-    qb["container"] = share_container_state(QB_CONTAINER)
+    qb["container"] = service_state(QB_CONTAINER)
     return jsonify({"ok": True, "qb": qb})
 
 
@@ -1923,7 +1983,12 @@ def api_qb_settings_post():
         if want != qb.get("enabled", False):
             ok = set_qb(want, qb["username"], qb["password"])
             if not ok:
-                return jsonify({"error": "qBittorrent 容器操作失败，请检查是否已部署 sidecar 且挂载 docker.sock"}), 500
+                st = service_state(QB_CONTAINER)
+                if st == "not_deployed":
+                    return jsonify({"error": "qBittorrent 未部署: 请用 docker compose --profile bt up -d 先创建该容器"}), 500
+                if st == "unknown":
+                    return jsonify({"error": "qBittorrent 容器状态未知(请检查 socket-proxy 是否运行)"}), 500
+                return jsonify({"error": "qBittorrent 容器操作失败，请检查是否已部署 sidecar"}), 500
             qb["enabled"] = want
             changed = True
             enabled_changed = True
@@ -1942,7 +2007,7 @@ def api_qb_settings_post():
     elif changed:
         save_qb_settings(qb)
 
-    qb["container"] = share_container_state(QB_CONTAINER)
+    qb["container"] = service_state(QB_CONTAINER)
     return jsonify({"ok": True, "qb": qb})
 
 

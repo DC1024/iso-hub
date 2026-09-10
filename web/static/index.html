@@ -87,6 +87,9 @@
   .share-cred{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
   .share-cred label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink2)}
   .share-cred .inp{width:130px;padding:7px 10px}
+  /* 四态开关: 未部署/未知的提示条 */
+  .cmd-hint{margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px}
+  .cmd-hint code{font-family:var(--mono);font-size:12px;background:var(--chip);padding:3px 8px;border-radius:6px;word-break:break-all}
   .cs-item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;font-size:13px}
   .cs-item:last-child{border-bottom:0}
   .cs-item .cu{font-family:var(--mono);font-size:12px;color:var(--ink2);word-break:break-all;flex:1;min-width:180px}
@@ -426,6 +429,7 @@
           <div class="share-body">
             <label class="sw"><input type="checkbox" id="sw-samba2" onchange="saveShare('samba',this.checked)"><span data-i18n="enable">启用</span></label>
             <span class="sstat" id="st-samba2"></span>
+            <div class="cmd-hint" id="cmd-samba2" style="display:none"></div>
             <div class="share-fields">
               <span><span data-i18n="addr">地址:</span> <code id="url-samba2">smb://&lt;服务器IP&gt;:1445/iso</code></span>
               <div class="share-cred">
@@ -441,6 +445,7 @@
           <div class="share-body">
             <label class="sw"><input type="checkbox" id="sw-webdav2" onchange="saveShare('webdav',this.checked)"><span data-i18n="enable">启用</span></label>
             <span class="sstat" id="st-webdav2"></span>
+            <div class="cmd-hint" id="cmd-webdav2" style="display:none"></div>
             <div class="share-fields">
               <span><span data-i18n="addr">地址:</span> <code id="url-webdav2">http://&lt;服务器IP&gt;:8081/dav</code></span>
               <div class="share-cred">
@@ -459,6 +464,7 @@
       <div class="share-body">
         <label class="sw"><input type="checkbox" id="sw-qb" onchange="saveQbEnabled(this.checked)"><span data-i18n="enable">启用</span></label>
         <span class="sstat" id="st-qb"></span>
+        <div class="cmd-hint" id="cmd-qb" style="display:none"></div>
         <div class="share-fields">
           <span><span data-i18n="addr">地址:</span> <code id="url-qb">http://&lt;服务器IP&gt;:8090</code></span>
           <div class="share-cred">
@@ -744,9 +750,14 @@ const I18N={
   'smbShare':{zh:'SMB 共享',en:'SMB Share'},
   'davShare':{zh:'WebDAV 共享',en:'WebDAV Share'},
   'sambaOn':{zh:'运行中',en:'Running'},
-  'sambaCreated':{zh:'已创建(未启动)',en:'Created (not started)'},
   'sambaExited':{zh:'已停止',en:'Stopped'},
+  'sambaNotDeployed':{zh:'未部署',en:'Not deployed'},
+  'sambaUnknown':{zh:'未知',en:'Unknown'},
   'sambaNone':{zh:'未找到容器',en:'Container not found'},
+  'deployHint':{zh:'该服务未部署，请在服务器上执行:',en:'Not deployed. Run on the server:'},
+  'unknownHint':{zh:'无法查询容器状态，请检查 socket-proxy 是否运行 / Docker 是否可用。',en:'Cannot query container state. Check whether socket-proxy is running and Docker is reachable.'},
+  'copyCmd':{zh:'复制',en:'Copy'},
+  'cmdCopied':{zh:'命令已复制',en:'Command copied'},
   'pleaseSel':{zh:'请先勾选要下载的版本',en:'Please select versions to download'},
   'startFailed':{zh:'启动失败',en:'Failed to start'},
   'taskStarted':{zh:'任务已启动:',en:'Task started:'},
@@ -1717,24 +1728,62 @@ async function syncSubs(){
 }
 
 /* ---------- 网络共享 ---------- */
-const CONTAINER_OK={'running':()=>'● '+t('sambaOn'),'created':()=>'○ '+t('sambaCreated'),'exited':()=>'■ '+t('sambaExited'),'none':()=>'？ '+t('sambaNone')};
+// 四态服务开关: running/stopped/not_deployed/unknown -> UI 文案
+const CONTAINER_OK={
+  'running':()=>'● '+t('sambaOn'),
+  'stopped':()=>'○ '+t('sambaExited'),
+  'not_deployed':()=>'✗ '+t('sambaNotDeployed'),
+  'unknown':()=>'? '+t('sambaUnknown'),
+  'none':()=>'? '+t('sambaUnknown'),
+};
+// 未部署时的启用命令(按协议给不同 profile)
+const DEPLOY_CMD={samba:'docker compose --profile share up -d samba',webdav:'docker compose --profile share up -d webdav',qb:'docker compose --profile bt up -d qbittorrent'};
+// 渲染容器状态: 灰态判定 + 未部署/未知的提示条(命令提示 + 一键复制)
+function paintServiceState(el,key,enabled,hintEl,proto){
+  if(!el)return;
+  el.textContent=(CONTAINER_OK[key]||(()=>key))();
+  // 只有 running(且已启用) 高亮; 其余(含灰态) 一律 muted
+  const hot=(enabled&&key==='running');
+  el.className='sstat '+(hot?'':'muted');
+  if(!hintEl)return;
+  if(key==='not_deployed'){
+    const cmd=DEPLOY_CMD[proto]||'';
+    hintEl.style.display='flex';
+    // 用 data-cmd 传命令, 避免把命令内联进 onclick 造成引号转义问题
+    hintEl.innerHTML='<span class="muted">'+t('deployHint')+'</span><code>'+esc(cmd)+'</code>'+
+      '<button class="btn-s" data-cmd="'+esc(cmd)+'" onclick="copyCmd(this)">'+t('copyCmd')+'</button>';
+  }else if(key==='unknown'){
+    hintEl.style.display='flex';
+    hintEl.innerHTML='<span class="muted">'+t('unknownHint')+'</span>';
+  }else{
+    hintEl.style.display='none';hintEl.innerHTML='';
+  }
+}
+function copyCmd(btn){
+  const cmd=(btn&&btn.dataset&&btn.dataset.cmd)||'';
+  const done=()=>toast(t('cmdCopied'));
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(cmd).then(done).catch(()=>{});
+  }else{
+    const ta=document.createElement('textarea');ta.value=cmd;document.body.appendChild(ta);
+    ta.select();try{document.execCommand('copy');done();}catch(e){}document.body.removeChild(ta);
+  }
+}
 async function loadShares(){
-  const r=await jget('/api/shares');
+  let r={};try{r=await jget('/api/shares');}catch(e){r={};}
   const s=r.shares||{};
   for(const proto of ['samba','webdav']){
     const cfg=s[proto]||{};
     const sw=$('#sw-'+proto); if(sw)sw.checked=!!cfg.enabled;
     const uin=$('#u-'+proto); if(uin)uin.value=cfg.username||'';
     const pin=$('#p-'+proto); if(pin)pin.value=cfg.password||'';
-    const st=$('#st-'+proto);
-    const key=cfg.container||'none';
-    if(st){st.textContent=(CONTAINER_OK[key]||(()=>key))();st.className='sstat '+(cfg.enabled&&cfg.container==='running'?'':'muted');}
+    const key=cfg.container||'unknown';
+    paintServiceState($('#st-'+proto),key,!!cfg.enabled,$('#cmd-'+proto),proto);
     // 设置面板镜像控件
     if($('#sw-'+proto+'2'))$('#sw-'+proto+'2').checked=!!cfg.enabled;
     if($('#u-'+proto+'2'))$('#u-'+proto+'2').value=cfg.username||'';
     if($('#p-'+proto+'2'))$('#p-'+proto+'2').value=cfg.password||'';
-    const st2=$('#st-'+proto+'2');
-    if(st2){st2.textContent=(CONTAINER_OK[key]||(()=>key))();st2.className='sstat '+(cfg.enabled&&cfg.container==='running'?'':'muted');}
+    paintServiceState($('#st-'+proto+'2'),key,!!cfg.enabled,$('#cmd-'+proto+'2'),proto);
   }
 }
 async function saveShare(proto,enabled){
@@ -1756,15 +1805,14 @@ async function saveShareCred2(proto){
 
 /* ---------- qBittorrent ---------- */
 async function loadQbSettings(){
-  const r=await jget('/api/qb/settings');
+  let r={};try{r=await jget('/api/qb/settings');}catch(e){r={};}
   const cfg=(r&&r.qb)||{};
   const sw=$('#sw-qb'); if(sw)sw.checked=!!cfg.enabled;
   paintQbOverlay(!!cfg.enabled);
   const uin=$('#u-qb'); if(uin)uin.value=cfg.username||'';
   const pin=$('#p-qb'); if(pin)pin.value=cfg.password||'';
-  const st=$('#st-qb');
-  const key=cfg.container||'none';
-  if(st){st.textContent=(CONTAINER_OK[key]||(()=>key))();st.className='sstat '+(cfg.enabled&&cfg.container==='running'?'':'muted');}
+  const key=cfg.container||'unknown';
+  paintServiceState($('#st-qb'),key,!!cfg.enabled,$('#cmd-qb'),'qb');
 }
 async function saveQbEnabled(enabled){
   const username=$('#u-qb').value.trim();

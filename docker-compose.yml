@@ -18,11 +18,12 @@ services:
       - ./qb-config:/qb-config:rw
       # webdav 凭据配置目录: 与 webdav 容器共享(网页改密码后主容器改写此文件)
       - ./webdav-config:/webdav-config
-      # ⚠️ 安全风险: 挂载 docker.sock 后, 主容器内获得宿主机 Docker 完全控制权,
-      # 相当于容器 root 可逃逸到宿主机。请仅在可信内网/单机使用, 并开启 ISO_HUB_REQUIRE_LOGIN=1。
-      - /var/run/docker.sock:/var/run/docker.sock
+      # 安全: 主容器不再直连裸 docker.sock, 改经 socket-proxy(TCP) 受限访问 Docker API。
+      # 详见 socket-proxy 服务定义。原有 /var/run/docker.sock 挂载已移除。
     environment:
       - TZ=Asia/Shanghai
+      # 通过 socket-proxy 访问 Docker Engine API(白名单端点), 不再需要裸 sock
+      - DOCKER_HOST=tcp://socket-proxy:2375
       # webdav 配置文件路径(宿主机 ./webdav-config/webdav.yml 挂到容器内 /webdav-config/)
       - WEBDAV_CONF=${WEBDAV_CONF:-/webdav-config/webdav.yml}
       # 需要鉴权时在宿主机同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
@@ -51,15 +52,41 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    depends_on:
+      - socket-proxy
+
+  # ---------- Docker socket 代理: 收窄主容器对 Docker API 的访问权限 ----------
+  # 主容器不再持有裸 /var/run/docker.sock(等价宿主机 root), 而是经此代理按白名单调用。
+  # 白名单: 仅放行 /containers/* 端点(CONTAINERS=1) 与写操作(POST=1, start/stop 需要);
+  #         禁掉镜像、卷、网络、exec、系统五类端点。
+  # 注意: 本服务是核心依赖, 不设 profiles(主容器需持续用它查 sidecar 状态)。
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: iso-hub-socket-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1     # 允许 /containers/* 端点(查状态/启停/更新/重建)
+      - POST=1           # 允许写操作(start/stop 是 POST; 注: 该粒度较粗, 会连带放行 /containers/create)
+      - IMAGES=0         # 禁止镜像操作
+      - VOLUMES=0        # 禁止卷操作
+      - NETWORKS=0       # 禁止网络操作
+      - EXEC=0           # 禁止 exec
+      - SYSTEM=0         # 禁止系统级操作
+      - TZ=Asia/Shanghai
+    volumes:
+      # 只有该代理容器持有裸 sock, 且以只读方式挂载
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # 仅容器网络内部可达, 不对外暴露端口
 
   # ---------- 网络共享 sidecar: 把 ./data 里的 ISO 分享给局域网其他设备 ----------
   # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso
-  # 默认禁用: 请在 iso-hub 面板「设置→共享」中手动启用并设置账号密码
+  # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
   samba:
     image: dperson/samba:latest
     container_name: iso-hub-samba
     restart: no
+    profiles: ["share"]
     ports:
       - "${SAMBA_PORT:-1445}:445"
       - "${SAMBA_NETBIOS:-1137}:137/udp"
@@ -77,11 +104,12 @@ services:
       -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
 
   # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav
-  # 默认禁用, 请在面板「设置→共享」中手动启用并设置账号密码
+  # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   webdav:
     image: hacdias/webdav:latest
     container_name: iso-hub-webdav
     restart: no
+    profiles: ["share"]
     ports:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
@@ -95,11 +123,12 @@ services:
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
   # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
   # WebUI: http://<服务器IP>:8090
-  # 默认禁用, 请在 iso-hub 面板「设置→共享/下载」中手动启用并设置 WebUI 账号密码
+  # 默认不部署, 需启用 compose profile "bt":  docker compose --profile bt up -d
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: iso-hub-qbittorrent
     restart: no
+    profiles: ["bt"]
     ports:
       - "${QB_PORT:-8090}:8080"
     volumes:
