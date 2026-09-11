@@ -671,6 +671,18 @@ def load_qb_settings() -> dict:
     return out
 
 
+def _qb_is_external(qb: dict) -> bool:
+    """判断 qBittorrent 是否指向用户自行部署的外部实例(非 iso-hub 配套 sidecar)。
+
+    判断依据: url 被用户显式保存过(url_saved), 且指向非默认内部地址
+    (http://qbittorrent:8080)。外部 QB 由用户自己管理, iso-hub 无法改其
+    用户名/密码, 只能用它来登录连接 —— 改凭据时只需保存, 不得写 sidecar conf 或重启。
+    """
+    _url = (qb.get("url") or "").rstrip("/")
+    _saved = bool(qb.get("url_saved", False))
+    return _saved and (_url != (DEFAULT_QB.get("url") or "").rstrip("/"))
+
+
 def save_qb_settings(qb: dict) -> None:
     cur = load_settings_all()
     cur["qb"] = qb
@@ -2501,10 +2513,9 @@ def api_qb_settings_get():
     except Exception:  # noqa: BLE001
         qb["url_saved"] = False
     # 区分「配套容器」与「外部容器」: 只要 url 未被用户指向外部(仍是默认内部 sidecar 地址,
-    # 或从未自定义), iso-hub 就能管理该 qb 容器, 可改凭据; 若用户填了外部 qBittorrent 地址,
-    # 那是自行部署的容器, iso-hub 无法改其用户名/密码 → managed=False。
-    _url = (qb.get("url") or "").rstrip("/")
-    qb["managed"] = (not qb.get("url_saved", False)) or (_url == (DEFAULT_QB.get("url") or "").rstrip("/"))
+    # 或从未自定义), iso-hub 就能管理该 qb 容器, 可改凭据并同步到 sidecar; 若用户填了外部
+    # qBittorrent 地址, 那是自行部署的容器, iso-hub 无法改其用户名/密码 → managed=False。
+    qb["managed"] = not _qb_is_external(qb)
     return jsonify({"ok": True, "qb": qb})
 
 
@@ -2549,9 +2560,19 @@ def api_qb_settings_post():
             changed = True
             enabled_changed = True
 
-    # 仅当"凭据"变更且当前是启用状态时, 才需要同步密码到 sidecar 容器并重启。
-    # 只改 url(连接地址) 不触发容器重启 —— 用户可能指向外部 QB, 根本没有 sidecar 容器可重启。
-    if cred_changed and qb.get("enabled", False):
+    # 计算是否指向外部 QB(用户自行部署, 非配套 sidecar)。url_saved 需从原始 settings 判断,
+    # 与 GET 保持一致: 用户显式保存过 url 才视为已自定义; 若本次请求带 url 字段同样视为已保存。
+    try:
+        _raw = json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) if SETTINGS_JSON.exists() else {}
+        qb["url_saved"] = bool((_raw.get("qb") or {}).get("url")) or ("url" in body)
+    except Exception:  # noqa: BLE001
+        qb["url_saved"] = bool("url" in body)
+    _is_ext = _qb_is_external(qb)
+
+    # 仅当"凭据"变更且当前是启用状态、且是配套 sidecar 时, 才同步密码到 sidecar 容器并重启。
+    # 外部 QB(用户自行部署): 改凭据只是为了登录连接, 只保存到配置即可, 不写 conf 不重启
+    # (根本没有 iso-hub 配套容器可重启)。
+    if cred_changed and qb.get("enabled", False) and not _is_ext:
         if not enabled_changed:
             # 仅修改凭据：直接写 conf 并重启
             if QB_CONF_PATH.exists() and _set_qb_password(qb["username"], qb["password"]):
@@ -2566,8 +2587,7 @@ def api_qb_settings_post():
 
     qb["container"] = service_state(QB_CONTAINER)
     # 与 GET 一致地计算 managed(区分配套/外部容器)
-    _url = (qb.get("url") or "").rstrip("/")
-    qb["managed"] = (not qb.get("url_saved", False)) or (_url == (DEFAULT_QB.get("url") or "").rstrip("/"))
+    qb["managed"] = not _qb_is_external(qb)
     return jsonify({"ok": True, "qb": qb})
 
 

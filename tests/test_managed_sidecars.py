@@ -2,8 +2,9 @@
 """配套/外部容器(managed 标志)回归测试。
 
 用户需求: 设置面板需要区分「iso-hub 配套的 sidecar 容器」与「用户自行部署的外部容器」。
-- 配套容器: iso-hub 能检测并管理它 → 面板可修改用户名/密码。
-- 外部容器(非配套): 用户自行部署, iso-hub 面板无法管理其凭据 → 面板应禁用凭据输入并提示。
+- 配套容器: iso-hub 能检测并管理它 → 面板可修改用户名/密码(同步到 sidecar 并重启)。
+- 外部容器(非配套): 用户自行部署。SMB/WebDAV 无配套容器可检测时, 面板禁用凭据输入并提示;
+  qBittorrent 指向外部时, 用户名/密码**保持可填**(用于登录外部 QB), 仅提示且只保存不重启。
 
 判断依据:
 - SMB/WebDAV: container 状态是否 running/stopped(iso-hub 可检测) vs not_deployed/unknown(检测不到)。
@@ -16,11 +17,12 @@
 """
 
 import json
+import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "web"))
@@ -130,6 +132,19 @@ class TestManagedFrontendContract(unittest.TestCase):
         self.assertIn("非配套容器", HTML)
         self.assertIn("non-bundled", HTML)
 
+    def test_has_qb_external_hint_i18n(self):
+        """外部 QB 有独立的提示文案(区别于 SMB/WebDAV 的"无法管理用户名/密码")。"""
+        self.assertIn("managedHintQb", HTML)
+        self.assertIn("用于登录连接", HTML)  # 中文
+        self.assertIn("log in to it", HTML)  # 英文
+
+    def test_qb_hint_element_uses_qb_specific_text(self):
+        """QB 提示占位元素用 managedHintQb(而不是 SMB/WebDAV 的 managedHint)。"""
+        # QB 的 data-i18n 必须是 managedHintQb
+        m = re.search(r'id="managed-hint-qb"[^>]*data-i18n="([^"]+)"', HTML)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "managedHintQb")
+
     def test_has_apply_managed_hint_helper(self):
         self.assertIn("function applyManagedHint", HTML)
 
@@ -139,6 +154,73 @@ class TestManagedFrontendContract(unittest.TestCase):
 
     def test_has_qb_save_button_id(self):
         self.assertIn('id="btn-save-qb"', HTML)
+
+    def test_qb_load_keeps_credentials_editable_for_external(self):
+        """外部 QB 场景下, 用户名/密码必须保持可填(仅提示, 不传入禁用列表)。
+
+        若 loadQbSettings 把 ['u-qb','p-qb'] 传给 applyManagedHint, 外部 QB 的
+        登录凭据会被禁用, 用户就无法连接外部 QB —— 那与需求相悖。
+        """
+        m = re.search(
+            r"applyManagedHint\(qbManaged,'managed-hint-qb',([^;]*)\);",
+            HTML
+        )
+        self.assertIsNotNone(m, "QB 的 applyManagedHint 调用不存在")
+        args = m.group(1)
+        self.assertNotIn("u-qb", args, "外部 QB 场景下用户名输入框不应被禁用")
+        self.assertNotIn("p-qb", args, "外部 QB 场景下密码输入框不应被禁用")
+        self.assertNotIn("btn-save-qb", args, "外部 QB 场景下保存按钮不应被禁用")
+
+
+class TestQbExternalSaveNoRestart(SharesManagedTestBase):
+    """外部 QB 保存凭据时, 只落盘配置, 不写 sidecar conf 也不重启容器。"""
+
+    def _post_qb(self, body, settings_obj=None):
+        if settings_obj is not None:
+            self.settings.write_text(json.dumps(settings_obj), encoding="utf-8")
+        r = self.client.post("/api/qb/settings", json=body)
+        return r
+
+    def test_external_cred_save_does_not_write_conf_nor_restart(self):
+        """外部 QB(url 指向外部) 改凭据 → 只保存, 不调 _set_qb_password、不调 docker restart。"""
+        # 预置: 已启用 + 已保存外部 url
+        self.settings.write_text(json.dumps(
+            {"qb": {"enabled": True, "url": "http://192.168.1.50:18080",
+                    "username": "old", "password": "old"}}), encoding="utf-8")
+        with patch.object(app, "service_state", return_value="running"), \
+             patch.object(app, "_set_qb_password", return_value=True) as m_set, \
+             patch.object(app, "_docker_request") as m_docker:
+            r = self._post_qb({"username": "newu", "password": "newp"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIs(r.get_json()["qb"]["managed"], False)
+        m_set.assert_not_called()   # 外部 QB 不写 sidecar conf
+        m_docker.assert_not_called()  # 外部 QB 不重启容器
+        # 但配置确实保存了
+        saved = json.loads(self.settings.read_text(encoding="utf-8"))["qb"]
+        self.assertEqual(saved["username"], "newu")
+        self.assertEqual(saved["password"], "newp")
+
+    def test_bundled_cred_save_still_writes_conf_and_restarts(self):
+        """配套 QB(默认内部地址) 改凭据 → 仍写 sidecar conf + 重启(回归护栏)。"""
+        self.settings.write_text(json.dumps(
+            {"qb": {"enabled": True, "username": "admin", "password": "adminadmin"}}),
+            encoding="utf-8")
+        # 配套 sidecar 的 conf 必须真实存在(模拟已挂载的 qb-config),
+        # 否则后端会因 .exists() 为 False 走"凭据保存失败"分支返回 500。
+        conf = self.data / "qb" / "qBittorrent.conf"
+        conf.parent.mkdir(parents=True, exist_ok=True)
+        conf.write_text("", encoding="utf-8")
+        fake_resp = MagicMock()
+        fake_resp.status = 200
+        with patch.object(app, "service_state", return_value="running"), \
+             patch.object(app, "QB_CONF_PATH", conf), \
+             patch.object(app, "_set_qb_password", return_value=True) as m_set, \
+             patch.object(app, "_docker_request", return_value=fake_resp) as m_docker:
+            r = self._post_qb({"username": "newu", "password": "newp"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIs(r.get_json()["qb"]["managed"], True)
+        m_set.assert_called_once()
+        m_docker.assert_called_once()
 
 
 if __name__ == "__main__":
