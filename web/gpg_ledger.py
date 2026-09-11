@@ -37,11 +37,26 @@ def ledger_path() -> Path:
 
 
 def key_for(entry: dict) -> str:
-    """条目唯一键: type/distribution@version(与 health 侧配置扫描一致)。"""
+    """条目唯一键: type/name[/version或URL文件名片段]。
+
+    真实数据里 gpg_verify 条目常无 version 字段(镜像组预设靠 download_url
+    区分不同发行版/版本), 若只退化成 type/name 会把多条合并成一个键,
+    账本粒度变粗、低估覆盖。故按优先级取区分片段:
+      version > download_url 路径文件名 > checksum_url 路径文件名
+    """
     typ = str(entry.get("type", "linux"))
     name = str(entry.get("distribution") or entry.get("name") or "?")
-    ver = str(entry.get("version", "") or "")
-    return f"{typ}/{name}@{ver}" if ver else f"{typ}/{name}"
+    base = f"{typ}/{name}"
+    ver = entry.get("version")
+    if ver:
+        return f"{base}@{ver}"
+    for key in ("download_url", "checksum_url"):
+        u = entry.get(key)
+        if isinstance(u, str) and u.startswith("http"):
+            frag = u.rstrip("/").split("/")[-1]
+            if frag and frag not in (".", ".."):
+                return f"{base}#{frag}"
+    return base
 
 
 def _load(path: Path) -> dict:

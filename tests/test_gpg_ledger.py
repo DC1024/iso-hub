@@ -57,6 +57,17 @@ class TestLedgerRecording(unittest.TestCase):
             state = gpg_ledger.record_from_msg(ENTRY, False, FAIL_MSG, path=p)
             self.assertEqual(state, "fail", "ok=False 必须记为 fail(阻断也是'验过')")
 
+    def test_key_disambiguates_by_url_fragment(self):
+        """无 version 的镜像组预设靠 download_url 文件名片段区分(真实数据)。"""
+        e1 = {"type": "linux", "distribution": "Fedora",
+              "download_url": "https://m/fedora/.../Fedora-Everything-netinst-x86_64-43-1.6.iso"}
+        e2 = {"type": "linux", "distribution": "Fedora",
+              "download_url": "https://m/fedora/.../Fedora-Everything-netinst-x86_64-42-1.5.iso"}
+        k1, k2 = gpg_ledger.key_for(e1), gpg_ledger.key_for(e2)
+        self.assertNotEqual(k1, k2, "同 type/name 不同版本必须用 URL 片段区分")
+        self.assertIn("Fedora-Everything-netinst-x86_64-43-1.6.iso", k1)
+        self.assertIn("Fedora-Everything-netinst-x86_64-42-1.5.iso", k2)
+
     def test_unconfigured_entry_not_recorded(self):
         """没配 gpg_verify 的条目不记账 —— 账本只覆盖该验签的条目。"""
         with tempfile.TemporaryDirectory() as d:
