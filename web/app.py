@@ -2436,7 +2436,11 @@ def api_shares():
     shares = load_shares()
     # 附带每个 sidecar 容器实时四态(running/stopped/not_deployed/unknown)
     for proto, s in shares.items():
-        s["container"] = service_state(SHARE_CONTAINERS[proto])
+        st = service_state(SHARE_CONTAINERS[proto])
+        s["container"] = st
+        # managed = 是否 iso-hub 配套部署的容器: 能检测到(非 not_deployed/unknown)即为配套,
+        # 凭据可管理; 用户自行部署的外部容器 iso-hub 检测不到, 无法改凭据。
+        s["managed"] = st not in ("not_deployed", "unknown")
     return jsonify({"shares": shares})
 
 
@@ -2478,7 +2482,10 @@ def api_shares_save():
                 return jsonify({"error": f"{proto} 容器操作失败(是否已部署 sidecar?)"}), 500
     save_shares(shares)
     log(f"[共享] 设置已保存: SMB={shares['samba']['enabled']} WebDAV={shares['webdav']['enabled']}")
-    return jsonify({"ok": True, "shares": {k: {**v, "container": service_state(SHARE_CONTAINERS[k])} for k, v in shares.items()}})
+    return jsonify({"ok": True, "shares": {
+        k: {**v, "container": (_st := service_state(SHARE_CONTAINERS[k])),
+            "managed": _st not in ("not_deployed", "unknown")}
+        for k, v in shares.items()}})
 
 
 @app.get("/api/qb/settings")
@@ -2493,6 +2500,11 @@ def api_qb_settings_get():
         qb["url_saved"] = bool((_raw.get("qb") or {}).get("url"))
     except Exception:  # noqa: BLE001
         qb["url_saved"] = False
+    # 区分「配套容器」与「外部容器」: 只要 url 未被用户指向外部(仍是默认内部 sidecar 地址,
+    # 或从未自定义), iso-hub 就能管理该 qb 容器, 可改凭据; 若用户填了外部 qBittorrent 地址,
+    # 那是自行部署的容器, iso-hub 无法改其用户名/密码 → managed=False。
+    _url = (qb.get("url") or "").rstrip("/")
+    qb["managed"] = (not qb.get("url_saved", False)) or (_url == (DEFAULT_QB.get("url") or "").rstrip("/"))
     return jsonify({"ok": True, "qb": qb})
 
 
@@ -2553,6 +2565,9 @@ def api_qb_settings_post():
         save_qb_settings(qb)
 
     qb["container"] = service_state(QB_CONTAINER)
+    # 与 GET 一致地计算 managed(区分配套/外部容器)
+    _url = (qb.get("url") or "").rstrip("/")
+    qb["managed"] = (not qb.get("url_saved", False)) or (_url == (DEFAULT_QB.get("url") or "").rstrip("/"))
     return jsonify({"ok": True, "qb": qb})
 
 

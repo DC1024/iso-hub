@@ -461,6 +461,7 @@
             <div class="cmd-hint" id="cmd-samba2" style="display:none" data-page-node-id="ieWXcoU96DVfMynOvWDPGZ"></div>
             <div class="share-fields" data-page-node-id="DsF9TOHYURHno3407slSGe">
               <span data-page-node-id="G9pklIfGZjzc0FyBvnEG0K"><span data-i18n="addr" data-page-node-id="w0Alktl1elrTUBXnMPGmkr">地址:</span> <code id="url-samba2" data-page-node-id="TWDpxsdXWM52GClFdsYdzz">smb://&lt;服务器IP&gt;:&lt;端口号&gt;/iso</code></span>
+              <div class="managed-hint" id="managed-hint-samba2" style="display:none;color:var(--warn);font-size:12px;padding:2px 0" data-i18n="managedHint"></div>
               <div class="share-cred" data-page-node-id="PsWNRSpTTVjH5JVYVv2zCy">
                 <label data-i18n="username" data-page-node-id="r8Hl4zwQQAwSTpLem4GkFE">用户名 <input type="text" id="u-samba2" class="inp" data-page-node-id="tFNKrosuVrd0OgK4OkgCnt"></label>
                 <label data-i18n="password" data-page-node-id="XL2p0DA9ctjT66lkYTzG8a">密码 <input type="text" id="p-samba2" class="inp" data-page-node-id="ocfb4v8164FbRflDqKgCLK"></label>
@@ -477,6 +478,7 @@
             <div class="cmd-hint" id="cmd-webdav2" style="display:none" data-page-node-id="igsswHyWK5jjLHOYkVpfX4"></div>
             <div class="share-fields" data-page-node-id="7sriwhWHpoYicvtx8ru7QB">
               <span data-page-node-id="t9x6IdoARDP0bUN1YgQy1i"><span data-i18n="addr" data-page-node-id="HEsikkX7ha7TpHL8dgAk99">地址:</span> <code id="url-webdav2" data-page-node-id="Xf3oxe8sm6aNLlFDaRtRJj">http://&lt;服务器IP&gt;:&lt;端口号&gt;/dav</code></span>
+              <div class="managed-hint" id="managed-hint-webdav2" style="display:none;color:var(--warn);font-size:12px;padding:2px 0" data-i18n="managedHint"></div>
               <div class="share-cred" data-page-node-id="THk7FEo5IwlCiBpFoIalwU">
                 <label data-i18n="username" data-page-node-id="sb0qSBGbsrPmLzA6c82brK">用户名 <input type="text" id="u-webdav2" class="inp" data-page-node-id="MAvdtS1wqwnXTpldW8sCiH"></label>
                 <label data-i18n="password" data-page-node-id="uwhWoNc9LEQBw9cxZjrTqU">密码 <input type="text" id="p-webdav2" class="inp" data-page-node-id="Vw16gJcBQVJfQCRfkuwp2a"></label>
@@ -496,10 +498,11 @@
         <div class="cmd-hint" id="cmd-qb" style="display:none" data-page-node-id="RSIlSWh7iFrOkF42Ahc01E"></div>
         <div class="share-fields" data-page-node-id="YEpUDZEVpTh0YMCcgCYszb">
           <span data-page-node-id="511ik6kGzvFwnzozBYoJ4Z"><span data-i18n="addr" data-page-node-id="ehtaMyjnlwiTmFtJ4OQCmX">地址:</span> <input id="url-qb" class="inp" placeholder="http://&lt;服务器IP&gt;:&lt;端口号&gt;" style="max-width:340px" data-page-node-id="KIIROTJMsjXgmoHjT6cCRc"></span>
+          <div class="managed-hint" id="managed-hint-qb" style="display:none;color:var(--warn);font-size:12px;padding:2px 0" data-i18n="managedHint"></div>
           <div class="share-cred" data-page-node-id="e9XDvr2NrEAclYsspL2KOD">
             <label data-i18n="username" data-page-node-id="jTw5hYng7xCz6wGfYXlzIa">用户名 <input type="text" id="u-qb" class="inp" data-page-node-id="FDICQavOtkHBQr0plW7C4c"></label>
             <label data-i18n="password" data-page-node-id="0dnGcIXH2qzzYG0cifdN2p">密码 <input type="text" id="p-qb" class="inp" data-page-node-id="DEPCcLm96x5QNXDspZhIth"></label>
-            <button class="btn-s" onclick="saveQbCred()" data-i18n="saveCred" data-page-node-id="j1y1fRANCXqgOKDMwXuhbM">保存凭据</button>
+            <button class="btn-s" id="btn-save-qb" onclick="saveQbCred()" data-i18n="saveCred" data-page-node-id="j1y1fRANCXqgOKDMwXuhbM">保存凭据</button>
           </div>
         </div>
         <div class="hint" style="padding:4px 0 0" data-i18n="qbDesc" data-page-node-id="A3JpzKcMFbZgMIxiecoOF7"></div>
@@ -619,8 +622,8 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.3.8';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.3.8';
+const APP_VERSION='1.3.9';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.3.9';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -856,6 +859,7 @@ const I18N={
   'enabledMsg':{zh:'已启用',en:'Enabled'},
   'disabledMsg':{zh:'已停用',en:'Disabled'},
   'credSaved':{zh:'凭据已保存，运行中的共享需 restart 生效',en:'Credentials saved; restart running shares to apply'},
+  'managedHint':{zh:'当前使用非配套容器（自行部署的外部实例），本面板无法管理其用户名/密码，请到对应容器自行修改',en:'Currently using a non-bundled (externally deployed) container; this panel cannot manage its username/password. Set them in that container directly.'},
   'shareErr':{zh:'操作失败',en:'Operation failed'},
   'qbConfig':{zh:'🧲 qBittorrent 设置',en:'🧲 qBittorrent Settings'},
   'qbDesc':{zh:'说明：qBittorrent 默认禁用。点击下方开关手动启用，随后设置 WebUI 账号密码；修改后写入 ./data/settings.json 并同步到 qBittorrent.conf。',en:'qBittorrent is disabled by default. Toggle to enable, then set WebUI credentials; changes are saved to ./data/settings.json and synced to qBittorrent.conf.'},
@@ -2048,6 +2052,15 @@ function copyCmd(btn){
     ta.select();try{document.execCommand('copy');done();}catch(e){}document.body.removeChild(ta);
   }
 }
+// 区分配套/外部容器: 非配套(用户自部署的外部实例)时, 面板无法管理其凭据,
+// 隐藏凭据输入并显示提示, 只保留地址可编辑。managed=true 恢复可编辑。
+function applyManagedHint(managed, hintId, inputs, saveBtn){
+  const hint=hintId&&document.getElementById(hintId);
+  if(hint)hint.style.display=managed?'none':'block';
+  (inputs||[]).forEach(id=>{const el=id&&document.getElementById(id);if(el)el.disabled=!managed;});
+  if(saveBtn){const el=document.getElementById(saveBtn);if(el)el.disabled=!managed;}
+}
+
 async function loadShares(){
   let r={};try{r=await jget('/api/shares');}catch(e){r={};}
   const s=r.shares||{};
@@ -2068,6 +2081,10 @@ async function loadShares(){
     if(proto==='samba' && $('#url-samba2'))$('#url-samba2').textContent='smb://<服务器IP>:'+port+'/iso';
     if(proto==='webdav' && $('#url-webdav2'))$('#url-webdav2').textContent='http://<服务器IP>:'+port+'/dav';
     if(proto==='webdav' && $('#chip-webdav-url'))$('#chip-webdav-url').textContent='http://IP:'+port+'/dav';
+    // 区分配套/外部容器: 非配套时隐藏凭据编辑并提示
+    const managed=cfg.managed!==false;
+    applyManagedHint(managed,'managed-hint-'+proto,['u-'+proto,'p-'+proto],null);
+    applyManagedHint(managed,'managed-hint-'+proto+'2',['u-'+proto+'2','p-'+proto+'2'],null);
   }
 }
 async function saveShare(proto,enabled){
@@ -2097,6 +2114,9 @@ async function loadQbSettings(){
   const pin=$('#p-qb'); if(pin)pin.value=cfg.password||'';
   // 地址输入框: 仅当用户显式保存过 url 时回显, 否则留空(placeholder 提示格式)
   const urlIn=$('#url-qb'); if(urlIn)urlIn.value=cfg.url_saved ? (cfg.url||'') : '';
+  // 区分配套/外部容器: 非配套时隐藏凭据编辑并提示(外部 qb 无法由本面板管理用户名/密码)
+  const qbManaged=cfg.managed!==false;
+  applyManagedHint(qbManaged,'managed-hint-qb',['u-qb','p-qb'],'btn-save-qb');
   const key=cfg.container||'unknown';
   paintServiceState($('#st-qb'),key,!!cfg.enabled,$('#cmd-qb'),'qb');
 }
