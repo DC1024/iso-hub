@@ -1,0 +1,58 @@
+[
+  {
+    "id": "gpg-preflight-removed",
+    "file": "iso_download/download_linux.py",
+    "find": "if dist and dist.get(\"gpg_verify\") and checksum_url:",
+    "replace": "if False and dist and dist.get(\"gpg_verify\") and checksum_url:",
+    "expect_test": "tests/test_wiring_gpg.py",
+    "desc": "v1.3.7 原样复现: GPG 预检分支整体失效, dist 配置形同虚设"
+  },
+  {
+    "id": "gpg-fail-allows-download",
+    "file": "iso_download/download_linux.py",
+    "find": "return False, \"GPG 校验未通过(签名无效或公钥指纹不匹配, checksum 文件不可信)\"",
+    "replace": "return True, \"GPG 校验未通过(签名无效或公钥指纹不匹配, checksum 文件不可信)\"",
+    "expect_test": "tests/test_wiring_gpg.py",
+    "desc": "签名校验失败改为放行 —— 篡改场景失守"
+  },
+  {
+    "id": "iso-runner-dist-dropped",
+    "file": "web/iso_runner.py",
+    "find": "target_dist.get(\"checksum\"), dist=target_dist",
+    "replace": "target_dist.get(\"checksum\"), dist=None",
+    "expect_test": "tests/test_gpg_dist_handoff.py",
+    "desc": "v1.3.7 原样复现: 下载主路径漏传 dist, GPG 被静默跳过"
+  },
+  {
+    "id": "sync-dist-dropped",
+    "file": "web/sync_subscriptions.py",
+    "find": "entry.get(\"checksum\"), dist=entry",
+    "replace": "entry.get(\"checksum\"), dist=None",
+    "expect_test": "tests/test_gpg_dist_handoff.py",
+    "desc": "订阅同步路径漏传 dist, GPG 被静默跳过"
+  },
+  {
+    "id": "config-migrate-stripped",
+    "file": "web/app.py",
+    "find": "entry[field] = value  # 只补缺失字段",
+    "replace": "pass  # MUTANT: 迁移失效, 新字段永不进运行时",
+    "expect_test": "tests/test_config_contract.py",
+    "desc": "配置遮蔽原样复现: 迁移不再补齐缺失字段"
+  },
+  {
+    "id": "gpg-pass-log-removed",
+    "file": "iso_download/download_linux.py",
+    "find": "print(\"  ✓ GPG 签名验证通过: checksum 文件由官方私钥签名, 可信\")",
+    "replace": "pass  # MUTANT: 通过态不留痕",
+    "expect_test": "tests/test_degradation_visible.py",
+    "desc": "验签通过不再输出日志 —— 三态不可区分(可观测性回归)"
+  },
+  {
+    "id": "gpg-fail-log-removed",
+    "file": "iso_download/download_linux.py",
+    "find": "print(\"  ⚠ GPG 校验未通过: checksum 文件可能被篡改, 或公钥指纹不匹配, 拒绝下载\")",
+    "replace": "pass  # MUTANT: 失败态不留痕",
+    "expect_test": "tests/test_degradation_visible.py",
+    "desc": "验签失败不再输出日志 —— 篡改场景不可观测"
+  }
+]

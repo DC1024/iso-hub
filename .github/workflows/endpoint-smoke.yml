@@ -1,0 +1,54 @@
+# ISO Hub - 端点连通性冒烟(每日)
+#
+# 为什么放 cron 而非 push: runner 访问清华源等镜像站可能因网络抖动失败,
+# 不应阻塞开发。失败仅发告警(step 级 continue-on-error + job 汇总 warning),
+# 不作为分支保护门禁。
+#
+# 探测逻辑在 scripts/endpoint_smoke.py(可本地运行):
+#   404/410 -> 判定失效(告警"清单需更新")
+#   403/405/429 等 -> 存疑(反爬/限流), 单独归类不与真 404 混淆
+# 退出码: 存在"失效"端点时为 1。
+
+name: Endpoint Smoke (daily)
+
+on:
+  schedule:
+    - cron: '17 3 * * *'      # 每天 UTC 03:17(北京 11:17)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install requests
+
+      - name: Probe all endpoints in distributions.json
+        id: probe
+        continue-on-error: true     # 网络抖动不算 job 失败, 由汇总步告警
+        run: python scripts/endpoint_smoke.py --out artifacts/smoke_result.txt
+
+      - name: Report
+        if: always()
+        run: |
+          if [ -s artifacts/smoke_result.txt ]; then
+            if [ "${{ steps.probe.outcome }}" = "failure" ]; then
+              echo "::warning::以下端点已失效(404/410), 清单需要更新 —— 否则对应发行版会长期静默降级"
+            else
+              echo "::warning::以下端点存疑(反爬/限流), 建议人工复核"
+            fi
+            cat artifacts/smoke_result.txt
+          else
+            echo "所有端点可达"
+          fi

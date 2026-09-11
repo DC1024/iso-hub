@@ -1,0 +1,70 @@
+# ISO Hub - 单元测试流水线
+#
+# 背景: 此前 CI 只做 py_compile + ruff + bandit, **从不运行 unittest** ——
+# 301 个测试全绿只发生在开发者本机。测试体系改进方案(P0)要求 CI 必须运行:
+#   * 全量 unittest discover(含接线契约/配置契约/降级可观测性测试)
+#   * 显式单列契约测试组, 失败信息里能一眼看出是"接线断了"还是"配置遮蔽"
+#
+# 触发: pull_request / push master / 手动。失败即阻塞(与 Lint & Security 同级门禁)。
+#
+# Python 版本与 Dockerfile 基础镜像(python:3.12-slim)一致。
+# 依赖: web/requirements.txt(flask 等, tests 会 import web.app)
+#      iso_download/requirements.txt(requests/tqdm, tests 会 import download_linux)
+
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Unit tests (unittest discover)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r web/requirements.txt -r iso_download/requirements.txt
+
+      - name: Run full unit test suite
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      # 契约测试单列一步: 即使被上面的 -v 淹没, 这一步的红色/绿色一目了然,
+      # 且分支保护规则可以只把这一步设为必需检查。
+      - name: Contract tests (wiring + config, P0)
+        if: always()
+        run: |
+          python -m unittest tests.test_wiring_gpg -v
+          python -m unittest tests.test_config_contract -v
+          python -m unittest tests.test_degradation_visible -v
+
+  test-gate:
+    name: Tests Gate
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    if: always()
+    steps:
+      - name: Verify all checks passed
+        env:
+          UNIT_RESULT: ${{ needs.unit-tests.result }}
+        run: |
+          echo "unit-tests: $UNIT_RESULT"
+          if [ "$UNIT_RESULT" != "success" ]; then
+            echo "::error::单元测试未全部通过"
+            exit 1
+          fi
+          echo "测试门禁通过"

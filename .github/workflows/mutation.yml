@@ -1,0 +1,39 @@
+# ISO Hub - 变异测试守卫(每周)
+#
+# 测试全绿 ≠ 测试有效。本 workflow 把"手动变异测试"常态化:
+# 按 scripts/mutations.json 把历史上真实发生过的 bug 逐个"改坏",
+# 断言对应守卫测试必须变红 —— 否则守卫无效, CI 失败。
+#
+# 每周跑(而非每次 push): 变异注入 + 多轮子进程测试较耗时,
+# 且守卫测试的每次变更已由 Tests workflow 全量覆盖。
+# 失败仅告警(不开分支保护), 由维护者处理。
+
+name: Mutation Guard
+
+on:
+  schedule:
+    - cron: '23 4 * * 1'      # 每周一 UTC 04:23(北京 12:23)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r web/requirements.txt -r iso_download/requirements.txt
+
+      - name: Run mutation tests
+        run: python scripts/mutation_test.py --mutations scripts/mutations.json
