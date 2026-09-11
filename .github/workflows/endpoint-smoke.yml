@@ -7,7 +7,7 @@
 # 探测逻辑在 scripts/endpoint_smoke.py(可本地运行):
 #   404/410 -> 判定失效(告警"清单需更新")
 #   403/405/429 等 -> 存疑(反爬/限流), 单独归类不与真 404 混淆
-# 退出码: 存在"失效"端点时为 1。
+# 退出码: 1 = 存在失效端点(warning); 2 = 失效占比>30% 大面积失效(error)。
 
 name: Endpoint Smoke (daily)
 
@@ -36,14 +36,21 @@ jobs:
 
       - name: Probe all endpoints in distributions.json
         id: probe
-        continue-on-error: true     # 网络抖动不算 job 失败, 由汇总步告警
-        run: python scripts/endpoint_smoke.py --out artifacts/smoke_result.txt
+        run: |
+          set +e
+          python scripts/endpoint_smoke.py --out artifacts/smoke_result.txt
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0    # 探测失败不阻塞 job, 由 Report 步按 exit_code 分级告警
 
       - name: Report
         if: always()
         run: |
+          code="${{ steps.probe.outputs.exit_code }}"
           if [ -s artifacts/smoke_result.txt ]; then
-            if [ "${{ steps.probe.outcome }}" = "failure" ]; then
+            if [ "$code" = "2" ]; then
+              echo "::error::⛔ 大面积失效(>30%): 疑似整站下架/归档 —— 立即检查清单"
+            elif [ "$code" = "1" ]; then
               echo "::warning::以下端点已失效(404/410), 清单需要更新 —— 否则对应发行版会长期静默降级"
             else
               echo "::warning::以下端点存疑(反爬/限流), 建议人工复核"

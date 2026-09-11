@@ -54,5 +54,29 @@
     "replace": "pass  # MUTANT: 失败态不留痕",
     "expect_test": "tests/test_degradation_visible.py",
     "desc": "验签失败不再输出日志 —— 篡改场景不可观测"
+  },
+  {
+    "id": "ledger-record-dropped",
+    "file": "web/gpg_ledger.py",
+    "find": "data[key_for(entry)] = {\"state\": state, \"ts\": int(time.time())}",
+    "replace": "pass  # MUTANT: 账本被静默丢弃",
+    "expect_test": "tests/test_gpg_ledger.py",
+    "desc": "验签结果不再落账 -> never_invoked 永远报不出来, 运行自证失效"
+  },
+  {
+    "id": "ledger-skip-mislabeled-pass",
+    "file": "web/gpg_ledger.py",
+    "find": "if ok and \"跳过\" in (msg or \"\"):",
+    "replace": "if False and \"跳过\" in (msg or \"\"):",
+    "expect_test": "tests/test_gpg_ledger.py",
+    "desc": "skip 被记成 pass -> 降级在账本里伪装成成功, 运维看不到降级面"
+  },
+  {
+    "id": "import-mkdir-fatal-revert",
+    "file": "web/app.py",
+    "find": "except OSError as _mkdir_err:  # noqa: BLE001",
+    "replace": "except ValueError:  # MUTANT: OSError 不再被吞, import 恢复为致命",
+    "expect_test": "tests/test_gpg_ledger.py",
+    "desc": "C:\\\\data 教训回退: 数据目录不可写再次炸掉 import(CI 环境全红)"
   }
 ]

@@ -99,10 +99,24 @@ def _safe_join(typ: str, name: str) -> Path | None:
         return None
     return target
 
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+# import 副作用加固(P0 环境守卫): 目录建不出来不得炸掉 import。
+# CI 实证: GitHub runner 的 / 不可写, 此处致命会让 7 个测试模块连 import 都过不去;
+# 本地 Windows 则会悄悄在盘根建 C:\data, 掩盖环境问题。失败推迟到真正写盘时暴露。
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as _mkdir_err:  # noqa: BLE001
+    print(f"⚠ 数据目录不可用({DATA_DIR}): {_mkdir_err} —— 推迟到实际写盘时再报错",
+          flush=True)
 if not JSON_FILE.exists() and DEFAULT_JSON.exists():
     import shutil
-    shutil.copyfile(DEFAULT_JSON, JSON_FILE)
+    try:
+        shutil.copyfile(DEFAULT_JSON, JSON_FILE)
+    except OSError as _copy_err:  # noqa: BLE001
+        print(f"⚠ 初始配置拷贝失败: {_copy_err}", flush=True)
+
+# P1-⑤b: GPG 验证状态账本(同目录模块, /api/health 暴露 never_invoked)
+sys.path.insert(0, str(BASE_DIR))
+import gpg_ledger  # noqa: E402
 
 
 def _migrate_distribution_fields() -> None:
@@ -1822,7 +1836,8 @@ def index():
 
 @app.get("/api/health")
 def api_health():
-    return jsonify({"ok": True})
+    # P1-⑤b: 暴露 GPG 状态账本 —— never_invoked 非空 = 有发行版从未获得验签机会
+    return jsonify({"ok": True, "gpg_ledger": gpg_ledger.build_summary(JSON_FILE)})
 
 
 @app.get("/api/distros")

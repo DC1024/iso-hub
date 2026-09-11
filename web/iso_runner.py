@@ -20,6 +20,10 @@ import requests
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 PART_SUFFIX = ".part"
 
+# P1-⑤b: GPG 验证状态账本(同目录模块; 每次验签后落账, 供 /api/health 汇总)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gpg_ledger  # noqa: E402
+
 
 class TruncatedTransfer(Exception):
     """响应流提前结束: 有预期长度但实际写入不足。
@@ -308,6 +312,7 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
             success, msg = downloader.verify_checksum_smart(
                 part, checksum_url, target_dist.get("checksum"), dist=target_dist
             )
+            gpg_ledger.record_from_msg(target_dist, success, msg)
             if success:
                 print(f"  ✓ {msg}")
                 # 全部校验通过 → 原子改名为最终文件名(此刻才"看起来"下载完成)
@@ -437,6 +442,7 @@ def main() -> None:
                 ok, msg = downloader.verify_checksum_smart(
                     filepath, entry.get("checksum_url"), entry.get("checksum"), dist=entry
                 )
+                gpg_ledger.record_from_msg(entry, ok, msg)
                 if ok:
                     print(f"✓ {msg}")
                     _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)

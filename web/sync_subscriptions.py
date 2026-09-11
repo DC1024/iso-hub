@@ -27,6 +27,10 @@ import requests
 
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 
+# P1-⑤b: GPG 验证状态账本(同目录模块; 订阅同步路径验签后同样落账)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gpg_ledger  # noqa: E402
+
 
 def natural_key(value: str):
     return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", value)]
@@ -76,9 +80,10 @@ def _last_run_verified(downloader, entry: dict, fp: Path) -> bool:
         return False
     try:
         # 必须传 dist=entry: 否则 GPG 验签被静默跳过(漏传 dist 的回归)
-        ok, _msg = downloader.verify_checksum_smart(
+        ok, msg = downloader.verify_checksum_smart(
             fp, entry.get("checksum_url"), entry.get("checksum"), dist=entry
         )
+        gpg_ledger.record_from_msg(entry, ok, msg)
         return bool(ok)
     except Exception:  # noqa: BLE001
         return False

@@ -33,6 +33,9 @@ DEFAULT_CONFIG = REPO_ROOT / "iso_download" / "distributions.json"
 DEAD_CODES = {404, 410}
 # 视为"存疑"(可能是反爬/限流, 不判定失效)的状态码
 SUSPECT_CODES = {403, 405, 418, 429}
+# 大面积失效阈值: 真失效占比超过它时升级为 error(退出码 2)。
+# 场景: 清华 Arch 整批下架这类"整站级"事件, 普通 warning 会被噪音淹没。
+ERROR_RATIO = 0.30
 
 UA = {"User-Agent": "iso-hub-endpoint-smoke/1.0 (endpoint health probe)",
       "Accept": "*/*"}
@@ -112,7 +115,15 @@ def main() -> int:
         print("\n".join(dead))
     if suspect:
         print("\n".join(suspect))
-    # 退出码: 仅"真失效"返回 1(供 workflow 判定); 存疑不算失败
+    # 退出码:
+    #   0  全部正常(或仅存疑)
+    #   1  存在"真失效"端点 -> workflow 发 warning 告警
+    #   2  真失效占比 > ERROR_RATIO -> 大面积失效, workflow 升级为 error 告警
+    if checked and len(dead) / checked > ERROR_RATIO:
+        ratio = len(dead) / checked
+        print(f"⛔ 大面积失效: {len(dead)}/{checked} ({ratio:.0%}) 超过 "
+              f"{ERROR_RATIO:.0%} 阈值 —— 疑似整站下架/归档, 升级为 ERROR")
+        return 2
     return 1 if dead else 0
 
 
