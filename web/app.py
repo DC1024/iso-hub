@@ -44,6 +44,10 @@ except Exception as e:  # noqa: BLE001
     TORRENT_AVAILABLE = False
     _torrent_import_err = str(e)
 
+# 种子分类: 纯计算模块, 无外部依赖, 因此**不用**可选加载 —— 加载失败属于部署损坏,
+# 应当直接暴露而不是静默降级(分类是纯展示功能, 不该被 qBittorrent 可用性绑架)。
+import torrent_categories as tcats  # noqa: E402
+
 # --------------------------------------------------------------------------- paths
 BASE_DIR = Path(__file__).resolve().parent
 REPO_DIR = Path(os.environ.get("ISO_REPO_DIR", "/app/iso_download"))
@@ -2675,6 +2679,117 @@ def api_torrent_sources():
     except Exception as e:  # noqa: BLE001
         log(f"[种子] 扫描种子源失败: {e!r}")
         return jsonify({"error": f"扫描种子源失败: {e}"}), 500
+
+
+MAX_CLASSIFY_ITEMS = 5000        # 入参上限: 防超大数组打内存/撑爆返回体
+_CLASSIFY_FIELDS = ("title", "url", "pubDate", "source", "builtin")
+
+
+@app.post("/api/torrent/classify")
+def api_torrent_classify():
+    """把种子条目按分类分组返回。**纯计算**: 不抓外网、不落盘、不依赖 qBittorrent。
+
+    刻意不做 _ensure_qb_enabled 检查: 分类只影响展示, 不该因为没部署
+    qbittorrent sidecar 就用不了(/api/torrent/sources 的检查不要照抄到这里)。
+
+    入参: {"items": [{"title","url","pubDate","source","builtin"}, ...]}
+    出参: {"ok": true, "categories": [...], "counts": {...}}  (+ 可选 warnings)
+    """
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "请求体必须是 JSON 对象"}), 400
+    items = body.get("items")
+    if not isinstance(items, list):
+        return jsonify({"ok": False, "error": "items 必须是数组"}), 400
+    if len(items) > MAX_CLASSIFY_ITEMS:
+        return jsonify({"ok": False,
+                        "error": "items 过多(上限 %d 条)" % MAX_CLASSIFY_ITEMS}), 400
+
+    # 字段白名单 + 类型校验: 只取认识的字段, 非字符串一律归一化, 缺 title 的条目丢弃
+    clean = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        url = it.get("url") if isinstance(it.get("url"), str) else ""
+        title = it.get("title") if isinstance(it.get("title"), str) else ""
+        title = title.strip() or url.strip()
+        if not title:
+            continue
+        clean.append({
+            "title": title,
+            "url": url,
+            "pubDate": it.get("pubDate") if isinstance(it.get("pubDate"), str) else "",
+            "source": it.get("source") if isinstance(it.get("source"), str) else "",
+            "builtin": bool(it.get("builtin")),
+        })
+
+    report = []
+    try:
+        cats = tcats.load_categories(report=report)     # 每次实时读, 不缓存
+        res = tcats.classify(clean, cats)
+        res["show_empty"] = tcats.load_show_empty()
+    except Exception as e:  # noqa: BLE001
+        log(f"[种子] 分类失败: {e!r}")
+        return jsonify({"ok": False, "error": f"分类失败: {e}"}), 500
+
+    res["ok"] = True
+    if report:      # 配置损坏必须可见, 不能静默当成"没有分类"
+        res["warnings"] = report
+        log(f"[种子] 分类配置告警: {report}")
+    return jsonify(res)
+
+
+@app.get("/api/torrent/categories")
+def api_torrent_categories_get():
+    """读取分类配置(设置页回显)。返回合并结果 + 原始用户配置 + 损坏告警。"""
+    report = []
+    try:
+        merged = tcats.load_categories(report=report)
+        user = tcats.load_user_doc()
+    except Exception as e:  # noqa: BLE001
+        log(f"[种子] 读取分类配置失败: {e!r}")
+        return jsonify({"ok": False, "error": f"读取分类配置失败: {e}"}), 500
+    res = {"ok": True, "categories": merged,
+           "user_categories": user["user_categories"],
+           "overrides": user["overrides"],
+           "show_empty": user["show_empty"]}
+    if report:
+        res["warnings"] = report
+    return jsonify(res)
+
+
+@app.post("/api/torrent/categories")
+def api_torrent_categories_post():
+    """保存用户分类配置。
+
+    信任边界: 入参一律当不可信输入, 只认 user_categories/overrides/show_empty,
+    其余键丢弃; 校验不过返回 400 而不是写坏配置。
+    预置分类**不可删除**, 只能通过 overrides 禁用。
+    """
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "请求体必须是 JSON 对象"}), 400
+    doc = {
+        "user_categories": body.get("user_categories") or [],
+        "overrides": body.get("overrides") or {},
+        "show_empty": bool(body.get("show_empty", False)),
+    }
+    try:
+        tcats.save_user_doc(doc)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:  # noqa: BLE001
+        log(f"[种子] 保存分类配置失败: {e!r}")
+        return jsonify({"ok": False, "error": f"保存分类配置失败: {e}"}), 500
+
+    report = []
+    merged = tcats.load_categories(report=report)
+    res = {"ok": True, "categories": merged, "show_empty": doc["show_empty"],
+           "user_categories": tcats.load_user_doc()["user_categories"],
+           "overrides": doc["overrides"]}
+    if report:
+        res["warnings"] = report
+    return jsonify(res)
 
 
 @app.get("/api/torrent/info")

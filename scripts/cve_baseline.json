@@ -1,0 +1,925 @@
+{
+  "schema": 1,
+  "generated_at": "2026-09-12",
+  "image": "registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:latest",
+  "app_version": "1.3.12",
+  "base": "python:3.12-slim (Debian 13 trixie)",
+  "sources": [
+    "镜像内 dpkg-query 实包清单 (109 deb / 75 源码包)",
+    "OSV (ecosystem Debian:13 / PyPI)",
+    "NVD 官方 CVSS (v4.0 / v3.1 / v2 三源核对)",
+    "Debian Security Tracker 全量库"
+  ],
+  "note": "这是**基线快照**, 不是「可接受风险清单」。用途: CI 只对本集合之外的**新增 High/Critical** 告警, 避免 101 条长期未修的基础镜像噪音把告警淹没。判断依据见 docs/cve-triage-1.3.12.md (零个真实可达)。本基线中所有条目 Debian 均无修复版本, apt upgrade 一条都修不掉 —— 因此**不要**用 CVE 数量做门禁阈值, 否则永远红。",
+  "entries": {
+    "CVE-2005-2541": {
+      "pkg": "tar",
+      "score": 10.0,
+      "severity": "critical",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2019-1010022": {
+      "pkg": "glibc",
+      "score": 9.8,
+      "severity": "critical",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-5450": {
+      "pkg": "glibc",
+      "score": 9.8,
+      "severity": "critical",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-57433": {
+      "pkg": "perl",
+      "score": 9.8,
+      "severity": "critical",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-8376": {
+      "pkg": "perl",
+      "score": 9.8,
+      "severity": "critical",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-12087": {
+      "pkg": "perl",
+      "score": 9.1,
+      "severity": "critical",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-13221": {
+      "pkg": "perl",
+      "score": 9.1,
+      "severity": "critical",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-42496": {
+      "pkg": "perl",
+      "score": 9.1,
+      "severity": "critical",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2019-1010023": {
+      "pkg": "glibc",
+      "score": 8.8,
+      "severity": "high",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-11822": {
+      "pkg": "sqlite3",
+      "score": 8.5,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-11824": {
+      "pkg": "sqlite3",
+      "score": 8.5,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-76642": {
+      "pkg": "util-linux",
+      "score": 8.5,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-54369": {
+      "pkg": "acl",
+      "score": 8.4,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-54371": {
+      "pkg": "attr",
+      "score": 8.4,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-57432": {
+      "pkg": "perl",
+      "score": 8.4,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-85091": {
+      "pkg": "zlib",
+      "score": 8.3,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-86145": {
+      "pkg": "pcre2",
+      "score": 8.2,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-78408": {
+      "pkg": "util-linux",
+      "score": 7.9,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-24882": {
+      "pkg": "gnupg2",
+      "score": 7.8,
+      "severity": "high",
+      "reach": "limited",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2025-69720": {
+      "pkg": "ncurses",
+      "score": 7.8,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2025-8941": {
+      "pkg": "pam",
+      "score": 7.8,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "undetermined",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-78410": {
+      "pkg": "util-linux",
+      "score": 7.8,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2018-20796": {
+      "pkg": "glibc",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2019-9192": {
+      "pkg": "glibc",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-5928": {
+      "pkg": "glibc",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-41992": {
+      "pkg": "gzip",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "low",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2018-6829": {
+      "pkg": "libgcrypt20",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "limited",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2015-3276": {
+      "pkg": "openldap",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2017-17740": {
+      "pkg": "openldap",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-42497": {
+      "pkg": "perl",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-48959": {
+      "pkg": "perl",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-9538": {
+      "pkg": "perl",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2025-70873": {
+      "pkg": "sqlite3",
+      "score": 7.5,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-89161": {
+      "pkg": "pcre2",
+      "score": 7.4,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-5435": {
+      "pkg": "glibc",
+      "score": 7.3,
+      "severity": "high",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-48961": {
+      "pkg": "perl",
+      "score": 7.3,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-48962": {
+      "pkg": "perl",
+      "score": 7.3,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-54370": {
+      "pkg": "acl",
+      "score": 7.2,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2017-18018": {
+      "pkg": "coreutils",
+      "score": 7.1,
+      "severity": "high",
+      "reach": "low",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-7017": {
+      "pkg": "perl",
+      "score": 7.1,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-78409": {
+      "pkg": "util-linux",
+      "score": 7.0,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-54411": {
+      "pkg": "pam",
+      "score": 6.9,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-16742": {
+      "pkg": "systemd",
+      "score": 6.7,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-6791": {
+      "pkg": "glibc",
+      "score": 6.6,
+      "severity": "medium",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-6238": {
+      "pkg": "glibc",
+      "score": 6.5,
+      "severity": "medium",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-89158": {
+      "pkg": "pcre2",
+      "score": 6.5,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-7010": {
+      "pkg": "perl",
+      "score": 6.5,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-13757": {
+      "pkg": "p11-kit",
+      "score": 6.2,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-18938": {
+      "pkg": "p11-kit",
+      "score": 6.2,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-56391": {
+      "pkg": "coreutils",
+      "score": 6.1,
+      "severity": "medium",
+      "reach": "low",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-56392": {
+      "pkg": "coreutils",
+      "score": 6.1,
+      "severity": "medium",
+      "reach": "low",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-50813": {
+      "pkg": "sqlite3",
+      "score": 6.1,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2025-68972": {
+      "pkg": "gnupg2",
+      "score": 5.9,
+      "severity": "medium",
+      "reach": "limited",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2024-2236": {
+      "pkg": "libgcrypt20",
+      "score": 5.9,
+      "severity": "medium",
+      "reach": "limited",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-89157": {
+      "pkg": "pcre2",
+      "score": 5.7,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-15534": {
+      "pkg": "perl",
+      "score": 5.7,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2025-15649": {
+      "pkg": "perl",
+      "score": 5.5,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-50812": {
+      "pkg": "sqlite3",
+      "score": 5.5,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-15059": {
+      "pkg": "systemd",
+      "score": 5.5,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2022-0563": {
+      "pkg": "util-linux",
+      "score": 5.5,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2019-1010024": {
+      "pkg": "glibc",
+      "score": 5.3,
+      "severity": "medium",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2019-1010025": {
+      "pkg": "glibc",
+      "score": 5.3,
+      "severity": "medium",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-19487": {
+      "pkg": "perl",
+      "score": 5.3,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2023-31437": {
+      "pkg": "systemd",
+      "score": 5.3,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2023-31438": {
+      "pkg": "systemd",
+      "score": 5.3,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2023-31439": {
+      "pkg": "systemd",
+      "score": 5.3,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2013-4392": {
+      "pkg": "systemd",
+      "score": 5.0,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-5704": {
+      "pkg": "tar",
+      "score": 5.0,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-18374": {
+      "pkg": "glibc",
+      "score": 4.9,
+      "severity": "medium",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2007-5686": {
+      "pkg": "shadow",
+      "score": 4.9,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-42250": {
+      "pkg": "bzip2",
+      "score": 4.8,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2025-6141": {
+      "pkg": "ncurses",
+      "score": 4.8,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-41991": {
+      "pkg": "gzip",
+      "score": 4.7,
+      "severity": "medium",
+      "reach": "low",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2017-14159": {
+      "pkg": "openldap",
+      "score": 4.7,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-22185": {
+      "pkg": "openldap",
+      "score": 4.6,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2025-5278": {
+      "pkg": "coreutils",
+      "score": 4.4,
+      "severity": "medium",
+      "reach": "low",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-18477": {
+      "pkg": "tar",
+      "score": 4.4,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-18508": {
+      "pkg": "tar",
+      "score": 4.4,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2011-3389": {
+      "pkg": "gnutls28",
+      "score": 4.3,
+      "severity": "medium",
+      "reach": "low",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2021-45346": {
+      "pkg": "sqlite3",
+      "score": 4.3,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-89092": {
+      "pkg": "glibc",
+      "score": 4.2,
+      "severity": "medium",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2020-15719": {
+      "pkg": "openldap",
+      "score": 4.2,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2010-4756": {
+      "pkg": "glibc",
+      "score": 4.0,
+      "severity": "medium",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-39113": {
+      "pkg": "sqlite3",
+      "score": 4.0,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2011-3374": {
+      "pkg": "apt",
+      "score": 3.7,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-89160": {
+      "pkg": "pcre2",
+      "score": 3.7,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-3184": {
+      "pkg": "util-linux",
+      "score": 3.7,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2024-56433": {
+      "pkg": "shadow",
+      "score": 3.6,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2022-3219": {
+      "pkg": "gnupg2",
+      "score": 3.3,
+      "severity": "low",
+      "reach": "limited",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2011-4116": {
+      "pkg": "perl",
+      "score": 3.3,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-57062": {
+      "pkg": "gnupg2",
+      "score": 2.9,
+      "severity": "low",
+      "reach": "limited",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-89156": {
+      "pkg": "pcre2",
+      "score": 2.9,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-89162": {
+      "pkg": "pcre2",
+      "score": 2.9,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-40228": {
+      "pkg": "systemd",
+      "score": 2.9,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-27171": {
+      "pkg": "zlib",
+      "score": 2.9,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-53910": {
+      "pkg": "diffutils",
+      "score": 2.1,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "open",
+      "urgency": "unimportant",
+      "fixed": ""
+    },
+    "CVE-2026-6368": {
+      "pkg": "glibc",
+      "score": 2.1,
+      "severity": "low",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-19499": {
+      "pkg": "glibc",
+      "score": null,
+      "severity": "unknown",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-19542": {
+      "pkg": "glibc",
+      "score": null,
+      "severity": "unknown",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-77117": {
+      "pkg": "glibc",
+      "score": null,
+      "severity": "unknown",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    },
+    "CVE-2026-80489": {
+      "pkg": "glibc",
+      "score": null,
+      "severity": "unknown",
+      "reach": "partial",
+      "debian_status": "open",
+      "urgency": "not yet assigned",
+      "fixed": ""
+    }
+  }
+}

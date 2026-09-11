@@ -161,6 +161,24 @@
   .prot-row .pn{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
   .btn-fold{width:24px;height:24px;padding:0;border-radius:7px;background:var(--btn-s-bg);color:var(--ink2);border:1px solid var(--line);font-size:12px;line-height:1;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
   .btn-fold:hover{background:var(--chip);color:var(--brand)}
+  /* 种子分类分组。刻意**不复用**首页 .card/.card-head 折叠:
+     首页那套的 key 是从 DOM 可见文本拼的(计数/语言一变就丢状态), 且历史上有过
+     全文档 .card 扫描导致面板空白的 bug。这里 key 全部由后端下发(data-fold-key)。 */
+  .tcat{border:1px solid var(--line);border-radius:11px;margin-bottom:9px;overflow:hidden;background:var(--panel)}
+  .tcat-head{display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer;user-select:none;background:var(--cardhead)}
+  .tcat-head:hover{background:var(--chip)}
+  .tcat-arrow{font-size:11px;color:var(--ink2);flex:0 0 auto;width:11px}
+  .tcat-name{font-weight:700;font-size:13.5px;white-space:nowrap}
+  .tcat-count{font-size:11px;padding:1px 8px;border-radius:20px;background:var(--chip);color:var(--brand);border:1px solid var(--line)}
+  .tcat-tools{margin-left:auto;display:flex;gap:6px;align-items:center}
+  .tcat-body{padding:2px 12px 4px;border-top:1px solid var(--line)}
+  .tcat-body.hidden{display:none}
+  .tcat-empty{padding:9px 0;color:var(--ink2);font-size:12px}
+  .cat-editor{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;font-size:13px}
+  .cat-editor:last-child{border-bottom:0}
+  .cat-editor .cn{font-weight:600;min-width:110px}
+  .cat-editor input[type=text]{flex:1;min-width:180px}
+  .cat-badge{font-size:10.5px;padding:1px 7px;border-radius:20px;background:var(--chip);color:var(--brand);border:1px solid var(--line)}
   .tbl{width:100%;border-collapse:collapse}
   .tbl td{padding:7px 16px 7px 0;border-bottom:1px solid #f1f5f9;vertical-align:middle}
   .tbl tr:last-child td{border-bottom:0}
@@ -579,6 +597,7 @@
       <div class="src-tabs" style="display:flex;gap:8px;margin:10px 0" data-page-node-id="pwD67GCun29gYxexCkudSl">
       <button class="src-tab active" data-sub="source" onclick="switchTorr('source')" data-i18n="torrSource" data-page-node-id="yTg1XRRsQEK62eceR108V0">📚 种子源</button>
       <button class="src-tab" data-sub="running" onclick="switchTorr('running')" data-i18n="torrRunning" data-page-node-id="LIIuHHFOBoYD9kC2Vx6ojX">⏳ 下载中</button>
+      <button class="src-tab" data-sub="cat" onclick="switchTorr('cat')" data-i18n="torrCatTab" data-page-node-id="l7QmSfP6tqvKbIlvFYAeQu">🏷️ 分类管理</button>
     </div>
     <div id="torr-source" data-page-node-id="RUnRdBzYfN3z9hVDxtwfqU">
       <div class="card" data-page-node-id="8SmJ6hc5J166SHyKdbzl1N">
@@ -604,7 +623,29 @@
       </div>
       <div class="card" data-page-node-id="sXxDsFofQUVHIE0LHhkL4k">
         <div class="card-head" data-page-node-id="kkw4dgvIz8VkJeyxgDoDkk"><span class="g-name" data-i18n="torrList" data-page-node-id="6ac7Fx73VUMpx8j7Qn5Tnx">📚 官方种子列表</span><span class="chip" id="torr-count" data-page-node-id="FAjyYfB7GT65foGFHrkyM3">0</span><span class="muted" style="font-size:11px" data-page-node-id="JvRlAjuxNcY76ZGXZNIkL8">DistroWatch</span></div>
+        <div style="padding:10px 16px 0" data-page-node-id="f3VqLxTn8yWzJrPdKmBcAe">
+          <input id="torr-search" class="inp" style="width:100%" placeholder="搜索种子标题…" data-i18n="torrSearchPh" oninput="torrSearchInput()" data-page-node-id="oQ1dRbVnHXsKmpUwEGzYcT">
+        </div>
         <div id="torr-list" style="padding:10px 16px" data-page-node-id="7amNyAPFopS9tszYmA4m73"></div>
+      </div>
+    </div>
+    <div id="torr-cat" style="display:none" data-page-node-id="vBqNwTe5mZRxKsYdJLPfHo">
+      <div class="card" data-page-node-id="RtYwZsQm4KxVbNpLeHdAgU">
+        <div class="card-head" data-page-node-id="hKwLpMnQzTxVbRdYeSfJcA"><span class="g-name" data-i18n="torrCatTitle" data-page-node-id="aQmZnWvTxLbKsRdYeHpUcJ">🏷️ 种子分类</span><span class="chip" id="torr-cat-count" data-page-node-id="bRnZmVwTxLbKsQdYeHpUcK">0</span></div>
+        <div style="padding:14px 16px;display:flex;flex-direction:column;gap:12px" data-page-node-id="cSmAnWvTxLbKsRdYeHpUcL">
+          <label class="sw" data-page-node-id="dTnBmWvTxLbKsRdYeHpUcM"><input type="checkbox" id="cat-show-empty" data-page-node-id="eUoClWvTxLbKsRdYeHpUcN"><span data-i18n="torrCatShowEmpty" data-page-node-id="fVpDkWvTxLbKsRdYeHpUcO">显示空分类（默认隐藏没有条目的分类）</span></label>
+          <div class="hint" data-i18n="torrCatHint" data-page-node-id="gWqElWvTxLbKsRdYeHpUcP">关键词按「词首」匹配（填 <code>ubuntu</code> 即可覆盖 ubuntukylin 等派生版）；排除词按「完整词」匹配。预置分类只能禁用，不能删除。</div>
+          <div id="torr-cat-preset" data-page-node-id="hXrFmWvTxLbKsRdYeHpUcQ"></div>
+          <div data-page-node-id="iYsGnWvTxLbKsRdYeHpUcR">
+            <div style="font-weight:700;font-size:13px;margin-bottom:4px" data-i18n="torrCatUserTitle" data-page-node-id="jZtHoWvTxLbKsRdYeHpUcS">我的分类</div>
+            <div id="torr-cat-user" data-page-node-id="kAuIpWvTxLbKsRdYeHpUcT"></div>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap" data-page-node-id="lBvJqWvTxLbKsRdYeHpUcU">
+              <button class="btn-s" onclick="addUserCat()" data-i18n="torrCatAdd" data-page-node-id="mCwKrWvTxLbKsRdYeHpUcV">➕ 新增分类</button>
+              <button class="btn-p" onclick="saveTorrCats()" data-i18n="torrCatSave" data-page-node-id="nDxLsWvTxLbKsRdYeHpUcW">💾 保存分类设置</button>
+              <span class="muted" style="font-size:11.5px" data-i18n="torrCatSaveHint" data-page-node-id="oEyMtWvTxLbKsRdYeHpUcX">保存后回到「种子源」页会自动重排（不重新抓外网）</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <div id="torr-running" style="display:none" data-page-node-id="jpR1UAHaNx3ZFCyyPpYssS">
@@ -622,8 +663,11 @@
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
-const APP_VERSION='1.3.12';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.3.12';
+// 种子分类的内存态。声明放最上方: applyLang() 在初始化早期就会用到它们,
+// 若声明在文件后半段会踩 let 的暂时性死区(TDZ) ReferenceError。
+let LAST_TORRENT_ITEMS=[], LAST_CLASSIFY=null, CATS_CFG=null;
+const APP_VERSION='1.3.13';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.3.13';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -951,6 +995,28 @@ const I18N={
   'torrName':{zh:'名称',en:'Name'},
   'torrSize':{zh:'大小',en:'Size'},
   'torrLinkEmpty':{zh:'暂无手动添加的链接',en:'No manual links yet'},
+  'torrCatTab':{zh:'🏷️ 分类管理',en:'🏷️ Categories'},
+  'torrCatTitle':{zh:'🏷️ 种子分类',en:'🏷️ Torrent Categories'},
+  'torrCatPresetTitle':{zh:'预置分类（只能禁用，不能删除）',en:'Built-in categories (disable only)'},
+  'torrCatUserTitle':{zh:'我的分类',en:'My categories'},
+  'torrCatShowEmpty':{zh:'显示空分类（默认隐藏没有条目的分类）',en:'Show empty categories (hidden by default)'},
+  'torrCatHint':{zh:'关键词按「词首」匹配（填 ubuntu 即可覆盖 ubuntukylin 等派生版）；排除词按「完整词」匹配。',en:'Keywords match at word start (ubuntu covers ubuntukylin); excludes match whole words.'},
+  'torrCatAdd':{zh:'➕ 新增分类',en:'➕ Add category'},
+  'torrCatSave':{zh:'💾 保存分类设置',en:'💾 Save'},
+  'torrCatSaveHint':{zh:'保存后回到「种子源」页会自动重排（不重新抓外网）',en:'Back on the sources tab the list re-groups without re-fetching'},
+  'torrCatNamePh':{zh:'分类名',en:'Name'},
+  'torrCatKeywordPh':{zh:'关键词, 逗号分隔',en:'keywords, comma separated'},
+  'torrCatExcludePh':{zh:'排除词(可选)',en:'exclude (optional)'},
+  'torrCatEnabled':{zh:'启用',en:'Enabled'},
+  'torrCatSaved':{zh:'分类设置已保存',en:'Category settings saved'},
+  'torrCatSaveFail':{zh:'保存失败',en:'Save failed'},
+  'torrCatNoUser':{zh:'还没有自定义分类',en:'No custom categories yet'},
+  'torrSearchPh':{zh:'搜索种子标题…',en:'Search torrent titles…'},
+  'torrNoMatch':{zh:'没有匹配的条目',en:'No matching entries'},
+  'torrUncatExport':{zh:'导出前 20 条',en:'Export top 20'},
+  'torrUncatExported':{zh:'未分类前 20 条已复制到剪贴板',en:'Top 20 uncategorized copied'},
+  'torrUncatExportFail':{zh:'复制失败，已改为下载文件',en:'Copy failed, downloaded as file'},
+  'torrClassifyFail':{zh:'分类失败，已回退为平铺列表',en:'Grouping failed, showing flat list'},
 };
 let LANG_PREF=localStorage.getItem('iso_hub_lang')||'auto'; // 'zh'|'en'|'auto'
 function detectLang(){return (navigator.language||'zh').toLowerCase().startsWith('zh')?'zh':'en'}
@@ -967,7 +1033,13 @@ function applyLang(){
   ['zh','en','auto'].forEach(p=>{const b=document.getElementById('lang-'+p);if(b)b.classList.toggle('on',LANG_PREF===p)});
   document.querySelectorAll('[data-i18n]').forEach(el=>{
     const k=el.dataset.i18n;const v=t(k);
-    if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'){if(el.dataset.i18nPh!==undefined)el.placeholder=v;else el.value=v}
+    if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'){
+      // 带 placeholder 的输入框, i18n 的目标是**占位提示**而不是值。
+      // 修正: 原实现只认 data-i18n-ph, 而全项目没有一个元素用它 —— 于是
+      // 切语言时把提示文案灌进了 value(种子 URL/RSS/搜索框都会被填脏)。
+      if(el.dataset.i18nPh!==undefined||el.hasAttribute('placeholder'))el.placeholder=v;
+      else el.value=v;
+    }
     else if(el.querySelector('input,button,select,textarea')){
       // 含表单控件(如 <label>用户名 <input></label>)时, 仅替换首个文本节点, 保留 innerHTML 里的 input/button
       const t0=el.firstChild;
@@ -985,6 +1057,10 @@ function applyLang(){
   if(typeof refreshSelState==='function')refreshSelState();
   if(typeof loadDistros==='function')loadDistros({silent:true});
   if(typeof loadSubs==='function')loadSubs();
+  // 种子分类名来自后端下发(双语), 切语言必须重渲染。
+  // 折叠状态不受影响 —— 因为 fold_key 里不含任何本地化文本, 这正是后端下发 key 的收益。
+  if(typeof renderTorrGroups==='function'&&LAST_CLASSIFY)renderTorrGroups(LAST_CLASSIFY);
+  if(typeof renderTorrCats==='function'&&CATS_CFG)renderTorrCats();
 }
 
 let TOKEN=localStorage.getItem('iso_hub_token')||'';
@@ -1470,12 +1546,14 @@ function switchTorr(sub){
   document.querySelectorAll('#panel-torrent .src-tab').forEach(b=>b.classList.toggle('active',b.dataset.sub===sub));
   document.getElementById('torr-source').style.display=sub==='source'?'':'none';
   document.getElementById('torr-running').style.display=sub==='running'?'':'none';
+  const cp=document.getElementById('torr-cat'); if(cp)cp.style.display=sub==='cat'?'':'none';
   // 切到「下载中」子页时开启自动刷新；切走则停止
   clearInterval(TORR_POLL);
   if(sub==='running'){
     loadTorrentInfo();
     TORR_POLL=setInterval(loadTorrentInfo,2000);
   }
+  if(sub==='cat')loadTorrCats();
 }
 async function loadTorrentSources(){
   const r=await jget('/api/torrent/sources');
@@ -1483,9 +1561,11 @@ async function loadTorrentSources(){
   const st=document.getElementById('qb-status'); if(st)st.textContent=(r.ok?'🟢 在线':'⚠ 未连接');
   renderTorrRss(r.user_rss||[]);
   renderTorrLinks(r.user_links||[]);
-  renderTorrItems(r.items||[]);
-  const c=document.getElementById('torr-count'); if(c)c.textContent=(r.items||[]).length;
+  LAST_TORRENT_ITEMS=r.items||[];
+  renderTorrItems(LAST_TORRENT_ITEMS);           // 先平铺(立即有内容), 再异步分组
+  const c=document.getElementById('torr-count'); if(c)c.textContent=LAST_TORRENT_ITEMS.length;
   const rc=document.getElementById('torr-rss-count'); if(rc)rc.textContent=(r.user_rss||[]).length;
+  classifyAndRender();
 }
 function renderTorrRss(list){
   const box=document.getElementById('torr-rss-list'); if(!box)return;
@@ -1500,18 +1580,176 @@ function renderTorrLinks(list){
     :list.map(x=>'<div class="prot-row" style="padding:6px 0"><span class="pn" style="font-size:12px;word-break:break-all;flex:1;min-width:0">'+esc(x.url)+'</span>'
       +'<button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="torrLinkRemove(\''+esc(x.url)+'\')">✖</button></div>').join('');
 }
+/* ---------- 种子分类(后端算, 前端只渲染) ----------
+   要点: 折叠 key 一律用后端下发的 fold_key, 前端不拼任何字符串。
+   这样「计数变化」「切换语言」都不会让折叠状态错乱 —— 首页那套从 DOM 可见文本
+   拼 key 的做法正是历史 bug 的来源, 这里刻意不复用。 */
+const TCAT_FOLD_KEY='iso_hub_tcat_folded';
+// LAST_TORRENT_ITEMS / LAST_CLASSIFY / CATS_CFG 在文件顶部统一声明(避免 TDZ)
+function tcatFoldedSet(){try{return new Set(JSON.parse(localStorage.getItem(TCAT_FOLD_KEY)||'[]'))}catch(e){return new Set()}}
+function saveTcatFolded(set){localStorage.setItem(TCAT_FOLD_KEY,JSON.stringify([...set]))}
+function torrSearchInput(){if(LAST_CLASSIFY)renderTorrGroups(LAST_CLASSIFY)}
+function torrItemRow(it){
+  const title=it.title||String(it.url||'').split('/').pop()||'';
+  return '<div class="prot-row" style="align-items:flex-start"><div style="flex:1;min-width:0">'
+    +'<div class="pn" style="font-size:13px;word-break:break-all">'+esc(title)+'</div>'
+    +(it.pubDate?'<div class="muted" style="font-size:11px">'+esc(it.pubDate)+' · '+esc(it.source||'')+'</div>':'')
+    +'</div>'
+    +'<button class="btn-s" style="padding:4px 12px;font-size:12px" onclick="torrAdd(\''+esc(it.url)+'\',\''+esc((it.title||'').replace(/\.torrent.*$/i,''))+'\')">'+t('torrDownload')+'</button>'
+    +'</div>';
+}
 function renderTorrItems(items){
   const box=document.getElementById('torr-list'); if(!box)return;
   if(!items.length){box.innerHTML='<div class="empty" style="padding:14px 0">'+t('torrEmpty')+'</div>';return;}
-  box.innerHTML=items.map(it=>{
-    const title=it.title||it.url.split('/').pop();
-    return '<div class="prot-row" style="align-items:flex-start"><div style="flex:1;min-width:0">'
-      +'<div class="pn" style="font-size:13px;word-break:break-all">'+esc(title)+'</div>'
-      +(it.pubDate?'<div class="muted" style="font-size:11px">'+esc(it.pubDate)+' · '+esc(it.source||'')+'</div>':'')
+  box.innerHTML=items.map(torrItemRow).join('');
+}
+async function classifyAndRender(){
+  if(!LAST_TORRENT_ITEMS.length){LAST_CLASSIFY=null;return;}
+  const r=await jpost('/api/torrent/classify',{items:LAST_TORRENT_ITEMS});
+  if(r.s!==200||!r.j||!r.j.ok){
+    LAST_CLASSIFY=null;
+    renderTorrItems(LAST_TORRENT_ITEMS);   // 分组失败不能让列表消失
+    toast(t('torrClassifyFail'),'err');
+    return;
+  }
+  if(r.j.warnings&&r.j.warnings.length)toast(r.j.warnings[0].error,'err');
+  LAST_CLASSIFY=r.j;
+  renderTorrGroups(LAST_CLASSIFY);
+}
+function renderTorrGroups(res){
+  const box=document.getElementById('torr-list'); if(!box)return;
+  if(!res||!res.categories){renderTorrItems(LAST_TORRENT_ITEMS);return;}
+  const se=document.getElementById('torr-search');
+  const q=(se&&se.value||'').trim().toLowerCase();
+  const folded=tcatFoldedSet();
+  const showEmpty=!!res.show_empty;
+  let html='';
+  res.categories.forEach(cat=>{
+    const items=q?cat.items.filter(it=>String(it.title||'').toLowerCase().includes(q)):cat.items;
+    if(!items.length&&!showEmpty)return;
+    const isU=cat.id==='__uncategorized__';
+    // fold_key 一律用后端下发的(后端保证每项都带, 见 classify())。
+    // 这里的 || 是兜底: 后端契约若被破坏, 用**稳定 id** 拼也比 undefined 强
+    // —— 后者会让所有分组共用同一个折叠键, 折一个全折。
+    // 严禁改成用 cat.name / DOM 文本拼, 那正是首页 chip|gname 的历史 bug。
+    const foldKey=cat.fold_key||('tcat:'+cat.id);
+    const isFolded=folded.has(foldKey);
+    const name=cat.name?(cat.name[LANG]||cat.name.zh||cat.name.en||cat.id):cat.id;
+    html+='<div class="tcat" data-cat="'+esc(cat.id)+'">'
+      +'<div class="tcat-head" data-fold-key="'+esc(foldKey)+'" onclick="toggleTcat(this)">'
+        +'<span class="tcat-arrow">'+(isFolded?'▸':'▾')+'</span>'
+        +'<span class="tcat-name">'+esc(name)+'</span>'
+        +'<span class="tcat-count">'+items.length+'</span>'
+        +(isU&&items.length?'<span class="tcat-tools"><button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="event.stopPropagation();torrExportUncat()">'+t('torrUncatExport')+'</button></span>':'')
       +'</div>'
-      +'<button class="btn-s" style="padding:4px 12px;font-size:12px" onclick="torrAdd(\''+esc(it.url)+'\',\''+esc((it.title||'').replace(/\.torrent.*$/i,''))+'\')">'+t('torrDownload')+'</button>'
-      +'</div>';
-  }).join('');
+      +'<div class="tcat-body'+(isFolded?' hidden':'')+'">'
+        +(items.length?items.map(torrItemRow).join(''):'<div class="tcat-empty">'+t('torrNoMatch')+'</div>')
+      +'</div></div>';
+  });
+  box.innerHTML=html||('<div class="empty" style="padding:14px 0">'+t('torrNoMatch')+'</div>');
+}
+function toggleTcat(head){
+  const key=head.dataset.foldKey; if(!key)return;
+  const body=head.parentElement.querySelector('.tcat-body'); if(!body)return;
+  const arrow=head.querySelector('.tcat-arrow');
+  const hidden=body.classList.toggle('hidden');
+  if(arrow)arrow.textContent=hidden?'▸':'▾';
+  const set=tcatFoldedSet();
+  if(hidden)set.add(key);else set.delete(key);
+  saveTcatFolded(set);
+}
+/* 未分类导出: 二期做标题归一化调优的唯一数据来源, 必须一期就有。
+   纯前端(内存里已有 items), 不需要新接口。 */
+function torrExportUncat(){
+  const cats=(LAST_CLASSIFY&&LAST_CLASSIFY.categories)||[];
+  const cat=cats.find(c=>c.id==='__uncategorized__');
+  const titles=(cat?cat.items:[]).slice(0,20).map(it=>it.title||it.url||'').filter(Boolean);
+  if(!titles.length)return;
+  const text=titles.join('\n');
+  const fallback=()=>{
+    try{
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));
+      a.download='uncategorized-torrents.txt';
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+      toast(t('torrUncatExportFail'));
+    }catch(e){toast(t('torrUncatExportFail'),'err')}
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>toast(t('torrUncatExported'))).catch(fallback);
+  }else{fallback()}
+}
+/* ---------- 分类管理(种子面板 → 分类管理) ---------- */
+function catWords(v){return String(v||'').split(/[,，]/).map(s=>s.trim()).filter(Boolean)}
+async function loadTorrCats(){
+  const r=await jget('/api/torrent/categories');
+  if(!r.ok){toast(r.error||'load failed','err');return}
+  CATS_CFG=r;
+  renderTorrCats();
+}
+function renderTorrCats(){
+  if(!CATS_CFG)return;
+  const se=document.getElementById('cat-show-empty'); if(se)se.checked=!!CATS_CFG.show_empty;
+  const preset=(CATS_CFG.categories||[]).filter(c=>c.builtin&&c.id!=='__uncategorized__');
+  const pBox=document.getElementById('torr-cat-preset');
+  if(pBox)pBox.innerHTML='<div style="font-weight:700;font-size:13px;margin-bottom:4px">'+esc(t('torrCatPresetTitle'))+'</div>'
+    +preset.map(c=>{
+      const nm=c.name?(c.name[LANG]||c.name.zh||c.id):c.id;
+      return '<div class="cat-editor" data-preset="'+esc(c.id)+'">'
+        +'<label style="display:flex;align-items:center;gap:6px;min-width:130px"><input type="checkbox" class="cat-en" title="'+esc(t('torrCatEnabled'))+'" '+(c.enabled!==false?'checked':'')+'><span class="cn">'+esc(nm)+'</span></label>'
+        +'<input type="text" class="inp cat-kw" title="'+esc(t('torrCatKeywordPh'))+'" value="'+esc((c.keywords||[]).join(', '))+'">'
+        +'<input type="text" class="inp cat-ex" style="flex:0 0 180px" title="'+esc(t('torrCatExcludePh'))+'" value="'+esc((c.exclude||[]).join(', '))+'">'
+        +'</div>';
+    }).join('');
+  const list=CATS_CFG.user_categories||[];
+  const uBox=document.getElementById('torr-cat-user');
+  if(uBox)uBox.innerHTML=list.length?list.map((c,i)=>
+      '<div class="cat-editor" data-i="'+i+'">'
+      +'<input type="text" class="inp cat-uname" style="flex:0 0 150px" title="'+esc(t('torrCatNamePh'))+'" value="'+esc((c.name&&(c.name[LANG]||c.name.zh))||'')+'">'
+      +'<input type="text" class="inp cat-ukw" title="'+esc(t('torrCatKeywordPh'))+'" value="'+esc((c.keywords||[]).join(', '))+'">'
+      +'<input type="text" class="inp cat-uex" style="flex:0 0 150px" title="'+esc(t('torrCatExcludePh'))+'" value="'+esc((c.exclude||[]).join(', '))+'">'
+      +'<button class="btn-s" onclick="delUserCat('+i+')">✖</button>'
+      +'</div>').join('')
+    :('<div class="muted" style="font-size:12px;padding:6px 0">'+esc(t('torrCatNoUser'))+'</div>');
+  const cc=document.getElementById('torr-cat-count');
+  if(cc)cc.textContent=preset.length+list.length;
+}
+function collectTorrCats(){
+  const se=document.getElementById('cat-show-empty');
+  const doc={show_empty:!!(se&&se.checked),user_categories:[],overrides:{}};
+  document.querySelectorAll('#torr-cat-preset .cat-editor').forEach(el=>{
+    const kw=el.querySelector('.cat-kw'), ex=el.querySelector('.cat-ex'), en=el.querySelector('.cat-en');
+    doc.overrides[el.dataset.preset]={enabled:!!(en&&en.checked),
+      keywords:catWords(kw&&kw.value), exclude:catWords(ex&&ex.value)};
+  });
+  document.querySelectorAll('#torr-cat-user .cat-editor').forEach(el=>{
+    const i=+el.dataset.i, src=((CATS_CFG&&CATS_CFG.user_categories)||[])[i]||{};
+    const nm=el.querySelector('.cat-uname'), kw=el.querySelector('.cat-ukw'), ex=el.querySelector('.cat-uex');
+    const name=(nm&&nm.value.trim())||'未命名';
+    doc.user_categories.push({id:src.id,name:{zh:name,en:name},
+      keywords:catWords(kw&&kw.value),exclude:catWords(ex&&ex.value),
+      enabled:src.enabled!==false,order:src.order||100});
+  });
+  return doc;
+}
+function addUserCat(){
+  const draft=collectTorrCats();
+  const rnd=(window.crypto&&crypto.getRandomValues)?Array.from(crypto.getRandomValues(new Uint8Array(3))).map(b=>b.toString(16).padStart(2,'0')).join(''):Math.random().toString(16).slice(2,8);
+  draft.user_categories.push({id:'user_'+rnd,name:{zh:'新分类',en:'New'},keywords:[],exclude:[],enabled:true,order:100});
+  CATS_CFG=draft; renderTorrCats();
+}
+function delUserCat(i){
+  const draft=collectTorrCats();
+  draft.user_categories.splice(i,1);
+  CATS_CFG=draft; renderTorrCats();
+}
+async function saveTorrCats(){
+  const doc=collectTorrCats();
+  const r=await jpost('/api/torrent/categories',doc);
+  if(r.s!==200||!r.j||!r.j.ok){toast((r.j&&r.j.error)||t('torrCatSaveFail'),'err');return}
+  CATS_CFG=r.j; renderTorrCats(); toast(t('torrCatSaved'));
+  if(LAST_TORRENT_ITEMS.length)classifyAndRender();   // 用内存 items 立刻重排, 不重抓外网
 }
 async function loadTorrentInfo(){
   const st=document.getElementById('qb-status'); const r=await jget('/api/torrent/info');

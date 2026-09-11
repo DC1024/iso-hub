@@ -78,5 +78,29 @@
     "replace": "except ValueError:  # MUTANT: OSError 不再被吞, import 恢复为致命",
     "expect_test": "tests/test_gpg_ledger.py",
     "desc": "C:\\\\data 教训回退: 数据目录不可写再次炸掉 import(CI 环境全红)"
+  },
+  {
+    "id": "tcat-unc-not-last",
+    "file": "web/torrent_categories.py",
+    "find": "UNC_ORDER = 10 ** 6",
+    "replace": "UNC_ORDER = 0  # MUTANT: 未分类不再固定排最后",
+    "expect_test": "tests/test_torrent_categories.py",
+    "desc": "未分类的 order 从最大变成最小 -> 从「恒在最后」变成排最前, 用户最先看到的变成垃圾堆"
+  },
+  {
+    "id": "tcat-user-config-ignored",
+    "file": "web/torrent_categories.py",
+    "find": "    user = _read_json(USER_JSON, {}, report, \"user\")",
+    "replace": "    user = {}  # MUTANT: 完全不读用户配置",
+    "expect_test": "tests/test_torrent_categories.py",
+    "desc": "等价于把用户配置缓存死: 在设置页改规则(禁用分类/加关键词)后永远不生效"
+  },
+  {
+    "id": "tcat-keyword-whole-word",
+    "file": "web/torrent_categories.py",
+    "find": "        if re.search(r\"(?<![a-z0-9])\" + re.escape(w), text):",
+    "replace": "        if re.search(r\"(?<![a-z0-9])\" + re.escape(w) + r\"(?![a-z0-9])\", text):  # MUTANT: 关键词退化为整词匹配",
+    "expect_test": "tests/test_torrent_categories.py",
+    "desc": "实测踩过的坑回退: 关键词改成整词匹配后 ubuntukylin/ubuntucinnamon/ubuntustudio 全部掉进未分类, Ubuntu 家族被拆散"
   }
 ]

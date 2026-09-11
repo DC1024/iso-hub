@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "_comment": "预置种子分类(随镜像分发)。运行期路径 = REPO_DIR/torrent_categories.json, 只读, 不要手改(改用户配置见 DATA_DIR/torrent_categories.json)。关键词按 DistroWatch 现网标题校准过, 新增前请先对拍真实数据。",
+  "categories": [
+    {
+      "id": "ubuntu",
+      "name": { "zh": "Ubuntu", "en": "Ubuntu" },
+      "builtin": true,
+      "enabled": true,
+      "keywords": ["ubuntu", "kubuntu", "xubuntu", "lubuntu", "edubuntu", "tuxedo"],
+      "exclude": ["cloudimg", "src", "source"],
+      "order": 10
+    },
+    {
+      "id": "fedora",
+      "name": { "zh": "Fedora", "en": "Fedora" },
+      "builtin": true,
+      "enabled": true,
+      "keywords": ["fedora"],
+      "exclude": ["src", "source", "rawhide-nightly"],
+      "order": 20
+    },
+    {
+      "id": "arch",
+      "name": { "zh": "Arch", "en": "Arch" },
+      "builtin": true,
+      "enabled": true,
+      "keywords": ["archlinux", "arch-linux", "endeavouros", "manjaro", "garuda", "artix"],
+      "exclude": [],
+      "order": 30
+    },
+    {
+      "id": "debian",
+      "name": { "zh": "Debian", "en": "Debian" },
+      "builtin": true,
+      "enabled": true,
+      "keywords": ["debian", "butterbian", "trixie", "bookworm", "bullseye", "devuan"],
+      "exclude": ["src", "source"],
+      "order": 40
+    },
+    {
+      "id": "proxmox",
+      "name": { "zh": "Proxmox", "en": "Proxmox" },
+      "builtin": true,
+      "enabled": true,
+      "keywords": ["proxmox", "proxmox-ve", "pve"],
+      "exclude": [],
+      "order": 50
+    },
+    {
+      "id": "tools",
+      "name": { "zh": "维护工具盘", "en": "Maintenance Tools" },
+      "builtin": true,
+      "enabled": true,
+      "keywords": ["clonezilla", "rescuezilla", "gparted", "systemrescue", "hirens", "memtest", "parted-magic"],
+      "exclude": [],
+      "order": 60
+    }
+  ]
+}

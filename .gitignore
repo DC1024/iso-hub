@@ -30,3 +30,6 @@ Thumbs.db
 # agentic 工作概述 / QA 验证报告: 含本地绝对路径, 对使用者无价值
 overview.md
 QA_REPORT_*.md
+# 本机跑测试时的 ISO_DATA_DIR 落地目录(测试会往里写 gpg_ledger.json 等),
+# 之前漏了这条 —— 跑一次测试就会多出一个待提交的空目录
+.tmp-data/
