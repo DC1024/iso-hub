@@ -21,6 +21,10 @@ permissions:
 jobs:
   mutate:
     runs-on: ubuntu-latest
+    # 变异体守卫测试 import web.app, 而 app.py import 时会 mkdir /data
+    # (runner 不可写) —— 必须重定向到临时目录, 同 test.yml。
+    env:
+      ISO_DATA_DIR: ${{ runner.temp }}/iso-hub-data
     steps:
       - name: Checkout
         uses: actions/checkout@v4

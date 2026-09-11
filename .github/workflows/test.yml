@@ -26,6 +26,11 @@ jobs:
   unit-tests:
     name: Unit tests (unittest discover)
     runs-on: ubuntu-latest
+    # 关键: web/app.py 在 import 时会 mkdir ISO_DATA_DIR(默认 /data),
+    # runner 的 / 不可写 -> 直接 import web.app 的 7 个测试模块全部 ImportError。
+    # 指到 runner 可写的临时目录(容器里仍是 /data 卷, 不影响生产行为)。
+    env:
+      ISO_DATA_DIR: ${{ runner.temp }}/iso-hub-data
     steps:
       - name: Checkout
         uses: actions/checkout@v4
