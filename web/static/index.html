@@ -271,6 +271,7 @@
       <button class="btn-s" id="btnSel" onclick="toggleAll()" data-i18n="selectAll" data-page-node-id="OT41xsc1FwPp6Gd3KrfACz">☑ 全选</button>
       <button class="btn-p" id="btnDown" onclick="downloadSel()" data-i18n="downloadSel" data-page-node-id="7FVROiyELUnV665bFgNNjF">⬇ 下载所选</button>
       <button class="btn-d" id="btnDel" onclick="deleteSel()" data-i18n="deleteSel" data-page-node-id="uLHauqdS39MIuquGOYE7nm">🗑 删除所选</button>
+      <button class="btn-s" id="btnDlLocal" onclick="downloadLocalSel()" data-i18n="dlLocalSel" data-page-node-id="dl10ca1se1ect0">⬇ 下载到本机</button>
       <button class="btn-s" id="btnMeta" onclick="updateMeta()" data-i18n="fetchMeta" data-page-node-id="qijJX1kzDbLpYA9pKClBCO">⤓ 抓取最新版本元数据</button>
       <button class="btn-s" id="btnSync" onclick="syncSubs()" data-i18n="syncNow" data-page-node-id="mc6mlHA3GbqWRcPB5Y5TuM">🔄 订阅同步</button>
       <button class="btn-d" id="btnStop" onclick="stopTask()" disabled data-i18n="stopTask" data-page-node-id="97m2QOnbeOJBTysDJxwfAN">■ 停止任务</button>
@@ -666,8 +667,8 @@ let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
 // 种子分类的内存态。声明放最上方: applyLang() 在初始化早期就会用到它们,
 // 若声明在文件后半段会踩 let 的暂时性死区(TDZ) ReferenceError。
 let LAST_TORRENT_ITEMS=[], LAST_CLASSIFY=null, CATS_CFG=null;
-const APP_VERSION='1.3.13';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.3.13';
+const APP_VERSION='1.3.14';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.3.14';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -739,6 +740,12 @@ const I18N={
   'deletedFmt':{zh:'已删除 {n} 个文件',en:'Deleted {n} file(s)'},
   'delNothingRemoved':{zh:'没有删除任何文件，请查看下方原因',en:'Nothing was deleted. See the reason below.'},
   'delNotFound':{zh:'文件不存在',en:'File not found'},
+  'dlLocalSel':{zh:'⬇ 下载到本机',en:'⬇ Download to local'},
+  'dlToLocal':{zh:'下载到本机（把服务器上的文件拉到你打开面板的这台电脑）',en:'Download to this computer (pull the file from the server)'},
+  'dlStarted':{zh:'已开始下载',en:'Download started:'},
+  'dlTicketFail':{zh:'获取下载链接失败，请刷新后重试',en:'Could not get a download link. Refresh and try again.'},
+  'dlNothingLocal':{zh:'所选项目中没有可下载到本机的文件',en:'None of the selected items can be downloaded to this computer'},
+  'dlMultiConfirm':{zh:'个文件将同时下载 — 浏览器可能提示「允许下载多个文件」。继续？',en:'files will download at once — the browser may ask to allow multiple downloads. Continue?'},
   'skipped':{zh:'跳过',en:'skipped'},
   'andMore':{zh:'还有',en:'and'},
   'favGroup':{zh:'收藏',en:'Favorite'},
@@ -1173,7 +1180,7 @@ function render(d){
       const sizeCell=shownSize>0
         ?(t('local')+' '+fmt(shownSize)+((isStop||isRun)?' <span class="muted">('+t('dlPartialSize')+')</span>':''))
         :'<span class="muted">—</span>';
-      rows+=`<tr data-url="${esc(e.download_url)}" data-rel="${esc(g.type)}/${esc(g.name)}/${esc(e.filename)}" data-status="${S}">
+      rows+=`<tr data-url="${esc(e.download_url)}" data-rel="${esc(e.rel||(g.type+'/'+g.name+'/'+e.filename))}" data-status="${S}">
         <td><input type="checkbox" class="ck" data-url="${esc(e.download_url)}"></td>
         <td><span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${dot}</span></td>
         <td><div class="fname">${esc(e.filename)}<a target="_blank" rel="noopener" href="${esc(e.download_url)}" title="${t('openUrl')}">↗</a></div></td>
@@ -1181,7 +1188,7 @@ function render(d){
         <td class="src-cell">${srcSelHtml(e)}</td>
         <td class="td-r"><span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${label}</span></td>
         <td class="td-r"><button class="btn-lock ${isProtected(e.filename)?'on':''}" onclick="toggleProtect('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${isProtected(e.filename)?t('unlock'):t('lock')}">${isProtected(e.filename)?'🔒':'🔓'}</button></td>
-        <td class="td-r">${(isOk||isStop||isFail||isRun)?`<button class="btn-d btn-rowdel" onclick="deleteOne('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('deleteOne')}">🗑</button>`:''}</td>
+        <td class="td-r">${e.downloadable?`<button class="btn-s btn-rowdel" onclick="dlFile('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('dlToLocal')}">⬇</button> `:''}${(isOk||isStop||isFail||isRun)?`<button class="btn-d btn-rowdel" onclick="deleteOne('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('deleteOne')}">🗑</button>`:''}</td>
       </tr>`;
     });
     let strayHtml='';
@@ -1189,7 +1196,7 @@ function render(d){
       strayHtml=stray.map(f=>`<tr class="stray"><td></td><td>!</td>
         <td><div class="fname" title="${esc(t('notDownloaded'))}">${esc(f.name)}</div></td>
         <td class="size">${fmt(f.size)}</td>
-        <td class="td-r"><span class="badge old">${t('stale')}</span></td></tr>`).join('');
+        <td class="td-r"><span class="badge old">${t('stale')}</span> <button class="btn-s btn-rowdel" onclick="dlFile('${esc(g.type)}','${esc(g.name)}','${esc(f.name)}',this)" title="${t('dlToLocal')}">⬇</button></td></tr>`).join('');
       strayHtml+=`<tr class="stray"><td></td><td></td>
         <td colspan="3"><div class="foot-hint">⚠ ${stray.length} ${t('dirtyHint')}
         <button class="btn-d" onclick="prune('${esc(g.name)}','${esc(g.type)}')">🗑 ${t('cleanStale')} (${stray.length})</button></div></td></tr>`;
@@ -1325,6 +1332,47 @@ async function deleteOne(type,name,filename,btn){
   loadDistros({silent:true});
 }
 async function stopTask(){await jpost('/api/stop')}
+
+/* ---------- 下载到本机(HTTP 直下) ----------
+   为什么不直接把链接指到文件: 会话 token 走 X-Auth-Token **请求头**, 而浏览器点链接
+   下载是顶层导航, 带不上自定义头 → 直接指过去会 401。把会话 token 塞进 URL 更糟(7 天
+   有效的凭据会留在浏览器历史里)。所以: 先用**带头的 POST** 换一张短时票据(只对应单个
+   文件、限时), 再用票据 URL 触发下载, 由票据自证身份。 */
+async function dlFile(type,name,filename){
+  const r=await jpost('/api/files/ticket',{items:[{type,distribution:name,filename}]});
+  const tk=r.j&&r.j.tickets&&r.j.tickets[0];
+  if(r.s!==200||!tk){
+    const why=(r.j&&r.j.skipped&&r.j.skipped[0])||(r.j&&r.j.error)||t('dlTicketFail');
+    return toast(why,'err');
+  }
+  triggerDownload(tk.url);
+  toast(t('dlStarted')+' '+filename);
+}
+/* 用临时 <a> 触发下载, 而不是 location.href —— 万一响应不是 attachment 而能被渲染
+   (比如将来放开 html), location.href 会把整个面板导航走。 */
+function triggerDownload(url){
+  const a=document.createElement('a');
+  a.href=url;a.rel='noopener';
+  document.body.appendChild(a);a.click();a.remove();
+}
+/* 下载所选: 只处理「后端标记为可下载」的项, 未下载的选中项自动忽略(与删除所选同构)。 */
+async function downloadLocalSel(){
+  const cks=[...document.querySelectorAll('.ck:checked')];
+  if(!cks.length)return toast(t('pleaseSel'),'err');
+  const map=new Map();
+  GROUPS.forEach(g=>g.entries.forEach(e=>map.set(e.download_url,e)));
+  const items=cks.map(c=>{const e=map.get(c.dataset.url);
+    return (e&&e.downloadable)?{type:e.type,distribution:e.distribution,filename:e.filename}:null;
+  }).filter(Boolean);
+  if(!items.length)return toast(t('dlNothingLocal'),'err');
+  if(items.length>1&&!confirm(`${items.length} ${t('dlMultiConfirm')}`))return;
+  const r=await jpost('/api/files/ticket',{items});
+  const tks=(r.j&&r.j.tickets)||[];
+  if(r.s!==200||!tks.length)return toast((r.j&&r.j.error)||t('dlTicketFail'),'err');
+  // 逐个错开触发: 浏览器对"同一时刻发起多个下载"会拦截, 拉开间隔可减少误拦
+  tks.forEach((tk,i)=>setTimeout(()=>triggerDownload(tk.url),i*400));
+  toast(t('dlStarted')+' '+tks.length+' '+t('files'));
+}
 
 /* ---------- 任务轮询 ---------- */
 function startPoll(force){

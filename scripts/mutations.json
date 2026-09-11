@@ -102,5 +102,61 @@
     "replace": "        if re.search(r\"(?<![a-z0-9])\" + re.escape(w) + r\"(?![a-z0-9])\", text):  # MUTANT: 关键词退化为整词匹配",
     "expect_test": "tests/test_torrent_categories.py",
     "desc": "实测踩过的坑回退: 关键词改成整词匹配后 ubuntukylin/ubuntucinnamon/ubuntustudio 全部掉进未分类, Ubuntu 家族被拆散"
+  },
+  {
+    "id": "dl-safe-join-removed",
+    "file": "web/app.py",
+    "find": "    target = _safe_join(typ, name)\n    if target is None:\n        return None\n",
+    "replace": "    target = DATA_DIR / str(typ) / str(name)  # MUTANT: 去掉白名单与穿越校验\n",
+    "expect_test": "tests/test_local_download.py",
+    "desc": "下载路径解析不再走 _safe_join(type 白名单 + 拒绝 ..) -> 可用 distribution=.. 穿越到 DATA_DIR 根部"
+  },
+  {
+    "id": "dl-part-guard-removed",
+    "file": "web/app.py",
+    "find": "    if _partial_base_name(fname):\n        return None\n",
+    "replace": "    if False:  # MUTANT: 不再拒绝半成品名\n        return None\n",
+    "expect_test": "tests/test_local_download.py",
+    "desc": "不再拒绝 .part/.aria2/.!qB/.tmp 半成品名 -> 未完成的字节也会被下发"
+  },
+  {
+    "id": "dl-ticket-not-validated",
+    "file": "web/app.py",
+    "find": "    if not hit:\n        return jsonify({\"error\": \"下载链接无效或已过期, 请在面板上重新点击下载\"}), 403\n",
+    "replace": "    if False:  # MUTANT: 不再校验票据有效性\n        return jsonify({\"error\": \"下载链接无效或已过期, 请在面板上重新点击下载\"}), 403\n",
+    "expect_test": "tests/test_local_download.py",
+    "desc": "下载路由不再校验票据 -> 任意 token 都能触发下发"
+  },
+  {
+    "id": "dl-ticket-purge-disabled",
+    "file": "web/app.py",
+    "find": "    for k in [k for k, v in _dl_tickets.items() if v[3] <= now]:\n",
+    "replace": "    for k in []:  # MUTANT: 不再清理过期票据\n",
+    "expect_test": "tests/test_local_download.py",
+    "desc": "过期票据不再被清理 -> 票据变成永久有效"
+  },
+  {
+    "id": "dl-nocache-exemption-removed",
+    "file": "web/app.py",
+    "find": "    if request.path.startswith(\"/api/\") and request.path != \"/api/files/get\":\n",
+    "replace": "    if request.path.startswith(\"/api/\"):  # MUTANT: 不再豁免下载路由\n",
+    "expect_test": "tests/test_local_download.py",
+    "desc": "下载响应被套上 no-store -> 浏览器丢弃已下分片, 断点续传失效"
+  },
+  {
+    "id": "dl-auth-allowlist-removed",
+    "file": "web/app.py",
+    "find": "request.path == \"/api/health\" or request.path == \"/api/files/get\"):\n            return None\n        if request.headers.get(\"X-Auth-Token\") == AUTH_TOKEN:\n            return None\n        if _valid_session():\n            return None\n        return jsonify({\"error\": \"unauthorized\"}), 401\n",
+    "replace": "request.path == \"/api/health\"):\n            return None\n        if request.headers.get(\"X-Auth-Token\") == AUTH_TOKEN:\n            return None\n        if _valid_session():\n            return None\n        return jsonify({\"error\": \"unauthorized\"}), 401\n",
+    "expect_test": "tests/test_local_download.py",
+    "desc": "强制登录下不再放行 /api/files/get -> 浏览器导航式下载直接 401(功能失效)"
+  },
+  {
+    "id": "dl-downloadable-always-true",
+    "file": "web/app.py",
+    "find": "        downloadable = any(not f.get(\"partial\") for f in candidates)\n",
+    "replace": "        downloadable = True  # MUTANT: 不再区分半成品\n",
+    "expect_test": "tests/test_local_download.py",
+    "desc": "downloadable 恒为真 -> 只有半成品的条目也会显示下载按钮, 点了必然失败"
   }
 ]

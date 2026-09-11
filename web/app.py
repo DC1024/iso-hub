@@ -34,7 +34,7 @@ import subprocess
 from pathlib import Path
 from collections import deque
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory
 
 try:  # 种子下载集成(qBittorrent + DistroWatch 源) —— 可选加载
     from torrent_client import QBClient, qb_config, distro_name_from_torrent  # noqa: PLC0415
@@ -68,6 +68,12 @@ SHARE_CONTAINERS = {"samba": "iso-hub-samba", "webdav": "iso-hub-webdav"}
 ISO_SUFFIXES = {".iso", ".img", ".qcow2", ".vmdk"}
 # 下载目录类型白名单(路径穿越防护)
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+# 「下载到本机」票据: 会话 token 走 X-Auth-Token 请求头, 而浏览器顶层导航(点链接下载)
+# 带不上自定义头 —— 所以下发文件改用**短时票据**自证身份(见 api_files_ticket)。
+# 票据只对应单个文件、限时有效, 且不进浏览器历史里的长效凭据。
+DL_TICKET_TTL = int(os.environ.get("ISO_HUB_DL_TICKET_TTL", "600"))  # 秒
+DL_TICKET_MAX = 40      # 单次请求最多签发几个(防滥用)
+_dl_tickets: dict = {}  # ticket -> (typ, name, fname, expire_ts)
 
 
 def _is_http_url(url: str) -> bool:
@@ -569,11 +575,18 @@ def build_distros() -> dict:
         candidates = [f for f in files if f["name"] == fname]
         local = max(candidates, key=lambda f: f.get("mtime") or 0) if candidates else None
         status, partial_size = _entry_status(key, fname, local, failures, active_paths)
+        # 「下载到本机」只对**完整**文件开放: 最终名只在下载器校验通过原子改名后才存在,
+        # 半成品名字是 .part, 不会被 inventory 收进这里的 candidates。
+        # 由后端下发这个布尔值(而不是让前端从 local_size/status 猜), 与 fold_key 的约
+        # 定一致: 事实由后端算, 前端只渲染。
+        downloadable = any(not f.get("partial") for f in candidates)
         groups[key]["entries"].append(
             {
                 "distribution": name,
                 "type": typ,
                 "filename": fname,
+                "rel": f"{typ}/{name}/{fname}",
+                "downloadable": downloadable,
                 "download_url": url,
                 "download_urls": e.get("download_urls", []),
                 "checksum_url": e.get("checksum_url", ""),
@@ -1843,13 +1856,18 @@ REQUIRE_LOGIN = os.environ.get("ISO_HUB_REQUIRE_LOGIN", "1").strip().lower() in 
 @app.before_request
 def require_auth():
     """设置 ISO_HUB_TOKEN 后,除页面/静态/健康检查外的所有 API 需携带 X-Auth-Token 或有效登录会话。
-    设置 ISO_HUB_REQUIRE_LOGIN 后, 除登录/自身状态接口外的所有 API 均需登录会话或 X-Auth-Token(强制登录)。"""
+    设置 ISO_HUB_REQUIRE_LOGIN 后, 除登录/自身状态接口外的所有 API 均需登录会话或 X-Auth-Token(强制登录)。
+
+    例外: /api/files/get(下载到本机) 放行 —— 浏览器顶层导航带不上 X-Auth-Token,
+    该路由**自带**短时票据鉴权(票据由 /api/files/ticket 在校验会话后签发),
+    无票/过期票一律 403, 因此放行不等于开公网。
+    """
     # 登录/登出/获取自身状态接口始终放行
     if request.path in ("/api/user/login", "/api/user/me", "/api/user/logout"):
         return None
     if REQUIRE_LOGIN:
         # 强制登录: 页面壳子/静态/健康检查放行(前端靠 /api/user/me 判断是否弹登录遮罩), 其余 API 一律需登录
-        if request.method == "GET" and (request.path == "/" or request.path.startswith("/static/") or request.path == "/api/health"):
+        if request.method == "GET" and (request.path == "/" or request.path.startswith("/static/") or request.path == "/api/health" or request.path == "/api/files/get"):
             return None
         if request.headers.get("X-Auth-Token") == AUTH_TOKEN:
             return None
@@ -1859,7 +1877,7 @@ def require_auth():
     # 原逻辑: 仅设置 ISO_HUB_TOKEN 时拦截写操作 API
     if not AUTH_TOKEN:
         return None
-    if request.method == "GET" and (request.path == "/" or request.path.startswith("/static/") or request.path == "/api/health"):
+    if request.method == "GET" and (request.path == "/" or request.path.startswith("/static/") or request.path == "/api/health" or request.path == "/api/files/get"):
         return None
     if request.headers.get("X-Auth-Token") == AUTH_TOKEN:
         return None
@@ -1871,8 +1889,11 @@ def require_auth():
 
 @app.after_request
 def no_cache_api(resp):
-    """所有 API 响应禁用缓存, 避免前端「刷新列表」拿到浏览器缓存的旧数据而无反应。"""
-    if request.path.startswith("/api/"):
+    """所有 API 响应禁用缓存, 避免前端「刷新列表」拿到浏览器缓存的旧数据而无反应。
+
+    例外: /api/files/get —— 下载大文件必须允许浏览器缓存分片, 否则 Range 续传失效。
+    """
+    if request.path.startswith("/api/") and request.path != "/api/files/get":
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
@@ -2332,6 +2353,119 @@ def _rel_of_file(abs_path: Path, typ: str = "", name: str = "") -> str:
 def api_protected():
     lst = load_protected()
     return jsonify({"protected": lst})
+
+
+# --------------------------------------------------------------------------- 下载到本机
+def _resolve_local_file(typ: str, name: str, fname: str) -> Path | None:
+    """把 (type, distribution, filename) 解析为磁盘上的**完整**文件路径, 非法则 None。
+
+    与删除不同, 这里**不要求文件属于当前清单** —— 种子下载/用户手动放入的 ISO
+    同样应该能拉回本机(它们本就在同一批目录里)。因此安全边界只依赖路径约束:
+
+      * typ 白名单 + 无分隔符 (_safe_join)
+      * fname 非空、不含 / 或 \\、不为 . 或 ..
+      * fname 不得是半成品名(.part/.aria2/.!qB/.tmp) —— 那是未完成的字节,
+        而"最终名"只在下载器校验通过原子改名后才出现
+      * resolve() 后必须仍在目标目录内 —— 兜住 symlink 指向外部的场景
+    """
+    if not fname or "/" in fname or "\\" in fname or fname in (".", ".."):
+        return None
+    if _partial_base_name(fname):
+        return None
+    target = _safe_join(typ, name)
+    if target is None:
+        return None
+    fp = target / fname
+    try:
+        fp.resolve().relative_to(target.resolve())
+    except ValueError:
+        return None
+    return fp if fp.is_file() else None
+
+
+def _dl_tickets_purge() -> None:
+    """清理过期票据。每次都清一遍 —— 票据量极小, 不需要定时器。"""
+    now = time.time()
+    for k in [k for k, v in _dl_tickets.items() if v[3] <= now]:
+        _dl_tickets.pop(k, None)
+
+
+def _issue_dl_ticket(typ: str, name: str, fname: str) -> str:
+    """签发一个只对应单个文件的限时票据。"""
+    _dl_tickets_purge()
+    tok = secrets.token_urlsafe(24)
+    _dl_tickets[tok] = (typ, name, fname, time.time() + DL_TICKET_TTL)
+    return tok
+
+
+@app.post("/api/files/ticket")
+def api_files_ticket():
+    """为「把服务器上已下载的文件拉到本机」签发短时下载票据。
+
+    为什么不能直接把链接指到文件: 会话 token 走 X-Auth-Token **请求头**, 而浏览器
+    点链接下载是顶层导航, 带不上自定义头 → 拿不到凭据。把会话 token 塞进 URL 更糟:
+    它是 7 天有效的长效凭据, 会留在浏览器历史/代理日志里。所以用票据 ——
+    随机、限时、只对一个文件有效, 泄露面最小。
+
+    请求体: {"items": [{"type","distribution","filename"}, ...]}
+    返回:   {"tickets": [{"url","filename","type","distribution","size"}], "skipped": [...]}
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    items = body.get("items") or []
+    if not items:
+        return jsonify({"error": "没有选择任何文件"}), 400
+    if len(items) > DL_TICKET_MAX:
+        return jsonify({"error": f"一次最多下载 {DL_TICKET_MAX} 个文件"}), 400
+
+    tickets, skipped = [], []
+    for it in items:
+        typ = str(it.get("type") or "").strip()
+        name = str(it.get("distribution") or "").strip()
+        fname = str(it.get("filename") or "").strip()
+        fp = _resolve_local_file(typ, name, fname)
+        if fp is None:
+            skipped.append(f"{fname or '(空文件名)'}: 文件不存在或参数非法")
+            continue
+        try:
+            size = fp.stat().st_size
+        except OSError as e:
+            skipped.append(f"{fname}: {e}")
+            continue
+        tickets.append({
+            "url": "/api/files/get?t=" + _issue_dl_ticket(typ, name, fname),
+            "filename": fname, "type": typ, "distribution": name, "size": size,
+        })
+
+    if tickets:
+        user = _valid_session() or ("token" if AUTH_TOKEN else "匿名")
+        log(f"[下载] {user} 请求下载 {len(tickets)} 个文件到本机")
+    return jsonify({"ok": bool(tickets), "tickets": tickets, "skipped": skipped})
+
+
+@app.get("/api/files/get")
+def api_files_get():
+    """凭票据下发文件(支持 Range, 因此浏览器可暂停/续传)。
+
+    票据**可重复使用直到过期** —— 断点续传/连接重试会让浏览器对同一 URL 发多次
+    请求(带 Range 头), 一次性票据会直接掐断续传。代价是票据在 TTL 内可重放,
+    所以 TTL 默认只有 10 分钟。
+    """
+    tok = request.args.get("t", "")
+    _dl_tickets_purge()
+    hit = _dl_tickets.get(tok) if tok else None
+    if not hit:
+        return jsonify({"error": "下载链接无效或已过期, 请在面板上重新点击下载"}), 403
+    typ, name, fname, _exp = hit
+    # 二次校验: 票据里存的是 (type, distro, 文件名) 分量而不是路径, 必须重新过一遍约束
+    fp = _resolve_local_file(typ, name, fname)
+    if fp is None:
+        return jsonify({"error": f"文件不存在: {fname}"}), 404
+    resp = send_file(fp, as_attachment=True, download_name=fname, conditional=True)
+    # 大文件必须允许浏览器缓存分片, 否则续传会从头开始(no-store 是续传杀手)。
+    # 该路径同时被 after_request 的 no-cache 规则排除, 见 no_cache_api。
+    resp.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
+    resp.headers["Accept-Ranges"] = "bytes"
+    return resp
 
 
 @app.post("/api/protected")

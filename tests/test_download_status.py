@@ -419,7 +419,7 @@ class TestFrontendWiring(unittest.TestCase):
                       "jget 的 401 分支缺少登录接口白名单判断")
 
     def test_version_bumped(self):
-        self.assertIn("APP_VERSION='1.3.13'", self.html)
+        self.assertIn("APP_VERSION='1.3.14'", self.html)
 
     def test_poll_refreshes_list_while_running(self):
         """回归: 任务运行期间也要刷新列表。
