@@ -2544,30 +2544,39 @@ def api_qb_settings_post():
     if will_be_enabled and (not qb.get("username") or not qb.get("password")):
         return jsonify({"error": "启用 qBittorrent 必须提供非空用户名和密码"}), 400
 
-    enabled_changed = False
-    if "enabled" in body:
-        want = bool(body["enabled"])
-        if want != qb.get("enabled", False):
-            ok = set_qb(want, qb["username"], qb["password"])
-            if not ok:
-                st = service_state(QB_CONTAINER)
-                if st == "not_deployed":
-                    return jsonify({"error": "qBittorrent 未部署: 请用 docker compose --profile bt up -d 先创建该容器"}), 500
-                if st == "unknown":
-                    return jsonify({"error": "qBittorrent 容器状态未知(请检查 socket-proxy 是否运行)"}), 500
-                return jsonify({"error": "qBittorrent 容器操作失败，请检查是否已部署 sidecar"}), 500
-            qb["enabled"] = want
-            changed = True
-            enabled_changed = True
-
     # 计算是否指向外部 QB(用户自行部署, 非配套 sidecar)。url_saved 需从原始 settings 判断,
     # 与 GET 保持一致: 用户显式保存过 url 才视为已自定义; 若本次请求带 url 字段同样视为已保存。
+    # 必须在 enabled 分支**之前**算好: 外部 QB 启停时不应去操作配套 sidecar 容器。
     try:
         _raw = json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) if SETTINGS_JSON.exists() else {}
         qb["url_saved"] = bool((_raw.get("qb") or {}).get("url")) or ("url" in body)
     except Exception:  # noqa: BLE001
         qb["url_saved"] = bool("url" in body)
     _is_ext = _qb_is_external(qb)
+
+    enabled_changed = False
+    if "enabled" in body:
+        want = bool(body["enabled"])
+        if want != qb.get("enabled", False):
+            # 外部 QB(用户自行部署): 根本没有 iso-hub 配套的 sidecar 容器可启停。
+            # 这里的 enabled 只表示"是否用这个外部 QB 做种子下载", 只落盘开关状态即可,
+            # 绝不能去 start/stop QB_CONTAINER —— 那个容器不存在(或不属于 iso-hub),
+            # 否则必定失败并误报"容器状态未知(请检查 socket-proxy 是否运行)"。
+            # 这与用户预期完全不符: 外部 QB 不需要 socket-proxy, iso-hub 只走 Web API 登录连接。
+            if _is_ext:
+                log(f"[qB] 外部 qBittorrent({qb.get('url')}) 开关 -> enabled={want}, 不操作配套 sidecar 容器")
+            else:
+                ok = set_qb(want, qb["username"], qb["password"])
+                if not ok:
+                    st = service_state(QB_CONTAINER)
+                    if st == "not_deployed":
+                        return jsonify({"error": "qBittorrent 未部署: 请用 docker compose --profile bt up -d 先创建该容器"}), 500
+                    if st == "unknown":
+                        return jsonify({"error": "qBittorrent 容器状态未知(请检查 socket-proxy 是否运行)"}), 500
+                    return jsonify({"error": "qBittorrent 容器操作失败，请检查是否已部署 sidecar"}), 500
+            qb["enabled"] = want
+            changed = True
+            enabled_changed = True
 
     # 仅当"凭据"变更且当前是启用状态、且是配套 sidecar 时, 才同步密码到 sidecar 容器并重启。
     # 外部 QB(用户自行部署): 改凭据只是为了登录连接, 只保存到配置即可, 不写 conf 不重启

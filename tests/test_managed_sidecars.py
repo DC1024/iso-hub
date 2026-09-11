@@ -223,5 +223,84 @@ class TestQbExternalSaveNoRestart(SharesManagedTestBase):
         m_docker.assert_called_once()
 
 
+class TestQbExternalEnableNoSidecar(SharesManagedTestBase):
+    """外部 QB 切换 enabled 开关时, 不应操作配套 sidecar 容器(没有可启停的容器)。
+
+    回归背景: v1.3.10 只修了"纯凭据变更"路径, enabled 变更路径仍会调 set_qb()
+    去 start/stop iso-hub-qbittorrent; 外部 QB 场景下该容器不存在 -> set_qb 失败 ->
+    误报"容器状态未知(请检查 socket-proxy 是否运行)"(500)。
+    而外部 QB 根本不需要 socket-proxy —— iso-hub 只走 Web API 登录连接它。
+    """
+
+    def test_external_enable_does_not_touch_sidecar(self):
+        """外部 QB 从禁用切到启用: 不调 set_qb、不碰 Docker, 不报 500, 只落盘 enabled。"""
+        self.settings.write_text(json.dumps(
+            {"qb": {"enabled": False, "url": "http://192.168.1.50:18080",
+                    "username": "u", "password": "p"}}), encoding="utf-8")
+        # service_state 返回 unknown(容器不存在/代理不可达) 时, 旧代码会据此报 500
+        with patch.object(app, "service_state", return_value="unknown"), \
+             patch.object(app, "set_qb", return_value=False) as m_setqb, \
+             patch.object(app, "_docker_request") as m_docker:
+            r = self.client.post("/api/qb/settings",
+                                 json={"enabled": True, "username": "u", "password": "p"})
+        self.assertEqual(r.status_code, 200,
+                         f"外部 QB 启用不应因容器状态报错: {r.get_data(as_text=True)}")
+        m_setqb.assert_not_called()   # 外部 QB 不启停配套容器
+        m_docker.assert_not_called()  # 也不该碰 Docker API
+        self.assertIs(r.get_json()["qb"]["managed"], False)
+        saved = json.loads(self.settings.read_text(encoding="utf-8"))["qb"]
+        self.assertIs(saved["enabled"], True)
+
+    def test_external_disable_does_not_touch_sidecar(self):
+        """外部 QB 停用同样不碰容器。"""
+        self.settings.write_text(json.dumps(
+            {"qb": {"enabled": True, "url": "http://192.168.1.50:18080",
+                    "username": "u", "password": "p"}}), encoding="utf-8")
+        with patch.object(app, "service_state", return_value="unknown"), \
+             patch.object(app, "set_qb", return_value=False) as m_setqb:
+            r = self.client.post("/api/qb/settings",
+                                 json={"enabled": False, "username": "u", "password": "p"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        m_setqb.assert_not_called()
+        saved = json.loads(self.settings.read_text(encoding="utf-8"))["qb"]
+        self.assertIs(saved["enabled"], False)
+
+    def test_external_enable_with_url_in_same_request(self):
+        """同一次请求里既填外部 url 又开启开关(用户最典型的操作) -> 也不碰容器。"""
+        self.settings.write_text("{}", encoding="utf-8")
+        with patch.object(app, "service_state", return_value="unknown"), \
+             patch.object(app, "set_qb", return_value=False) as m_setqb:
+            r = self.client.post("/api/qb/settings",
+                                 json={"enabled": True, "url": "http://10.0.0.9:18080",
+                                       "username": "u", "password": "p"})
+        self.assertEqual(r.status_code, 200,
+                         f"填地址+开开关是一次性操作, 不应报错: {r.get_data(as_text=True)}")
+        m_setqb.assert_not_called()
+        self.assertIs(r.get_json()["qb"]["managed"], False)
+
+    def test_bundled_enable_still_calls_set_qb(self):
+        """配套 QB(无外部 url) 启用 -> 仍调 set_qb 启停配套容器(回归护栏)。"""
+        self.settings.write_text(json.dumps(
+            {"qb": {"enabled": False, "username": "u", "password": "p"}}), encoding="utf-8")
+        with patch.object(app, "service_state", return_value="running"), \
+             patch.object(app, "set_qb", return_value=True) as m_setqb:
+            r = self.client.post("/api/qb/settings",
+                                 json={"enabled": True, "username": "u", "password": "p"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        m_setqb.assert_called_once()   # 配套 QB 必须照常启停容器
+        self.assertIs(r.get_json()["qb"]["managed"], True)
+
+    def test_bundled_enable_failure_still_reports_error(self):
+        """配套 QB 启用失败(set_qb 返回 False) -> 仍应报 500 明确提示(回归护栏)。"""
+        self.settings.write_text(json.dumps(
+            {"qb": {"enabled": False, "username": "u", "password": "p"}}), encoding="utf-8")
+        with patch.object(app, "service_state", return_value="unknown"), \
+             patch.object(app, "set_qb", return_value=False):
+            r = self.client.post("/api/qb/settings",
+                                 json={"enabled": True, "username": "u", "password": "p"})
+        self.assertEqual(r.status_code, 500)
+        self.assertIn("socket-proxy", r.get_data(as_text=True))
+
+
 if __name__ == "__main__":
     unittest.main()
