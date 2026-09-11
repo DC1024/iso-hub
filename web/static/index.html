@@ -507,6 +507,7 @@
           </div>
         </div>
         <div class="hint" style="padding:0 4px" data-i18n="shareDesc" data-page-node-id="6nadTGs9xAifLDxWvk0uFP"></div>
+        <div class="hint" style="padding:0 4px;color:var(--warn)" data-i18n="sharePlainWarn">⚠ 安全提示：共享凭据以明文保存在 ./data/settings.json。任何能读取 data 卷的进程或用户都能拿到该密码，请勿把 data 目录交给不受信任的一方。</div>
       </div>
     </div>
     <div class="card" data-page-node-id="AFLpuLjy2NrQ0pF8L7YDAm">
@@ -667,8 +668,8 @@ let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
 // 种子分类的内存态。声明放最上方: applyLang() 在初始化早期就会用到它们,
 // 若声明在文件后半段会踩 let 的暂时性死区(TDZ) ReferenceError。
 let LAST_TORRENT_ITEMS=[], LAST_CLASSIFY=null, CATS_CFG=null;
-const APP_VERSION='1.3.14';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.3.14';
+const APP_VERSION='1.3.15';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.3.15';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -819,6 +820,7 @@ const I18N={
   'protectFailed':{zh:'操作失败',en:'Operation failed'},
   'settingsDesc':{zh:'用户、语言、共享设置',en:'User, language & share settings'},
   'shareDesc':{zh:'说明：SMB/WebDAV 共享默认禁用。点击下方开关手动启用，随后设置账号密码；修改后写入 ./data/settings.json。默认凭据仅作兜底，启用后请务必修改。',en:'SMB/WebDAV shares are disabled by default. Toggle to enable, then set credentials; changes are saved to ./data/settings.json. The default credentials are fallbacks only — change them after enabling.'},
+  'sharePlainWarn':{zh:'⚠ 安全提示：共享凭据以明文保存在 ./data/settings.json。任何能读取 data 卷的进程或用户都能拿到该密码，请勿把 data 目录交给不受信任的一方。',en:'⚠ Security note: share credentials are stored in plaintext in ./data/settings.json. Any process or user able to read the data volume can obtain that password — do not expose the data directory to untrusted parties.'},
   'sambaDesc':{zh:'PVE/Windows 挂载 ISO 库',en:'Mount ISO library from PVE/Windows'},
   'webdavDesc':{zh:'HTTP WebDAV endpoint',en:'HTTP WebDAV endpoint'},
   'repoTab':{zh:'发行版源 · 追踪最新版本',en:'Distro source · track latest'},
