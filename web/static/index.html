@@ -331,7 +331,9 @@
             <option value="arch" data-page-node-id="Tg3TC4Ir1S1avbx7U1bqpb">Arch Linux (清华)</option>
             <option value="fedora-work" data-page-node-id="Cu8wDGRm7wZ1XcPkKGUu8F">Fedora Workstation (清华)</option>
             <option value="proxmox-ve" data-page-node-id="dIgVdEEVX7yhO0rSYz0bex">Proxmox VE (清华)</option>
-            <option value="debian" data-page-node-id="GRfSMGNbtbqgomMzV3YWAr">Debian (清华)</option>
+            <option value="debian" data-page-node-id="GRfSMGNbtbqgomMzV3YWAr">Debian amd64 netinst (清华)</option>
+            <option value="debian-arm64">Debian arm64 netinst (清华)</option>
+            <option value="debian-dvd-amd64">Debian amd64 DVD (清华)</option>
           </select>
           <input id="rs-dist" class="inp" placeholder="发行版名,如 Ubuntu" value="Ubuntu" data-page-node-id="xpGlhY2ntVxq99ckbvzOZq">
           <input id="rs-type" class="inp" placeholder="类型,默认 linux" value="linux" data-page-node-id="UGAQ1KV9zYiwqkFfn0s8CP">
@@ -1673,9 +1675,18 @@ const SRC_TPL={
     regex:'href="(?P<value>\\d+)/"',dltpl:'{sub_listing_url}Fedora-Workstation-Live-{release}-x86_64.iso',chktpl:'{sub_listing_url}Fedora-Workstation-{release}-x86_64-CHECKSUM',
     artifact:'href="(?P<value>Fedora-Workstation-Live-(?:x86_64-)?(?P<release>[\\d.-]+)(?:\\.x86_64)?\\.iso)"',sub:'{listing_url}{version}/Workstation/x86_64/iso/'},
   'proxmox-ve':{type:'linux',dist:'Proxmox',strategy:'flat_listing',listing:'https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/',
-    regex:'filename">(?P<value>proxmox-ve_[\\d.]+-\\d\\.iso)<',dltpl:'{listing_url}{match}',chktpl:'{listing_url}SHA256SUMS'},
+    regex:'filename">(?P<value>proxmox-ve_[\\d.]+-\\d+\\.iso)<',dltpl:'{listing_url}{match}',chktpl:'{listing_url}SHA256SUMS',
+    // flat_listing 策略后端用的是 artifact_regex, 预设必须同时填 artifact(否则解析为空)
+    artifact:'filename">(?P<value>proxmox-ve_[\\d.]+-\\d+\\.iso)<'},
   debian:{type:'linux',dist:'Debian',strategy:'flat_listing',listing:'https://mirrors.tuna.tsinghua.edu.cn/debian-cd/current/amd64/iso-cd/',
-    regex:'href="(?P<value>debian-[\\d.]+-amd64-netinst\\.iso)"',dltpl:'{listing_url}{match}',chktpl:'{listing_url}SHA256SUMS'},
+    regex:'href="(?P<value>debian-[\\d.]+-amd64-netinst\\.iso)"',dltpl:'{listing_url}{match}',chktpl:'{listing_url}SHA256SUMS',
+    artifact:'href="(?P<value>debian-[\\d.]+-amd64-netinst\\.iso)"'},
+  'debian-arm64':{type:'linux',dist:'Debian',strategy:'flat_listing',listing:'https://mirrors.tuna.tsinghua.edu.cn/debian-cd/current/arm64/iso-cd/',
+    regex:'href="(?P<value>debian-[\\d.]+-arm64-netinst\\.iso)"',dltpl:'{listing_url}{match}',chktpl:'{listing_url}SHA256SUMS',
+    artifact:'href="(?P<value>debian-[\\d.]+-arm64-netinst\\.iso)"'},
+  'debian-dvd-amd64':{type:'linux',dist:'Debian',strategy:'flat_listing',listing:'https://mirrors.tuna.tsinghua.edu.cn/debian-cd/current/amd64/iso-dvd/',
+    regex:'href="(?P<value>debian-[\\d.]+-amd64-DVD-1\\.iso)"',dltpl:'{listing_url}{match}',chktpl:'{listing_url}SHA256SUMS',
+    artifact:'href="(?P<value>debian-[\\d.]+-amd64-DVD-1\\.iso)"'},
 };
 function switchSrc(t){
   // B4 修复: 限定作用域到自定义源面板, 避免误摘种子面板(.src-tab)的高亮
