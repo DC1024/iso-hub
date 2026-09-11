@@ -302,5 +302,89 @@ class TestQbExternalEnableNoSidecar(SharesManagedTestBase):
         self.assertIn("socket-proxy", r.get_data(as_text=True))
 
 
+class TestQbExternalConnectionProbe(unittest.TestCase):
+    """外部 QB 的连接探测: 面板应显示"能否连上并登录", 而非容器状态。
+
+    背景: 外部 QB 的 container 状态查的是**配套** sidecar, 必然 not_deployed/unknown,
+    旧逻辑据此显示"无法查询容器状态, 请检查 socket-proxy" —— 对用户完全误导
+    (外部 QB 不需要 socket-proxy, iso-hub 只走 Web API 登录)。
+    """
+
+    QB_EXT = {"qb": {"enabled": True, "url": "http://192.168.1.50:18080",
+                     "username": "u", "password": "p", "url_saved": True}}
+
+    def test_disabled_returns_unknown(self):
+        """未启用 -> unknown, 不做任何网络探测(避免无谓等待)。"""
+        out = app._probe_qb_connection({"enabled": False, "url": "http://x:1",
+                                        "username": "u", "password": "p"})
+        self.assertEqual(out["state"], "unknown")
+
+    def test_incomplete_config_returns_unknown(self):
+        """缺地址或凭据 -> unknown。"""
+        self.assertEqual(app._probe_qb_connection(
+            {"enabled": True, "url": "", "username": "u", "password": "p"})["state"], "unknown")
+        self.assertEqual(app._probe_qb_connection(
+            {"enabled": True, "url": "http://x:1", "username": "", "password": "p"})["state"], "unknown")
+
+    def test_connected_when_login_ok(self):
+        """登录成功(204 空响应) -> connected。"""
+        with patch.object(app.QBClient, "_request", return_value=(204, "")):
+            out = app._probe_qb_connection(self.QB_EXT["qb"])
+        self.assertEqual(out["state"], "connected")
+
+    def test_bad_auth_when_forbidden(self):
+        """HTTP 403 / 响应含 Fails. -> bad_auth(凭据错, 地址是通的)。"""
+        with patch.object(app.QBClient, "_request", return_value=(403, "Forbidden")):
+            out = app._probe_qb_connection(self.QB_EXT["qb"])
+        self.assertEqual(out["state"], "bad_auth")
+        with patch.object(app.QBClient, "_request", return_value=(200, "Fails.")):
+            out = app._probe_qb_connection(self.QB_EXT["qb"])
+        self.assertEqual(out["state"], "bad_auth")
+
+    def test_unreachable_on_network_error(self):
+        """网络不可达(_request 返回 code=0) -> unreachable。"""
+        with patch.object(app.QBClient, "_request", return_value=(0, "连接失败: timed out")):
+            out = app._probe_qb_connection(self.QB_EXT["qb"])
+        self.assertEqual(out["state"], "unreachable")
+
+    def test_get_returns_conn_for_external_only(self):
+        """/api/qb/settings: 外部 QB 带 conn, 配套 QB 的 conn 为 None。"""
+        # 外部
+        with tempfile.TemporaryDirectory() as d:
+            data = Path(d)
+            sj = data / "settings.json"
+            sj.write_text(json.dumps(self.QB_EXT), encoding="utf-8")
+            with patch.object(app, "DATA_DIR", data), \
+                 patch.object(app, "SETTINGS_JSON", sj), \
+                 patch.object(app, "REQUIRE_LOGIN", False), \
+                 patch.object(app, "AUTH_TOKEN", ""), \
+                 patch.object(app, "service_state", return_value="unknown"), \
+                 patch.object(app, "_probe_qb_connection",
+                              return_value={"state": "connected", "detail": "已登录"}) as m_probe:
+                r = app.app.test_client().get("/api/qb/settings")
+            self.assertEqual(r.status_code, 200)
+            qb = r.get_json()["qb"]
+            self.assertIs(qb["managed"], False)
+            self.assertEqual(qb["conn"]["state"], "connected")
+            m_probe.assert_called_once()
+        # 配套(无外部 url): 不应探测, conn 为 None
+        with tempfile.TemporaryDirectory() as d:
+            data = Path(d)
+            sj = data / "settings.json"
+            sj.write_text(json.dumps({"qb": {"enabled": True, "username": "u",
+                                             "password": "p"}}), encoding="utf-8")
+            with patch.object(app, "DATA_DIR", data), \
+                 patch.object(app, "SETTINGS_JSON", sj), \
+                 patch.object(app, "REQUIRE_LOGIN", False), \
+                 patch.object(app, "AUTH_TOKEN", ""), \
+                 patch.object(app, "service_state", return_value="running"), \
+                 patch.object(app, "_probe_qb_connection", return_value=None) as m_probe:
+                r = app.app.test_client().get("/api/qb/settings")
+            qb = r.get_json()["qb"]
+            self.assertIs(qb["managed"], True)
+            self.assertIsNone(qb["conn"])
+            m_probe.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

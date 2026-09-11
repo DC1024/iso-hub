@@ -44,6 +44,22 @@ COPY iso_download/ /app/iso_download/
 COPY web/ /app/web/
 RUN pip install --no-cache-dir -r /app/web/requirements.txt
 
+# 运行期瘦身: 卸载构建期才用得到的 pip(依赖已在上面装好, 运行时不再需要)。
+# 目的:
+#   ① 减小镜像体积(去 pip + ensurepip + 缓存)
+#   ② 消除 python-pip 的一批 CVE —— 2025-8869 / 2026-13346 / 2026-6357 /
+#      2026-3219 / 2026-8643 / 2026-1703。这些全是"用 pip 安装不可信来源的包"
+#      这一场景才可能触发, 而 iso-hub **运行期从不执行 pip install**
+#      (依赖在构建阶段固定安装, CMD 只跑 python app.py)。Debian 也对这批全部
+#      标注 <no-dsa>(次要问题, 不单独发补丁), 因此移除 pip 是根除而非掩盖。
+# 保留 setuptools: 少数已装包在 import 时仍可能引用 pkg_resources。
+RUN python -m pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.12/ensurepip \
+              /usr/local/lib/python3.12/site-packages/pip \
+              /usr/local/lib/python3.12/site-packages/pip-* \
+              /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
+              /root/.cache/pip
+
 # 数据卷：distributions.json + 下载目录(linux/<发行版>/) 持久化
 VOLUME ["/data"]
 

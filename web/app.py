@@ -683,6 +683,45 @@ def _qb_is_external(qb: dict) -> bool:
     return _saved and (_url != (DEFAULT_QB.get("url") or "").rstrip("/"))
 
 
+def _probe_qb_connection(qb: dict, timeout: float = 3.0) -> dict:
+    """探测**外部** qBittorrent 的真实连接/登录状态, 供面板显示。
+
+    外部 QB 是用户自行部署的容器, iso-hub 没有它的 Docker 状态可查(查了也必然是
+    not_deployed/unknown, 会误导成"请检查 socket-proxy")。面向用户的正确指标是
+    "能不能连上并登录", 所以这里直接调它的 Web API 试一次登录。
+
+    返回 {state, detail}, state 取值:
+      connected   已连上且登录成功
+      bad_auth    地址可达, 但用户名/密码不对
+      unreachable 地址/端口不可达, 或 HTTP 异常
+      unknown     未启用或未配置完整(地址/用户名/密码), 不做探测
+    """
+    url = (qb.get("url") or "").rstrip("/")
+    user = (qb.get("username") or "").strip()
+    pwd = qb.get("password") or ""
+    if not qb.get("enabled", False):
+        return {"state": "unknown", "detail": "未启用"}
+    if not url or not user or not pwd:
+        return {"state": "unknown", "detail": "地址或凭据未填写完整"}
+    try:
+        cli = QBClient(url, user, pwd)
+        code, text = cli._request("POST", "/api/v2/auth/login",
+                                  {"username": user, "password": pwd}, timeout=timeout)
+    except Exception as e:  # noqa: BLE001
+        return {"state": "unreachable", "detail": f"{type(e).__name__}: {e}"}
+    # _request 内部网络异常返回 code=0(且 text 形如 "连接失败: ...")
+    if code == 0:
+        return {"state": "unreachable", "detail": str(text)[:200]}
+    if code in (401, 403):
+        return {"state": "bad_auth", "detail": f"HTTP {code}"}
+    if code in (200, 204):
+        t = (text or "").strip().lower() if isinstance(text, str) else ""
+        if any(bad in t for bad in ("fails.", "forbidden", "unauthorized", "invalid")):
+            return {"state": "bad_auth", "detail": str(text)[:200]}
+        return {"state": "connected", "detail": "已登录"}
+    return {"state": "unreachable", "detail": f"HTTP {code}"}
+
+
 def save_qb_settings(qb: dict) -> None:
     cur = load_settings_all()
     cur["qb"] = qb
@@ -2516,6 +2555,10 @@ def api_qb_settings_get():
     # 或从未自定义), iso-hub 就能管理该 qb 容器, 可改凭据并同步到 sidecar; 若用户填了外部
     # qBittorrent 地址, 那是自行部署的容器, iso-hub 无法改其用户名/密码 → managed=False。
     qb["managed"] = not _qb_is_external(qb)
+    # 外部 QB: 容器状态(上面 service_state 查的是**配套** sidecar)对用户毫无意义,
+    # 真正要看的是"能否连上并登录这个外部实例" —— 直接探测一次并回传, 面板据此显示
+    # 「已连接 / 凭据错误 / 无法连接」, 而不是误导性的"请检查 socket-proxy"。
+    qb["conn"] = _probe_qb_connection(qb) if not qb["managed"] else None
     return jsonify({"ok": True, "qb": qb})
 
 
