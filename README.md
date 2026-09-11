@@ -1,21 +1,23 @@
 # ISO Hub · 网页版 Linux 发行版 ISO 自动更新器
 
-> **项目源码：** <https://github.com/DC1024/iso-hub><br>
-> **Docker Hub 镜像：** <https://hub.docker.com/r/dcchendockeruser/iso-hub><br>
+> **项目源码：** <https://github.com/DC1024/iso-hub> 　·　
+> **Docker Hub 镜像：** <https://hub.docker.com/r/dcchendockeruser/iso-hub> 　·　
 > **阿里云 ACR 镜像（国内推荐）：** `registry.cn-hangzhou.aliyuncs.com/dcchen/isohub`
 
-ISO Hub 是一个带网页界面的 Docker 化 Linux 发行版 ISO 自动更新器，支持在网页上勾选发行版/版本进行实时下载与 SHA256 校验、自动抓取镜像站刷新最新版本元数据、订阅同步自动跟新版，并提供过期 ISO 可视化清理与 SMB/WebDAV 网络共享功能。
+网页版 Linux 镜像站：点选下载，自动校验跟新清理。
 
 ## 功能
 
 | 分组 | 能力 |
 |---|---|
 | **下载与校验** | 发行版/版本分组列表 · 勾选单个文件或整组下载 · 实时进度条与日志 · SHA256 自动校验 |
-| **多源容错** | 每个版本自动从多个镜像站下载，失败自动切换；全局支持「A 固定优先级」/「B 实测选最快」两种策略，也可逐行手动指定镜像源 |
+| **多源容错** | 每个版本自动从多个镜像站（清华/中科大/阿里云/网易/腾讯 + 官方兜底）下载，失败自动切换；全局支持「A 固定优先级」/「B 实测选最快」两种策略，也可逐行手动指定镜像源 |
 | **自动化** | 元数据自动刷新（抓镜像站目录写入清单）· **订阅同步**（自动拉最新 N 版 → 删除过期 ISO，内置定时调度）· 网页自建定时任务（每天/每周/每月/每年/一次性） |
 | **扩展来源** | **自定义源**：添加任意 ISO 直链或"发行版源"（按版本正则抓目录），独立保存不被刷新覆盖；**种子下载**：内置 DistroWatch 官方种子 RSS，支持手动粘贴磁力链接/自加 RSS 源，经内置 qBittorrent 下载后与直链统一管理 |
 | **管理** | 过期清理（标记+一键删除旧版）· 镜像保护 🔒（锁定文件清理/删除时被硬拒绝）· 筛选（全部/已下载/未下载/已收藏）· 单管理员登录（PBKDF2 加密 + 会话） |
 | **体验** | 日夜模式 · 中英双语（自动跟随系统）· 分组折叠 · SMB + WebDAV 网络共享（把 ISO 分享给 PVE/Windows 挂载） |
+
+默认数据源为**清华 TUNA 镜像站**（国内速度快），支持发行版见 `iso_download/sources_config.json`。
 
 ## 快速开始
 
@@ -27,10 +29,10 @@ ISO Hub 是一个带网页界面的 Docker 化 Linux 发行版 ISO 自动更新�
 | **② Docker Hub** | 海外服务器 | `dcchendockeruser/iso-hub` |
 | **③ 源码构建** | 需要改代码 / 自定义 | 本地构建 |
 
-> **前置要求：Docker 20.10+ 与 Compose v2**（`docker compose`，带空格）。<br>
-> 本项目的 samba / webdav / qbittorrent 边车使用 compose **profiles** 管理，<br>
-> 旧版 `docker-compose`（v1，带连字符）不支持 profiles 且已 EOL，请勿使用。<br>
-> 验证：`docker compose version` 应输出 `v2.x.x`。<br>
+> **前置要求：Docker 20.10+ 与 Compose v2**（`docker compose`，带空格）。
+> 本项目的 samba / webdav / qbittorrent 边车使用 compose **profiles** 管理，
+> 旧版 `docker-compose`（v1，带连字符）不支持 profiles 且已 EOL，请勿使用。
+> 验证：`docker compose version` 应输出 `v2.x.x`。
 
 **① 阿里云 ACR（国内推荐）：**
 
@@ -51,15 +53,14 @@ git clone https://github.com/DC1024/iso-hub.git && cd iso-hub
 docker compose up -d --build
 ```
 
-> **profiles 说明**：`up -d` 默认只启动核心（iso-hub + socket-proxy）。<br>
-> samba/webdav 归入`share` profile、qbittorrent 归入 `bt` profile，按需追加 `--profile` 启用；<br>
-> 未启用的服务不创建容器、不拉镜像。也可在 `.env` 里写 `COMPOSE_PROFILES=share,bt` 一劳永逸。<br>
+> **profiles 说明**：`up -d` 默认只启动核心（iso-hub + socket-proxy）。samba/webdav 归入
+> `share` profile、qbittorrent 归入 `bt` profile，按需追加 `--profile` 启用；
+> 未启用的服务不创建容器、不拉镜像。也可在 `.env` 里写 `COMPOSE_PROFILES=share,bt` 一劳永逸。
 
 启动后访问 `http://<服务器IP>:8899`。
 
-**公网部署必做**：在 compose 同目录建 `.env` 播种管理员，否则登录页会报「管理员账号未设置」<br>
-（防抢注设计：未播种时仅允许从服务器本机 `127.0.0.1:8899` 首次建号，<br>
-或走 SSH 隧道 `ssh -L 8899:127.0.0.1:8899 <user>@<服务器IP>`）：
+**公网部署必做**：在 compose 同目录建 `.env` 播种管理员，否则登录页会报「管理员账号未设置」
+（防抢注设计：未播种时仅允许从服务器本机 `127.0.0.1:8899` 首次建号，或走 SSH 隧道 `ssh -L 8899:127.0.0.1:8899 <user>@<服务器IP>`）：
 
 ```bash
 cat > .env <<'EOF'
@@ -89,7 +90,7 @@ docker compose up -d   # 改 .env 后重启生效
 
 **自动跟新版（订阅同步）**：订阅同步页 → 为发行版开启订阅、设保留版本数 → 「立即执行」或在设置里建定时任务。此后每次同步自动拉取最新 N 版并删除过期 ISO（🔒 锁定的文件不会被删）。
 
-**多镜像源策略**：设置页可选「A 固定优先级」或「B 实测选最快」；镜像下载策略默认跟随设置优先级，也可通过列表每行的下拉框单独为某个版本指定镜像源。
+**多镜像源策略**：设置页可选「A 固定优先级」或「B 实测选最快」；镜像列表每行的下拉框可单独为某个版本指定镜像源（默认「自动」）。
 
 **共享给 PVE / Windows**：启用 `--profile share` 后自动创建 SMB + WebDAV 只读共享（账号 `iso` / `iso123`）：
 
@@ -142,22 +143,22 @@ docker compose pull && docker compose up -d   # 升级到最新镜像
 
 ## 常见问题
 
-**登录报「管理员账号未设置」？**<br>
+**登录报「管理员账号未设置」？**
 `.env` 里没配 `ISO_HUB_ADMIN_USER` / `ISO_HUB_ADMIN_PASS`，配好后 `docker compose up -d` 重启。首次登录后可在「设置 → 修改密码」改密。
 
-**点「刷新列表」没反应？**<br>
+**点「刷新列表」没反应？**
 多为未登录导致 401 被静默处理，先登录；仍有问题看 `docker compose logs iso-hub`。
 
-**国内拉不动 Docker Hub 镜像？**<br>
+**国内拉不动 Docker Hub 镜像？**
 改用方式① 阿里云 ACR 源。
 
-**Compose 报 `profiles` 不支持？**<br>
+**Compose 报 `profiles` 不支持？**
 在用 v1（`docker-compose`），升级 Docker 或安装 Compose v2 插件，统一用 `docker compose`。
 
-**想改 SMB 端口/账号？**<br>
+**想改 SMB 端口/账号？**
 `.env` 设 `SAMBA_PORT` / `SAMBA_USER` / `SAMBA_PASS`，或网页「设置 → 共享设置」改（改后 `docker compose restart samba webdav` 生效）。
 
-**删除文件被拒绝？**<br>
+**删除文件被拒绝？**
 该文件被 🔒 锁定保护，先在列表里解锁；保护列表也可在「设置」里批量管理。
 
 ## 开发
@@ -189,4 +190,4 @@ CI：push 到 `master` 自动跑 Lint & Security，并构建推送 Docker Hub �
 
 - 上游核心能力来自 [Sowevo/iso_download](https://github.com/Sowevo/iso_download)（Mozilla Public License 2.0）
 - 本项目同样以 [MPL-2.0](LICENSE) 开源
-- 数据源：清华 TUNA、中科大、网易等公开镜像站，种子源为 DistroWatch
+- 数据源：清华 TUNA、中科大、阿里云、网易、腾讯等公开镜像站，种子源为 DistroWatch
