@@ -2486,6 +2486,13 @@ def api_qb_settings_get():
     """获取 qBittorrent 设置及容器实时四态状态。"""
     qb = load_qb_settings()
     qb["container"] = service_state(QB_CONTAINER)
+    # 标记 url 是否被用户显式保存过(区别于默认的内部 sidecar 地址 http://qbittorrent:8080)。
+    # 前端据此决定输入框是否回显 url —— 未自定义时留空, 由用户按占位提示自行填写。
+    try:
+        _raw = json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) if SETTINGS_JSON.exists() else {}
+        qb["url_saved"] = bool((_raw.get("qb") or {}).get("url"))
+    except Exception:  # noqa: BLE001
+        qb["url_saved"] = False
     return jsonify({"ok": True, "qb": qb})
 
 
@@ -2495,11 +2502,18 @@ def api_qb_settings_post():
     body = request.get_json(force=True, silent=True) or {}
     qb = load_qb_settings()
     changed = False
+    cred_changed = False
     if "username" in body:
         qb["username"] = str(body["username"]).strip()
         changed = True
+        cred_changed = True
     if "password" in body:
         qb["password"] = str(body["password"]).strip()
+        changed = True
+        cred_changed = True
+    if "url" in body:
+        # 允许用户指向外部 qBittorrent(如自行部署的实例), 而非默认的 sidecar 内部地址
+        qb["url"] = str(body["url"]).strip().rstrip("/") or qb.get("url", "")
         changed = True
 
     # 启用或保持启用时，必须提供非空凭据
@@ -2523,8 +2537,9 @@ def api_qb_settings_post():
             changed = True
             enabled_changed = True
 
-    # 如果凭据变了且当前是启用状态(或刚启用)，同步密码到容器
-    if changed and qb.get("enabled", False):
+    # 仅当"凭据"变更且当前是启用状态时, 才需要同步密码到 sidecar 容器并重启。
+    # 只改 url(连接地址) 不触发容器重启 —— 用户可能指向外部 QB, 根本没有 sidecar 容器可重启。
+    if cred_changed and qb.get("enabled", False):
         if not enabled_changed:
             # 仅修改凭据：直接写 conf 并重启
             if QB_CONF_PATH.exists() and _set_qb_password(qb["username"], qb["password"]):
