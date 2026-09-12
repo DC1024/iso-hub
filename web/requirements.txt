@@ -1,3 +1,6 @@
 flask>=3.0
 waitress>=3.0
 defusedxml>=0.7.1
+# settings.json 落盘加密 (A+B): 启用 ISO_HUB_SECRET_KEY 时对 settings.json 做 AES-GCM
+# 整文件加密; 未设密钥时本依赖不会被 import(懒加载), 行为与旧版完全一致。
+cryptography>=42.0

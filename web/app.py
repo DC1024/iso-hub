@@ -881,6 +881,10 @@ def load_settings_all() -> dict:
     """
     try:
         return config_files.read_json_raw(SETTINGS_JSON)
+    except config_files.SettingsDecryptError:
+        # 密钥不对/文件被篡改: 这种"读不出来"不是"没有配置", 不能静默当空配置,
+        # 否则会误导上层继续跑; 直接外抛, 让调用方(健康检查/启动)能暴露问题。
+        raise
     except config_files.CorruptJsonFile:
         log("[settings] %s 不是合法 JSON 对象, 已按空配置处理;"
             " 下一次保存会将原件备份为 %s.corrupt。请检查该文件。"
@@ -3231,7 +3235,7 @@ def api_qb_settings_get():
     # 标记 url 是否被用户显式保存过(区别于默认的内部 sidecar 地址 http://qbittorrent:8080)。
     # 前端据此决定输入框是否回显 url —— 未自定义时留空, 由用户按占位提示自行填写。
     try:
-        _raw = json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) if SETTINGS_JSON.exists() else {}
+        _raw = load_settings_all() if SETTINGS_JSON.exists() else {}
         qb["url_saved"] = bool((_raw.get("qb") or {}).get("url"))
     except Exception:  # noqa: BLE001
         qb["url_saved"] = False
@@ -3281,7 +3285,7 @@ def api_qb_settings_post():
     # 与 GET 保持一致: 用户显式保存过 url 才视为已自定义; 若本次请求带 url 字段同样视为已保存。
     # 必须在 enabled 分支**之前**算好: 外部 QB 启停时不应去操作配套 sidecar 容器。
     try:
-        _raw = json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) if SETTINGS_JSON.exists() else {}
+        _raw = load_settings_all() if SETTINGS_JSON.exists() else {}
         qb["url_saved"] = bool((_raw.get("qb") or {}).get("url")) or ("url" in body)
     except Exception:  # noqa: BLE001
         qb["url_saved"] = bool("url" in body)
