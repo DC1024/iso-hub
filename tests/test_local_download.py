@@ -84,12 +84,13 @@ class LocalDownloadBase(unittest.TestCase):
         ]
         for p in self._patches:
             p.start()
+            # addCleanup 在 setUp 半途失败时也会执行, 比 tearDown 更可靠;
+            # 补丁统一在这里停止(含子类扩展的), tearDown 不再重复 stop
+            self.addCleanup(p.stop)
         app._dl_tickets.clear()
         self.client = app.app.test_client()
 
     def tearDown(self):
-        for p in self._patches:
-            p.stop()
         app._dl_tickets.clear()
         self._tmp.cleanup()
 
@@ -566,17 +567,19 @@ class TestTorrentHashDownload(LocalDownloadBase):
         self._fake = FakeQB(self.rel_dir,
                             [{"name": "ubuntu.iso", "progress": 1.0,
                               "is_seed": True, "size": len(BODY)}])
-        self._patches = [
+        # 注意: 必须 += 扩展而不是重新赋值 —— 重新赋值会把基类已 start 的补丁
+        # (running_task/REQUIRE_LOGIN/AUTH_TOKEN...)的引用弄丢, 永远无人 stop,
+        # 桩泄漏到本模块之后的所有测试(正是 v1.3.17 CI Tests 红掉的根因)。
+        self._patches += [
             patch.object(app, "TORRENT_AVAILABLE", True),
             patch.object(app, "_ensure_qb_enabled", lambda: (True, None)),
             patch.object(app, "_qb", lambda: self._fake),
         ]
-        for p in self._patches:
+        for p in self._patches[-3:]:
             p.start()
+            self.addCleanup(p.stop)
 
     def tearDown(self):
-        for p in self._patches:
-            p.stop()
         super().tearDown()
 
     def test_hash_issues_ticket_for_completed_file(self):
