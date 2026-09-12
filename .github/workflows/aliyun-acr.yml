@@ -3,6 +3,7 @@
 #
 # 触发规则:
 #   - push 到 master 分支      -> 只推 latest
+#   - push 到 beta 分支        -> 只推 beta(**不碰 latest**, 线上拉 :latest 的不会误更新)
 #   - 打 v* tag (如 v1.0.6)    -> 推 1.0.6 和 latest 两个 tag
 #   - 手动 workflow_dispatch   -> 推 latest（可指定版本）
 #
@@ -20,7 +21,8 @@ name: Build & Push Aliyun ACR
 
 on:
   push:
-    branches: [master]
+    # beta = 开发分支, 推上去只发布 :beta 标签(绝不碰 :latest)
+    branches: [master, beta]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -62,12 +64,19 @@ jobs:
         id: ver
         run: |
           IMAGE="registry.cn-hangzhou.aliyuncs.com/dcchen/isohub"
-          TAGS="${IMAGE}:latest"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            # v1.0.6 -> 1.0.6 （去掉 v 前缀）
+            # v1.0.6 -> 1.0.6 （去掉 v 前缀）; 正式发版同时推进 latest
             VER="${GITHUB_REF_NAME#v}"
-            TAGS="${TAGS},${IMAGE}:${VER}"
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            TAGS="${IMAGE}:${VER},${IMAGE}:latest"
+          elif [ "${GITHUB_REF_NAME}" = "beta" ]; then
+            # 开发分支: 只推 :beta, 绝不动 :latest
+            # —— 线上实例拉的都是 :latest, 不会误拉到测试中的镜像
+            TAGS="${IMAGE}:beta"
+          else
+            # master 的 push
+            TAGS="${IMAGE}:latest"
+          fi
+          if [ -n "${{ github.event.inputs.version }}" ]; then
             VER="${{ github.event.inputs.version }}"
             TAGS="${TAGS},${IMAGE}:${VER}"
           fi

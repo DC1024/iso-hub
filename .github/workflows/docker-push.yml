@@ -1,7 +1,8 @@
 # ISO Hub - 构建并推送到 Docker Hub
-# 触发: 推送到 master 分支 / 打 v* tag / 手动运行(Workflow dispatch)
-#   - push 到 master      -> 只推 latest
-#   - 打 v* tag (如 v1.0.8) -> 推 1.0.8 和 latest 两个 tag
+# 触发: 推送到 master / beta 分支 / 打 v* tag / 手动运行(Workflow dispatch)
+#   - push 到 master         -> 只推 latest
+#   - push 到 beta           -> 只推 beta(**不碰 latest**, 测试中镜像不会被默认拉取)
+#   - 打 v* tag (如 v1.0.8)  -> 推 1.0.8 和 latest 两个 tag
 #   - 手动 workflow_dispatch -> 推 latest（可指定版本）
 name: Build & Push Docker Hub
 
@@ -13,7 +14,9 @@ on:
         required: false
         default: ''
   push:
-    branches: [master]
+    # beta = 开发分支, 推上去只发布 :beta 标签(绝不碰 :latest),
+    # 这样"不指定版本号的 docker pull"永远只拿到正式版。
+    branches: [master, beta]
     tags: ['v*']
 
 jobs:
@@ -37,12 +40,19 @@ jobs:
         id: ver
         run: |
           IMAGE="dcchendockeruser/iso-hub"
-          TAGS="${IMAGE}:latest"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            # v1.0.8 -> 1.0.8 （去掉 v 前缀）
+            # v1.0.8 -> 1.0.8 （去掉 v 前缀）; 正式发版同时推进 latest
             VER="${GITHUB_REF_NAME#v}"
-            TAGS="${TAGS},${IMAGE}:${VER}"
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            TAGS="${IMAGE}:${VER},${IMAGE}:latest"
+          elif [ "${GITHUB_REF_NAME}" = "beta" ]; then
+            # 开发分支: 只推 :beta, 绝不动 :latest
+            # —— 用户 `docker pull` 不指定 tag 时默认拿 :latest, 不会被测试中镜像污染
+            TAGS="${IMAGE}:beta"
+          else
+            # master 的 push
+            TAGS="${IMAGE}:latest"
+          fi
+          if [ -n "${{ github.event.inputs.version }}" ]; then
             VER="${{ github.event.inputs.version }}"
             TAGS="${TAGS},${IMAGE}:${VER}"
           fi
@@ -64,6 +74,8 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Sync README to Docker Hub overview
+        # beta 的每次迭代都会触发本 workflow, 没必要反复去改 Docker Hub 的仓库描述
+        if: github.ref_name != 'beta'
         env:
           HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           HUB_PAT: ${{ secrets.DOCKERHUB_TOKEN }}
