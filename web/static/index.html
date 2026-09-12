@@ -674,8 +674,8 @@ let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
 // 种子分类的内存态。声明放最上方: applyLang() 在初始化早期就会用到它们,
 // 若声明在文件后半段会踩 let 的暂时性死区(TDZ) ReferenceError。
 let LAST_TORRENT_ITEMS=[], LAST_CLASSIFY=null, CATS_CFG=null;
-const APP_VERSION='1.3.18';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.3.18';
+const APP_VERSION='1.3.19';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.3.19';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -989,6 +989,11 @@ const I18N={
   'torrent':{zh:'🧲 种子下载',en:'🧲 Torrent'},
   'torrSource':{zh:'📚 种子源',en:'📚 Torrent Sources'},
   'torrRunning':{zh:'⏳ 下载列表',en:'⏳ Downloads'},
+  'dlSel':{zh:'⬇ 下载所选',en:'⬇ Download Selected'},
+  'torrSelAll':{zh:'全选',en:'Select All'},
+  'torrSelNone':{zh:'取消全选',en:'Deselect All'},
+  'torrBatchAdded':{zh:'已添加下载',en:'Added to downloads'},
+  'torrBatchFail':{zh:'个种子添加失败',en:'torrent(s) failed to add'},
   'torrConn':{zh:'已连接 qBittorrent',en:'Connected to qBittorrent'},
   'torrConnDesc':{zh:'通过内置 qBittorrent sidecar 下载官方种子，落盘后与直链下载统一管理',en:'Download official torrents via qBittorrent sidecar; files merge into unified management'},
   'torrRefresh':{zh:'🔄 刷新',en:'🔄 Refresh'},
@@ -1082,6 +1087,9 @@ function applyLang(){
   // 折叠状态不受影响 —— 因为 fold_key 里不含任何本地化文本, 这正是后端下发 key 的收益。
   if(typeof renderTorrGroups==='function'&&LAST_CLASSIFY)renderTorrGroups(LAST_CLASSIFY);
   if(typeof renderTorrCats==='function'&&CATS_CFG)renderTorrCats();
+  // 种子源勾选条/工具条按钮是动态文案, 切语言也要刷新
+  if(typeof syncTorrSelUI==='function')syncTorrSelUI();
+  if(typeof refreshTorrDlBtn==='function')refreshTorrDlBtn();
 }
 
 let TOKEN=localStorage.getItem('iso_hub_token')||'';
@@ -1369,11 +1377,16 @@ function triggerDownload(url){
   a.href=url;a.rel='noopener';
   document.body.appendChild(a);a.click();a.remove();
 }
-/* 下载所选: 一个按钮服务两个面板 —— 种子面板走种子勾选(TORR_CHECKED, 按 hash),
+/* 下载所选: 一个按钮服务多个面板 —— 种子面板再按子页分发:
+   「种子源」子页走 TORR_SEL(按 url 批量添加到 qB), 「下载列表」子页走 TORR_CHECKED(按 hash 取票下载),
    其余面板走镜像清单勾选(.ck, 按 catalog 三元组)。 */
 async function downloadLocalSel(){
   const tb=document.querySelector('.tab.active');
-  if(tb&&tb.dataset.tab==='torrent')return torrDlLocalSel();
+  if(tb&&tb.dataset.tab==='torrent'){
+    const sub=document.querySelector('#panel-torrent .src-tab.active');
+    if(sub&&sub.dataset.sub==='source')return torrAddSel();
+    return torrDlLocalSel();
+  }
   const cks=[...document.querySelectorAll('.ck:checked')];
   if(!cks.length)return toast(t('pleaseSel'),'err');
   const map=new Map();
@@ -1547,6 +1560,20 @@ function switchTab(tab){
   if(tab==='torrent'){checkQbEnabled();}
   // 离开 torrent 页签时停止种子列表轮询
   if(tab!=='torrent'){clearInterval(TORR_POLL);TORR_POLL=null;}
+  if(typeof refreshTorrDlBtn==='function')refreshTorrDlBtn();
+}
+/* 工具条「下载」按钮文案随面板/子页联动:
+   种子源子页 = 批量添加到 qB(dlSel), 下载列表子页 = 取票下载到本机(dlLocalSel), 其余 = dlLocalSel */
+function refreshTorrDlBtn(){
+  const b=document.getElementById('btnDlLocal'); if(!b)return;
+  const tb=document.querySelector('.tab.active');
+  let key='dlLocalSel';
+  if(tb&&tb.dataset.tab==='torrent'){
+    const sub=document.querySelector('#panel-torrent .src-tab.active');
+    if(sub&&sub.dataset.sub==='source')key='dlSel';
+  }
+  b.dataset.i18n=key;
+  b.textContent=t(key);
 }
 
 /* ---------- 设置面板 ---------- */
@@ -1619,6 +1646,8 @@ function switchTorr(sub){
     TORR_POLL=setInterval(loadTorrentInfo,2000);
   }
   if(sub==='cat')loadTorrCats();
+  if(typeof refreshTorrDlBtn==='function')refreshTorrDlBtn();
+  if(sub==='source')syncTorrSelUI();
 }
 async function loadTorrentSources(){
   const r=await jget('/api/torrent/sources');
@@ -1654,19 +1683,62 @@ const TCAT_FOLD_KEY='iso_hub_tcat_folded';
 function tcatFoldedSet(){try{return new Set(JSON.parse(localStorage.getItem(TCAT_FOLD_KEY)||'[]'))}catch(e){return new Set()}}
 function saveTcatFolded(set){localStorage.setItem(TCAT_FOLD_KEY,JSON.stringify([...set]))}
 function torrSearchInput(){if(LAST_CLASSIFY)renderTorrGroups(LAST_CLASSIFY)}
+/* ---------- 种子源勾选(TORR_SEL, 以 url 为 key) ----------
+   与下载列表的 TORR_CHECKED 同理, 渲染要跨 2s 轮询/搜索保持; 但一次批量添加
+   成功发起后必须清空(用户已经完成一次下载请求, 留着勾没有意义)。 */
+let TORR_SEL=new Set();
+function tiCkChange(box){
+  const u=box.dataset.u;
+  if(box.checked)TORR_SEL.add(u);else TORR_SEL.delete(u);
+  syncTorrSelUI();
+}
+function torrSelToggleAll(on){
+  document.querySelectorAll('#torr-list .ti-ck').forEach(c=>{
+    const u=c.dataset.u;
+    c.checked=on;
+    if(on)TORR_SEL.add(u);else TORR_SEL.delete(u);
+  });
+  syncTorrSelUI();
+}
+/* 渲染后统一同步: 剔除已不在当前列表里的勾选, 刷新全选框的半选/文案。 */
+function syncTorrSelUI(){
+  const cks=[...document.querySelectorAll('#torr-list .ti-ck')];
+  const live=new Set(cks.map(c=>c.dataset.u));
+  for(const u of [...TORR_SEL]) if(!live.has(u))TORR_SEL.delete(u);
+  const on=cks.filter(c=>c.checked).length;
+  document.querySelectorAll('#torr-list .tcat-all').forEach(cb=>{
+    const rows=[...(cb.closest('.tcat')?.querySelectorAll('.ti-ck')||[])];
+    const sel=rows.filter(c=>c.checked).length;
+    cb.checked=!!rows.length&&sel===rows.length;
+    cb.indeterminate=sel>0&&sel<rows.length;
+  });
+  const btn=document.getElementById('torr-sel-btn');
+  if(btn){
+    const all=!!cks.length&&on===cks.length;
+    btn.dataset.i18n=all?'torrSelNone':'torrSelAll';
+    btn.textContent=(all?'☐ ':'☑ ')+t(all?'torrSelNone':'torrSelAll');
+  }
+}
 function torrItemRow(it){
   const title=it.title||String(it.url||'').split('/').pop()||'';
-  return '<div class="prot-row" style="align-items:flex-start"><div style="flex:1;min-width:0">'
+  const u=String(it.url||'');
+  const checked=TORR_SEL.has(u)?'checked':'';
+  return '<div class="prot-row" style="align-items:flex-start"><div style="flex:1;min-width:0;display:flex;gap:8px;align-items:flex-start">'
+    +'<input type="checkbox" class="ti-ck" style="margin-top:2px" data-u="'+esc(u)+'" '+checked+' onchange="tiCkChange(this)">'
+    +'<div style="flex:1;min-width:0">'
     +'<div class="pn" style="font-size:13px;word-break:break-all">'+esc(title)+'</div>'
     +(it.pubDate?'<div class="muted" style="font-size:11px">'+esc(it.pubDate)+' · '+esc(it.source||'')+'</div>':'')
-    +'</div>'
+    +'</div></div>'
     +'<button class="btn-s" style="padding:4px 12px;font-size:12px" onclick="torrAdd(\''+esc(it.url)+'\',\''+esc((it.title||'').replace(/\.torrent.*$/i,''))+'\')">'+t('torrDownload')+'</button>'
     +'</div>';
 }
 function renderTorrItems(items){
   const box=document.getElementById('torr-list'); if(!box)return;
   if(!items.length){box.innerHTML='<div class="empty" style="padding:14px 0">'+t('torrEmpty')+'</div>';return;}
-  box.innerHTML=items.map(torrItemRow).join('');
+  box.innerHTML='<div style="display:flex;gap:8px;padding:2px 0 8px">'
+    +'<button class="btn-s" style="padding:3px 10px;font-size:11px" id="torr-sel-btn" onclick="torrSelToggleAll(!!document.querySelector(\'#torr-list .ti-ck:not(:checked)\'))">☑ '+t('torrSelAll')+'</button>'
+    +'</div>'+items.map(torrItemRow).join('');
+  syncTorrSelUI();
 }
 async function classifyAndRender(){
   if(!LAST_TORRENT_ITEMS.length){LAST_CLASSIFY=null;return;}
@@ -1703,6 +1775,7 @@ function renderTorrGroups(res){
     html+='<div class="tcat" data-cat="'+esc(cat.id)+'">'
       +'<div class="tcat-head" data-fold-key="'+esc(foldKey)+'" onclick="toggleTcat(this)">'
         +'<span class="tcat-arrow">'+(isFolded?'▸':'▾')+'</span>'
+        +(items.length?'<input type="checkbox" class="tcat-all" title="'+esc(t('torrSelAll'))+'" onclick="event.stopPropagation()" onchange="torrSelCat(this)" style="width:15px;height:15px;accent-color:var(--brand);cursor:pointer">':'')
         +'<span class="tcat-name">'+esc(name)+'</span>'
         +'<span class="tcat-count">'+items.length+'</span>'
         +(isU&&items.length?'<span class="tcat-tools"><button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="event.stopPropagation();torrExportUncat()">'+t('torrUncatExport')+'</button></span>':'')
@@ -1712,6 +1785,17 @@ function renderTorrGroups(res){
       +'</div></div>';
   });
   box.innerHTML=html||('<div class="empty" style="padding:14px 0">'+t('torrNoMatch')+'</div>');
+  syncTorrSelUI();
+}
+/* 分类头全选: 只作用于该分类当前(搜索过滤后)可见的行 */
+function torrSelCat(cb){
+  const rows=[...(cb.closest('.tcat')?.querySelectorAll('.ti-ck')||[])];
+  rows.forEach(c=>{
+    c.checked=cb.checked;
+    const u=c.dataset.u;
+    if(cb.checked)TORR_SEL.add(u);else TORR_SEL.delete(u);
+  });
+  syncTorrSelUI();
 }
 function toggleTcat(head){
   const key=head.dataset.foldKey; if(!key)return;
@@ -1882,12 +1966,38 @@ async function torrDlLocalSel(){
     return toast(msg,'err');
   }
   tks.forEach((tk,i)=>setTimeout(()=>triggerDownload(tk.url),i*400));
+  // 已成功发起一次下载请求 → 勾选的使命完成, 立刻清空(与镜像列表一致), 避免用户误以为"没点上"
+  TORR_CHECKED.clear();
+  renderTorrList();
   toast(t('dlStarted')+' '+tks.length+' '+t('files')+(sk.length?(' ('+sk.length+' '+t('skipped')+')'):''));
 }
 async function torrAdd(url,distro){
   const r=await jpost('/api/torrent/add',{urls:[url],distro:distro||''});
   toast(r.j&&r.j.ok?t('torrAddOk'):((r.j&&r.j.error)||t('torrAddFail')),!(r.j&&r.j.ok));
   if(r.j&&r.j.ok){switchTorr('running');loadTorrentInfo();}
+}
+/* 种子源批量下载: 逐项调 /api/torrent/add —— 后端的落盘目录按 urls[0] 推断发行版,
+   混选不同发行版时必须每项单独提交才能各自落对目录(与单行按钮行为完全一致)。 */
+async function torrAddSel(){
+  const urls=[...TORR_SEL];
+  if(!urls.length)return toast(t('pleaseSel'),'err');
+  if(urls.length>1&&!confirm(`${urls.length} ${t('dlMultiConfirm')}`))return;
+  const byUrl=new Map(LAST_TORRENT_ITEMS.map(it=>[String(it.url||''),it]));
+  let ok=0,fail=0;
+  for(const u of urls){
+    const it=byUrl.get(u)||{};
+    const distro=String(it.title||'').replace(/\.torrent.*$/i,'');
+    const r=await jpost('/api/torrent/add',{urls:[u],distro});
+    if(r.j&&r.j.ok)ok++;else fail++;
+  }
+  // 与镜像列表一致: 发起完成后清空勾选并同步 UI
+  TORR_SEL.clear();
+  if(LAST_CLASSIFY)renderTorrGroups(LAST_CLASSIFY);else renderTorrItems(LAST_TORRENT_ITEMS);
+  if(ok){
+    toast(t('torrBatchAdded')+' '+ok+(fail?(' · '+fail+' '+t('torrBatchFail')):''),!!fail);
+    switchTorr('running');
+  }
+  else toast(t('torrAddFail'),1);
 }
 async function torrAddManual(){
   const url=($('#tm-url').value||'').trim(); if(!url)return toast('请输入链接','err');

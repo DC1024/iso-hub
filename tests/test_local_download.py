@@ -767,6 +767,88 @@ class TestTorrentPanelDownloadUI(unittest.TestCase):
         """面板按钮删除后, 其专属 i18n 键不得残留(残留=死代码)。"""
         self.assertNotIn("'torrDlLocal':", HTML)
 
+    def test_checked_cleared_after_download(self):
+        """v1.3.19: 成功发起下载后必须清空 TORR_CHECKED —— 勾选的使命已经完成,
+        留着会让用户误以为"没点上"而重复点击(用户实测反馈的不合理行为)。"""
+        m = re.search(r"async function torrDlLocalSel\(\)\{(.*?)\n\}", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 torrDlLocalSel")
+        body = m.group(1)
+        self.assertIn("TORR_CHECKED.clear()", body)
+        self.assertIn("renderTorrList()", body)
+        # 清空必须发生在成功 toast 之前(先清状态再报结果; 前面的 toast 是失败守卫分支)
+        self.assertLess(body.index("TORR_CHECKED.clear()"), body.rindex("toast("))
+
+
+class TestTorrentSourceBatchUI(unittest.TestCase):
+    """v1.3.19: 种子源页勾选批量下载(TORR_SEL, 以 url 为 key)的 HTML 契约。"""
+
+    def test_item_rows_have_checkbox(self):
+        """种子源每一行必须有 .ti-ck 勾选框, 且以 url 为 key(data-u)。"""
+        m = re.search(r"function torrItemRow\(it\)\{(.*?)\n\}", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 torrItemRow")
+        self.assertIn('class="ti-ck"', m.group(1))
+        self.assertIn("data-u=", m.group(1))
+        self.assertIn("TORR_SEL.has(u)", m.group(1))
+
+    def test_selection_set_declared(self):
+        self.assertIn("let TORR_SEL=new Set()", HTML)
+
+    def test_batch_add_is_per_item(self):
+        """批量添加必须逐项 POST /api/torrent/add —— 后端 save_path 按 urls[0]
+        推断发行版, 整批一次提交会让混选的所有种子落进第一个的目录。"""
+        m = re.search(r"async function torrAddSel\(\)\{(.*?)\nasync function", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 torrAddSel")
+        body = m.group(1)
+        self.assertIn("for(const u of urls)", body)
+        self.assertIn("urls:[u]", body)
+        self.assertNotIn("urls:urls", body)
+
+    def test_batch_add_clears_selection(self):
+        m = re.search(r"async function torrAddSel\(\)\{(.*?)\nasync function", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 torrAddSel")
+        body = m.group(1)
+        self.assertIn("TORR_SEL.clear()", body)
+        # 加完要重渲染(勾选框的 checked 态由 TORR_SEL 驱动, 不重渲染勾还在)
+        self.assertIn("renderTorrGroups", body)
+        self.assertIn("renderTorrItems", body)
+
+    def test_toolbar_dispatches_source_subtab_to_batch_add(self):
+        """工具条按钮在「种子源」子页必须走 torrAddSel(), 在下载列表子页仍走 torrDlLocalSel()。"""
+        m = re.search(r"async function downloadLocalSel\(\)\{(.*?)const cks=", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 downloadLocalSel 的分发段")
+        head = m.group(1)
+        self.assertIn("dataset.sub==='source'", head)
+        self.assertIn("return torrAddSel()", head)
+        self.assertIn("return torrDlLocalSel()", head)
+
+    def test_button_label_follows_subtab(self):
+        """按钮文案随子页联动: 种子源=dlSel(下载所选), 其余=dlLocalSel(下载到本机)。"""
+        m = re.search(r"function refreshTorrDlBtn\(\)\{(.*?)\n\}", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 refreshTorrDlBtn")
+        body = m.group(1)
+        self.assertIn("key='dlSel'", body)
+        self.assertIn("key='dlLocalSel'", body)
+        self.assertIn("b.dataset.i18n=key", body)
+
+    def test_category_header_select_all(self):
+        """分类头的全选框不许触发折叠(onclick 必须 stopPropagation)。"""
+        m = re.search(r"function renderTorrGroups\(res\)\{(.*?)\n\}", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 renderTorrGroups")
+        self.assertIn('class="tcat-all"', m.group(1))
+        self.assertIn('onclick="event.stopPropagation()"', m.group(1))
+
+    def test_sync_prunes_stale_selection(self):
+        """渲染后同步: 剔除已不在当前列表里的勾选(与 TORR_CHECKED 同款逻辑)。"""
+        m = re.search(r"function syncTorrSelUI\(\)\{(.*?)\n\}", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 syncTorrSelUI")
+        self.assertIn("TORR_SEL.delete(u)", m.group(1))
+
+    def test_batch_i18n_keys_bilingual(self):
+        for k in ("dlSel", "torrSelAll", "torrSelNone",
+                  "torrBatchAdded", "torrBatchFail"):
+            with self.subTest(key=k):
+                self.assertRegex(HTML, r"'%s':\{zh:'[^']+',en:'[^']+'\}" % k)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
