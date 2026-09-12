@@ -747,6 +747,18 @@ QB_CONTAINER = "iso-hub-qbittorrent"
 QB_CONF_PATH = Path("/qb-config/qBittorrent/qBittorrent.conf")
 
 
+def _redact_password(d: dict) -> dict:
+    """脱敏: 密码永不回传给前端, 只用一个布尔告诉 UI「有没有配过」。
+
+    与邮件通知(notifier.redact)同一套约定 —— 前端密码框留空 = 沿用已保存的那份,
+    因此后端必须把「已配过但不回传」这个状态说清楚, 否则用户会以为密码丢了。
+    """
+    safe = dict(d or {})
+    had = bool(str(safe.pop("password", "") or ""))
+    safe["password_set"] = had
+    return safe
+
+
 def load_shares() -> dict:
     """读取共享设置, 缺失键回退环境变量默认。
 
@@ -3126,7 +3138,7 @@ def api_shares():
         # managed = 是否 iso-hub 配套部署的容器: 能检测到(非 not_deployed/unknown)即为配套,
         # 凭据可管理; 用户自行部署的外部容器 iso-hub 检测不到, 无法改凭据。
         s["managed"] = st not in ("not_deployed", "unknown")
-    return jsonify({"shares": shares})
+    return jsonify({"shares": {k: _redact_password(v) for k, v in shares.items()}})
 
 
 @app.post("/api/shares")
@@ -3143,8 +3155,10 @@ def api_shares_save():
             cur["username"] = str(p["username"]).strip()
             cred_changed = True
         if "password" in p:
-            cur["password"] = str(p["password"]).strip()
-            cred_changed = True
+            _pw = str(p["password"]).strip()
+            if _pw:  # 空 = 不改: 前端密码框留空即沿用已保存的那份
+                cur["password"] = _pw
+                cred_changed = True
         if "port" in p:
             cur["port"] = str(p["port"]).strip()
         if cred_changed:
@@ -3168,7 +3182,7 @@ def api_shares_save():
     save_shares(shares)
     log(f"[共享] 设置已保存: SMB={shares['samba']['enabled']} WebDAV={shares['webdav']['enabled']}")
     return jsonify({"ok": True, "shares": {
-        k: {**v, "container": (_st := service_state(SHARE_CONTAINERS[k])),
+        k: {**_redact_password(v), "container": (_st := service_state(SHARE_CONTAINERS[k])),
             "managed": _st not in ("not_deployed", "unknown")}
         for k, v in shares.items()}})
 
@@ -3193,7 +3207,7 @@ def api_qb_settings_get():
     # 真正要看的是"能否连上并登录这个外部实例" —— 直接探测一次并回传, 面板据此显示
     # 「已连接 / 凭据错误 / 无法连接」, 而不是误导性的"请检查 socket-proxy"。
     qb["conn"] = _probe_qb_connection(qb) if not qb["managed"] else None
-    return jsonify({"ok": True, "qb": qb})
+    return jsonify({"ok": True, "qb": _redact_password(qb)})
 
 
 @app.post("/api/qb/settings")
@@ -3208,9 +3222,11 @@ def api_qb_settings_post():
         changed = True
         cred_changed = True
     if "password" in body:
-        qb["password"] = str(body["password"]).strip()
-        changed = True
-        cred_changed = True
+        _pw = str(body["password"]).strip()
+        if _pw:  # 空 = 不改: 前端密码框留空即沿用已保存的那份
+            qb["password"] = _pw
+            changed = True
+            cred_changed = True
     if "url" in body:
         # 允许用户指向外部 qBittorrent(如自行部署的实例), 而非默认的 sidecar 内部地址
         qb["url"] = str(body["url"]).strip().rstrip("/") or qb.get("url", "")
@@ -3274,7 +3290,7 @@ def api_qb_settings_post():
     qb["container"] = service_state(QB_CONTAINER)
     # 与 GET 一致地计算 managed(区分配套/外部容器)
     qb["managed"] = not _qb_is_external(qb)
-    return jsonify({"ok": True, "qb": qb})
+    return jsonify({"ok": True, "qb": _redact_password(qb)})
 
 
 # --------------------------------------------------------------------------- 种子下载 (qBittorrent + DistroWatch)
