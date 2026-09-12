@@ -24,10 +24,20 @@ ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 # 校验阶段拿到的文件名因此可能带这个后缀, 凡是要拿文件名去外部数据源
 # (sha256sums.txt 等)查表的地方, 都必须先剥离它。
 PART_SUFFIX = ".part"
+# ISO 存放模式: classified=<type>/<发行版>/ 分类存放(默认); flat=统一单目录。
+# 必须与 web/app.py 的 STORAGE_MODES / FLAT_ISO_DIRNAME 保持一致。
+STORAGE_MODES = ("classified", "flat")
+FLAT_DIRNAME = "iso"
 
 
-def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
-    """把 (type, name) 安全拼接为 download_dir 下的路径, 拒绝路径穿越/非法字符。"""
+def _safe_dist_dir(download_dir: Path, typ: str, name: str,
+                   flat: bool = False) -> Path | None:
+    """把 (type, name) 安全解析为该发行版 ISO 的**存放目录**, 拒绝路径穿越/非法字符。
+
+    校验顺序刻意放在模式判断之前 —— 非法 (type, name) 在任何模式下都返回 None。
+      * flat=False(默认) -> download_dir/<type>/<name>/
+      * flat=True        -> download_dir/iso/  (全发行版平铺同一目录)
+    """
     if not typ or not name or typ not in ALLOWED_TYPES:
         return None
     for comp in (typ, name):
@@ -36,7 +46,8 @@ def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
             return None
         if "/" in comp or "\\" in comp:
             return None
-    target = (download_dir / typ / name).resolve()
+    target = (download_dir / FLAT_DIRNAME) if flat else (download_dir / typ / name)
+    target = target.resolve()
     try:
         target.relative_to(download_dir.resolve())
     except ValueError:
@@ -44,10 +55,19 @@ def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
     return target
 
 
+def _flat_of(downloader) -> bool:
+    """读取下载器实例的存放模式; 缺失/非法一律按 classified(默认) 处理。"""
+    return getattr(downloader, "storage_mode", "classified") == "flat"
+
+
 class LinuxDistributionDownloader:
     def __init__(self, json_file: str = "distributions.json", download_dir: Optional[str] = None):
         """初始化下载器"""
         self.json_file = json_file
+        # ISO 存放模式: 由调用方 runner(iso_runner / sync_subscriptions)注入
+        # (`downloader.storage_mode = args.storage_mode`)。默认 classified, 保证单独
+        # 运行本脚本(--all / 直接调用)时行为与历史版本完全一致。
+        self.storage_mode = "classified"
 
         # 设置下载目录，默认为脚本所在目录
         if download_dir:
@@ -624,8 +644,8 @@ class LinuxDistributionDownloader:
             print(f"\n{'='*60}")
             print(f"下载第 {i}/{len(matching_dists)} 个版本:")
             
-            # 创建下载目录，使用 type/distribution 格式
-            dist_dir = _safe_dist_dir(self.download_dir, target_dist.get("type", "linux"), target_dist.get("distribution", ""))
+            # 创建下载目录: classified 用 type/distribution, flat 用统一单目录
+            dist_dir = _safe_dist_dir(self.download_dir, target_dist.get("type", "linux"), target_dist.get("distribution", ""), flat=_flat_of(self))
             if dist_dir is None:
                 print(f"错误: 发行版 {target_dist} 的 type/distribution 不合法, 跳过")
                 continue
@@ -762,7 +782,7 @@ class LinuxDistributionDownloader:
         
         # 清理发行版目录，删除不在JSON中维护的文件
         if matching_dists:
-            dist_dir = _safe_dist_dir(self.download_dir, matching_dists[0].get("type", "linux"), matching_dists[0].get("distribution", ""))
+            dist_dir = _safe_dist_dir(self.download_dir, matching_dists[0].get("type", "linux"), matching_dists[0].get("distribution", ""), flat=_flat_of(self))
             if dist_dir is not None:
                 self.cleanup_distribution_dir(dist_dir, expected_files)
         

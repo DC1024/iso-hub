@@ -19,6 +19,10 @@ import requests
 
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 PART_SUFFIX = ".part"
+# ISO 存放模式: classified=<type>/<发行版>/ 分类存放; flat=统一单目录。
+# 必须与 web/app.py 的 STORAGE_MODES / FLAT_ISO_DIRNAME 保持一致。
+STORAGE_MODES = ("classified", "flat")
+FLAT_DIRNAME = "iso"
 
 # P1-⑤b: GPG 验证状态账本(同目录模块; 每次验签后落账, 供 /api/health 汇总)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,8 +45,18 @@ class CorruptPayload(Exception):
 
 
 
-def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
-    """把 (type, name) 安全拼接为 download_dir 下的路径, 拒绝路径穿越/非法字符。"""
+def _safe_dist_dir(download_dir: Path, typ: str, name: str,
+                   flat: bool = False) -> Path | None:
+    """把 (type, name) 安全解析为该发行版 ISO 的**存放目录**, 拒绝路径穿越/非法字符。
+
+    校验顺序刻意放在模式判断之前: 非法 (type, name) 在任何存放模式下都返回 None,
+    避免"切到 flat 就让穿越输入蒙混过关"。返回目录随 `flat` 变化:
+      * flat=False(默认, classified) -> download_dir/<type>/<name>/
+      * flat=True                    -> download_dir/iso/  (全发行版平铺同一目录)
+
+    `flat` 由 `main()` 经 `--storage-mode` 传入(本文件**不读** settings.json,
+    保持 iso_runner 不直接触碰共享配置文件的约束)。
+    """
     if not typ or not name or typ not in ALLOWED_TYPES:
         return None
     for comp in (typ, name):
@@ -51,7 +65,8 @@ def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
             return None
         if "/" in comp or "\\" in comp:
             return None
-    target = (download_dir / typ / name).resolve()
+    target = (download_dir / FLAT_DIRNAME) if flat else (download_dir / typ / name)
+    target = target.resolve()
     try:
         target.relative_to(download_dir.resolve())
     except ValueError:
@@ -366,6 +381,10 @@ def main() -> None:
         "--strategy", default="A", choices=["A", "B"],
         help="多源选源策略: A=固定优先级(配置顺序, 默认), B=实测选最快可达源",
     )
+    parser.add_argument(
+        "--storage-mode", default="classified", choices=list(STORAGE_MODES),
+        help="ISO 存放模式: classified=按 <类型>/<发行版>/ 分类(默认), flat=统一单目录",
+    )
     args = parser.parse_args()
 
     selected = json.loads(args.select)
@@ -375,6 +394,8 @@ def main() -> None:
     from download_linux import LinuxDistributionDownloader  # noqa: E402
 
     downloader = LinuxDistributionDownloader(args.json_file, args.download_dir)
+    # 把存放模式透传给上游下载器(其内部 _safe_dist_dir 也按同一模式落盘)
+    downloader.storage_mode = args.storage_mode
     # 禁用整组清理：只做增量校验/下载，旧文件保留等用户手动清理
     downloader.cleanup_distribution_dir = lambda *a, **k: None
 
@@ -404,7 +425,7 @@ def main() -> None:
 
         for entry in group:
             fname = entry["download_url"].rstrip("/").rsplit("/", 1)[-1]
-            dist_dir = _safe_dist_dir(Path(downloader.download_dir), entry.get("type", "linux"), entry.get("distribution", ""))
+            dist_dir = _safe_dist_dir(Path(downloader.download_dir), entry.get("type", "linux"), entry.get("distribution", ""), flat=args.storage_mode == "flat")
             if dist_dir is None:
                 print(f"错误: 发行版 {entry.get('distribution')} 的 type/distribution 不合法, 跳过", file=sys.stderr)
                 failed = True

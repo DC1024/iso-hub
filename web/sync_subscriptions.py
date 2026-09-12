@@ -26,6 +26,11 @@ from pathlib import Path
 import requests
 
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+# ISO 存放模式(与 web/app.py 的 STORAGE_MODES / FLAT_ISO_DIRNAME 一致)。
+# 由 --storage-mode 传入(主进程 app.py 决定), 本文件不读 settings.json。
+STORAGE_MODES = ("classified", "flat")
+FLAT_DIRNAME = "iso"
+
 
 def _warn(msg: str) -> None:
     """订阅同步是被 Popen 出来的子进程: 它的 stdout 会被主进程按行读取并展示,
@@ -104,8 +109,14 @@ def _last_run_verified(downloader, entry: dict, fp: Path) -> bool:
         return False
 
 
-def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
-    """把 (type, name) 安全拼接为 download_dir 下的路径, 拒绝路径穿越/非法字符。"""
+def _safe_dist_dir(download_dir: Path, typ: str, name: str,
+                   flat: bool = False) -> Path | None:
+    """把 (type, name) 安全解析为该发行版 ISO 的**存放目录**, 拒绝路径穿越/非法字符。
+
+    校验顺序刻意放在模式判断之前 —— 非法 (type, name) 在任何模式下都返回 None。
+      * flat=False(默认) -> download_dir/<type>/<name>/
+      * flat=True        -> download_dir/iso/  (全发行版平铺同一目录)
+    """
     if not typ or not name or typ not in ALLOWED_TYPES:
         return None
     for comp in (typ, name):
@@ -114,7 +125,8 @@ def _safe_dist_dir(download_dir: Path, typ: str, name: str) -> Path | None:
             return None
         if "/" in comp or "\\" in comp:
             return None
-    target = (download_dir / typ / name).resolve()
+    target = (download_dir / FLAT_DIRNAME) if flat else (download_dir / typ / name)
+    target = target.resolve()
     try:
         target.relative_to(download_dir.resolve())
     except ValueError:
@@ -133,6 +145,8 @@ def main() -> None:
                         help="若给定，把其中的自定义源条目并入候选池")
     parser.add_argument("--cache-json", default=None,
                         help="自定义源展开缓存(custom_repo_cache.json)，strategy 源从中读取而非实时抓取")
+    parser.add_argument("--storage-mode", default="classified", choices=list(STORAGE_MODES),
+                        help="ISO 存放模式: classified=按类型/发行版分类(默认), flat=统一单目录")
     args = parser.parse_args()
 
     subs = json.loads(args.subscriptions)
@@ -231,7 +245,7 @@ def main() -> None:
             print(f"[WARN] 订阅 {name} 的 keep 值非法, 使用默认值 2", file=sys.stderr)
             keep = 2
         # 路径穿越防护: distribution/type 必须合法
-        target = _safe_dist_dir(download_dir, typ, name)
+        target = _safe_dist_dir(download_dir, typ, name, flat=args.storage_mode == "flat")
         if target is None:
             print(f"[WARN] 订阅 {typ}/{name} 的 distribution/type 不合法, 跳过", file=sys.stderr)
             continue
@@ -289,6 +303,8 @@ def main() -> None:
 
         # 下载最新 N 个
         downloader = LinuxDistributionDownloader(args.json_file, str(download_dir))
+        # 与 target 用同一模式落盘(否则本脚本的簿记路径与真实落盘路径会分叉)
+        downloader.storage_mode = args.storage_mode
         downloader.cleanup_distribution_dir = lambda *a, **k: None
         downloader.distributions = {"distributions": keep_entries}
         # 逐文件记录失败: 订阅同步用的是上游 download_distribution(多文件循环),

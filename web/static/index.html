@@ -469,6 +469,17 @@
         <span class="muted" id="strat-hint" style="font-size:12px" data-page-node-id="RmVfnbtGPDbPHHruYKJZPK"></span>
       </div>
     </div>
+    <div class="card" data-page-node-id="St0rageModeCard7xQ2mLp">
+      <div class="card-head" data-page-node-id="St0rageModeHead7xQ2mLp"><span class="g-name" data-i18n="storageMode" data-page-node-id="St0rageModeName7xQ2mLp">💾 存放模式</span><span class="chip" data-i18n="storageChip" data-page-node-id="St0rageModeChip7xQ2mLp">分类 / 平铺</span></div>
+      <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px" data-page-node-id="St0rageModeBody7xQ2mLp">
+        <span class="muted" data-i18n="storageDesc" data-page-node-id="St0rageModeDesc7xQ2mLp">决定新下载的 ISO 与种子文件怎么落盘: 按类型/发行版分文件夹, 还是全部平铺进同一个目录。切换只影响之后的下载, 已有文件不会移动。</span>
+        <div id="storage-mode-opts" style="display:flex;gap:10px;flex-wrap:wrap" data-page-node-id="St0rageModeOpts7xQ2mLp">
+          <button class="btn-s" onclick="setStorageMode('classified')" id="stor-classified" data-i18n="storClassified" data-page-node-id="St0rageModeBtC7xQ2mLp">📂 按类型分类</button>
+          <button class="btn-s" onclick="setStorageMode('flat')" id="stor-flat" data-i18n="storFlat" data-page-node-id="St0rageModeBtF7xQ2mLp">📁 统一单目录</button>
+        </div>
+        <span class="muted" id="storage-hint" style="font-size:12px" data-page-node-id="St0rageModeHint7xQ2mLp"></span>
+      </div>
+    </div>
     <div class="card" data-page-node-id="UQqIH109pRatTnBXPDEC6p">
       <div class="card-head" data-page-node-id="QFkNsRwB6kRTSK6uC37sUL"><span class="g-name" data-i18n="sharesConfig" data-page-node-id="lGrEBCrv633muKUI5WZ9PP">📡 共享设置</span><span class="chip" data-page-node-id="CEPdfFHlHQZpnEwQf2aGrh">SMB / WebDAV</span></div>
       <div style="padding:6px 16px 12px" data-page-node-id="9S00GjMUeTeaHPAFcG9fUE">
@@ -677,8 +688,8 @@ let LAST_TORRENT_ITEMS=[], LAST_CLASSIFY=null, CATS_CFG=null;
 // v1.3.19 修复: TORR_SEL / PROTECTED 同样在初始化早期(applyLang→syncTorrSelUI、loadDistros→render)被同步访问,
 // 原声明在文件后半段(1689/2319)会踩 let 的 TDZ 并炸断初始化, 故一并上提至顶部。
 let TORR_SEL=new Set(); let PROTECTED=new Set();
-const APP_VERSION='beta 2.0';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='beta 2.0';
+const APP_VERSION='beta 2.1';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='beta 2.1';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -969,6 +980,15 @@ const I18N={
   'stratActiveB':{zh:'当前: B 实测选最快(下载前 HEAD 探测,自动剔除不可达源)',en:'Now: B probe fastest (HEAD-checks each mirror, skips unreachable)'},
   'stratSaved':{zh:'选源策略已保存',en:'Source strategy saved'},
   'stratNone':{zh:'自动(跟随全局策略)',en:'Auto (follow global strategy)'},
+  /* ---------- 存放模式 ---------- */
+  'storageMode':{zh:'存放模式',en:'Storage Mode'},
+  'storageChip':{zh:'分类 / 平铺',en:'Classified / Flat'},
+  'storageDesc':{zh:'决定新下载的 ISO 与种子文件怎么落盘: 按类型/发行版分文件夹, 还是全部平铺进同一个目录。切换只影响之后的下载, 已有文件不会移动。',en:'Controls where NEW ISO and torrent downloads are stored: in per-type/per-distro folders, or all flattened into a single folder. Only affects future downloads; existing files are not moved.'},
+  'storClassified':{zh:'📂 按类型分类',en:'📂 Classified folders'},
+  'storFlat':{zh:'📁 统一单目录',en:'📁 Flat single folder'},
+  'storActiveClassified':{zh:'当前: 按 类型/发行版 分文件夹存放(默认)',en:'Now: stored under type/distro folders (default)'},
+  'storActiveFlat':{zh:'当前: 所有 ISO 平铺在同一个目录(data/iso/)',en:'Now: all ISOs flattened into one folder (data/iso/)'},
+  'storSaved':{zh:'存放模式已保存(仅对新下载生效)',en:'Storage mode saved (applies to new downloads only)'},
   'srcPrimary':{zh:'主源',en:'primary'},
   'protectList':{zh:'受保护文件',en:'Protected Files'},
   'protectEmpty':{zh:'暂无受保护文件 —— 在镜像列表每行点 🔒 锁定',en:'No protected files — click 🔒 on any ISO row to lock it'},
@@ -1597,6 +1617,25 @@ async function loadSrcStrat(){
   const r=await jget('/api/source-strategy');
   if(r&&r.strategy)paintSrcStrat(r.strategy);
 }
+/* 存放模式: classified=按类型/发行版分文件夹, flat=全部平铺到同一个目录。
+   只影响之后的新下载(后端不迁移已有文件), 故提示语里明确写了这一点。 */
+function setStorageMode(m){
+  jpost('/api/storage-mode',{mode:m}).then(r=>{
+    if(r.s!==200)return toast(r.j.error||t('failed'),'err');
+    toast(t('storSaved'));
+    paintStorageMode(r.j.mode||m);
+  });
+}
+function paintStorageMode(m){
+  const C=document.getElementById('stor-classified'),F=document.getElementById('stor-flat'),h=document.getElementById('storage-hint');
+  if(C)C.classList.toggle('on',m!=='flat');
+  if(F)F.classList.toggle('on',m==='flat');
+  if(h)h.textContent=m==='flat'?t('storActiveFlat'):t('storActiveClassified');
+}
+async function loadStorageMode(){
+  const r=await jget('/api/storage-mode');
+  if(r&&r.mode)paintStorageMode(r.mode);
+}
 function loadSettings(){
   loadShares();
   loadQbSettings();
@@ -1604,6 +1643,7 @@ function loadSettings(){
   renderProtectedList();
   renderSchedules();
   loadSrcStrat();
+  loadStorageMode();
 }
 function renderProtectedList(){
   const box=$('#protect-list');if(!box)return;

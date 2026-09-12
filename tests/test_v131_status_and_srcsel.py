@@ -49,7 +49,10 @@ class DataDirTestBase(unittest.TestCase):
         self._tmp.cleanup()
 
     def part_path(self, fname: str) -> str:
-        return str(self.data / "linux" / "Arch" / (fname + PART_SUFFIX))
+        # runner 上报的 `#TARGET` 是 .resolve() 之后的绝对路径(见 iso_runner._safe_dist_dir
+        # / 本文件 app._safe_join), app 侧要匹配它必须用同一形态 —— 这里也 resolve,
+        # 与线上形式逐字符对齐(不 resolve 的话在含符号链接/短名的路径上会假绿)。
+        return str((self.data / "linux" / "Arch" / (fname + PART_SUFFIX)).resolve())
 
 
 class TestActiveDownloadPaths(DataDirTestBase):
@@ -125,10 +128,17 @@ class TestDownloadingStatus(DataDirTestBase):
         self.assertEqual(status, "partial")
 
     def test_active_path_uses_exact_data_dir_form(self):
-        """活跃路径必须由 DATA_DIR 拼出, 否则线上永远匹配不上(静默失效)。"""
+        """活跃路径必须由 DATA_DIR 拼出且与 runner 同形态(resolve 后), 否则线上永远匹配不上。
+
+        旧版断言只是 `assertIn(expect, self.part_path(...))` —— 两边由同一表达式生成,
+        `assertIn(x, x)` 恒真, 属"假绿"。这里改成真调 `_entry_status`, 让断言有牙:
+        只要 app 侧拼路径的形式与 runner 分叉(如少一次 resolve), 状态就会跌回 partial。
+        """
         with patch.object(app, "DATA_DIR", self.data):
-            expect = str(self.data / "linux" / "Arch" / (self.fname + PART_SUFFIX))
-        self.assertIn(expect, self.part_path(self.fname))
+            status, _ = app._entry_status(
+                self.key, self.fname, self.local, {},
+                frozenset({self.part_path(self.fname)}))
+        self.assertEqual(status, "downloading")
 
 
 class TestBuildDistrosWiring(DataDirTestBase):
@@ -224,8 +234,8 @@ class TestVersionBumped(unittest.TestCase):
         # 锚在声明本身, 而不是"全文任意位置出现过 '1.3.15'"。旧写法
         # assertIn("'1.3.14'", HTML) 只要版本号出现在注释或任何字符串里就能过关,
         # 与 test_download_status.test_version_bumped 的严格写法也不一致。
-        self.assertIn("APP_VERSION='beta 2.0'", HTML)
-        self.assertIn("VERSION_TAG='beta 2.0'", HTML)
+        self.assertIn("APP_VERSION='beta 2.1'", HTML)
+        self.assertIn("VERSION_TAG='beta 2.1'", HTML)
         self.assertNotIn("'1.2.9'\n", HTML.split("APP_VERSION")[1][:40])
 
 

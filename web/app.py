@@ -73,6 +73,13 @@ SHARE_CONTAINERS = {"samba": "iso-hub-samba", "webdav": "iso-hub-webdav"}
 ISO_SUFFIXES = {".iso", ".img", ".qcow2", ".vmdk"}
 # 下载目录类型白名单(路径穿越防护)
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+# ISO 存放模式(用户可切换):
+#   classified — 按 <类型>/<发行版>/ 分类存放(默认, 便于按发行版浏览/清理)
+#   flat       — 全部 ISO 平铺进同一个目录 DATA_DIR/iso, 便于一次性拷走
+# 系统自身文件(settings.json / distributions.json / download_failures.json 等)始终在
+# DATA_DIR 根目录, 不会落进 ISO 目录 —— 因此 flat 模式下该目录里只有 ISO 文件。
+STORAGE_MODES = ("classified", "flat")
+FLAT_ISO_DIRNAME = "iso"
 # 「下载到本机」票据: 会话 token 走 X-Auth-Token 请求头, 而浏览器顶层导航(点链接下载)
 # 带不上自定义头 —— 所以下发文件改用**短时票据**自证身份(见 api_files_ticket)。
 # 票据只对应单个文件、限时有效, 且不进浏览器历史里的长效凭据。
@@ -90,13 +97,38 @@ def _is_http_url(url: str) -> bool:
         return False
 
 
-def _safe_join(typ: str, name: str) -> Path | None:
-    """把 (type, name) 安全拼接为 DATA_DIR 下的路径, 拒绝路径穿越/非法字符。
+def _flat_iso_dir() -> Path:
+    """平铺模式下的统一 ISO 目录(DATA_DIR/iso)。
 
-    校验规则:
+    该目录只承载 ISO 文件本身: settings.json / distributions.json /
+    download_failures.json 等系统文件都在 DATA_DIR 根目录, 不会落进来。
+    """
+    return (DATA_DIR / FLAT_ISO_DIRNAME).resolve()
+
+
+def _torrent_fallback_dir() -> Path:
+    """种子无法归属到发行版时的落点。
+
+    flat 模式下与镜像下载共用同一个统一目录(DATA_DIR/iso), 让用户在一个目录里
+    看到全部 ISO; classified 模式下沿用受控的 DATA_DIR/_torrents/。
+    """
+    return _flat_iso_dir() if load_storage_mode() == "flat" else (DATA_DIR / "_torrents")
+
+
+def _safe_join(typ: str, name: str) -> Path | None:
+    """把 (type, name) 安全解析为该发行版 ISO 的**存放目录**, 拒绝路径穿越/非法字符。
+
+    校验规则(两种存放模式完全一致, 与存放位置无关):
       * typ 必须在 {linux,bsd,windows,macos} 白名单内
       * typ/name 均不得为空、不得含 / 或 \\、不得为 . 或 ..
-      * resolve 后仍必须位于 DATA_DIR 内(最终兜底)
+      * classified 下 resolve 后仍必须位于 DATA_DIR 内(最终兜底)
+
+    返回目录随 `load_storage_mode()` 变化:
+      * classified(默认) -> DATA_DIR/<type>/<name>/
+      * flat             -> DATA_DIR/iso/  (全发行版平铺同一目录)
+
+    校验顺序刻意放在模式判断**之前**: 非法 (type, name) 在任何模式下都返回 None,
+    避免"切到 flat 就让穿越输入蒙混过关"。
     非法输入返回 None。
     """
     if not typ or not name or typ not in ALLOWED_TYPES:
@@ -107,6 +139,8 @@ def _safe_join(typ: str, name: str) -> Path | None:
             return None
         if "/" in comp or "\\" in comp:
             return None
+    if load_storage_mode() == "flat":
+        return _flat_iso_dir()
     target = (DATA_DIR / typ / name).resolve()
     try:
         target.relative_to(DATA_DIR.resolve())
@@ -290,6 +324,8 @@ def disk_inventory() -> dict:
     inv = {}
     if not DATA_DIR.exists():
         return inv
+    if load_storage_mode() == "flat":
+        return _flat_disk_inventory()
     for tdir in DATA_DIR.iterdir():
         if not tdir.is_dir() or tdir.name == ".git":
             continue
@@ -323,6 +359,49 @@ def disk_inventory() -> dict:
                     inv[key].append({"name": base, "size": st.st_size,
                                      "mtime": st.st_mtime, "partial": True,
                                      "partial_name": f.name})
+    return inv
+
+
+def _flat_disk_inventory() -> dict:
+    """平铺模式的磁盘清单: 扫描统一的 ISO 目录, 按**清单文件名**归属到 (type, name)。
+
+    平铺目录里没有类型/发行版子目录, 归属信息只能来自清单本身 ——
+    文件名 -> (type, name) 的映射由 distributions.json(含用户自定义源)建立。
+    目录里清单没有的文件(用户手放 / 种子下载 / 已被淘汰的旧版)在平铺模式下无法
+    归属, 直接忽略: 它们仍可经「下载到本机」的相对路径方式取回, 只是不会出现在
+    发行版分组里, 也不会被「清理过期」误删。
+    """
+    inv = {}
+    iso_dir = _flat_iso_dir()
+    if not iso_dir.is_dir():
+        return inv
+    fname_key: dict = {}
+    try:
+        for e in load_json().get("distributions", []):
+            url = e.get("download_url", "") or ""
+            fn = url.rstrip("/").rsplit("/", 1)[-1]
+            if fn:
+                fname_key.setdefault(fn, (e.get("type", "linux"),
+                                          e.get("distribution", "?")))
+    except Exception as e:  # noqa: BLE001  清单不可读时宁可不归属, 也不报错
+        log(f"[WARN] 平铺模式建立文件名归属失败: {e}")
+    for f in iso_dir.iterdir():
+        if not f.is_file():
+            continue
+        partial = _partial_base_name(f.name)
+        base = partial or f.name
+        key = fname_key.get(base)
+        if key is None:
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        rec = {"name": base, "size": st.st_size, "mtime": st.st_mtime,
+               "partial": bool(partial)}
+        if partial:
+            rec["partial_name"] = f.name
+        inv.setdefault(key, []).append(rec)
     return inv
 
 
@@ -544,9 +623,13 @@ def _entry_status(key: tuple, fname: str, local: dict | None, failures: dict,
     """
     if local and not local.get("partial"):
         return "downloaded", 0
-    # 运行中的任务正写这个 .part → 下载中(而非"下载停止")
-    part_rel = str(DATA_DIR / key[0] / key[1] / (fname + PART_SUFFIX))
-    if part_rel in active_paths:
+    # 运行中的任务正写这个 .part → 下载中(而非"下载停止")。
+    # 路径必须走 _safe_join 跟随存放模式: flat 模式下 runner 上报的是
+    # <DATA_DIR>/iso/xxx.iso.part, 这里若仍按 <type>/<name>/ 拼, 就永远匹配不上
+    # active_paths, 正在下载的文件会被误报成「下载停止」(与 v1.3.1 同源的坑)。
+    _dir = _safe_join(key[0], key[1])
+    part_rel = str(_dir / (fname + PART_SUFFIX)) if _dir else ""
+    if part_rel and part_rel in active_paths:
         return "downloading", int(local.get("size") or 0) if local else 0
     rel = f"{key[0]}/{key[1]}/{fname}"
     rec = failures.get(rel) or {}
@@ -817,6 +900,26 @@ def load_source_strategy() -> str:
 
 def save_source_strategy(s: str) -> None:
     save_settings_all({"source_strategy": s.upper()})
+
+
+def load_storage_mode() -> str:
+    """读取 ISO 存放模式: `classified`(按类型/发行版分类, 默认) 或 `flat`(统一单目录)。
+
+    与选源策略同款的回退链: settings.json -> 环境变量(ISO_HUB_STORAGE_MODE) -> 默认。
+    任何非法/缺失值都收敛为 classified, 保证调用方永远拿到两个合法值之一。
+    """
+    raw = (load_settings_all().get("storage_mode") or
+           os.environ.get("ISO_HUB_STORAGE_MODE", "classified"))
+    mode = str(raw).strip().lower()
+    return mode if mode in STORAGE_MODES else "classified"
+
+
+def save_storage_mode(mode: str) -> None:
+    """写回存放模式(只接受两个合法值 —— 调用方已校验, 这里再兜一层)。"""
+    m = str(mode).strip().lower()
+    if m not in STORAGE_MODES:
+        m = "classified"
+    save_settings_all({"storage_mode": m})
 
 
 def load_protected() -> list:
@@ -1722,6 +1825,7 @@ def _run_sync_cmd() -> list:
         "--update-first", str(REPO_DIR / "sources_config.json"),
         "--custom-json", str(CUSTOM_JSON),
         "--cache-json", str(CUSTOM_CACHE_JSON),
+        "--storage-mode", load_storage_mode(),
     ]
 
 
@@ -2040,6 +2144,7 @@ def api_download():
         "--download-dir", str(DATA_DIR),
         "--select", select_json,
         "--strategy", load_source_strategy(),
+        "--storage-mode", load_storage_mode(),
     ]
     names = sorted({e["distribution"] for e in matched})
     ok = start_task("download", f"下载: {'、'.join(names)}（{len(matched)} 个文件）", cmd, download_payload)
@@ -2082,6 +2187,28 @@ def api_source_strategy_set():
     save_source_strategy(s)
     log(f"[设置] 选源策略改为 {s}")
     return jsonify({"ok": True, "strategy": s})
+
+
+@app.get("/api/storage-mode")
+def api_storage_mode_get():
+    """读取 ISO 存放模式。flat 模式下附带统一目录的绝对路径, 供 UI 提示用户去哪里找文件。"""
+    mode = load_storage_mode()
+    return jsonify({"mode": mode,
+                    "dir": str(_flat_iso_dir()) if mode == "flat" else ""})
+
+
+@app.post("/api/storage-mode")
+def api_storage_mode_set():
+    """切换 ISO 存放模式。只影响**之后**的新下载, 已有文件不会迁移。"""
+    body = request.get_json(force=True, silent=True) or {}
+    mode = str(body.get("mode") or "").strip().lower()
+    if mode not in STORAGE_MODES:
+        return jsonify({"error": f"mode 只能是 {' 或 '.join(STORAGE_MODES)}"}), 400
+    save_storage_mode(mode)
+    log(f"[设置] ISO 存放模式改为 {mode}"
+        + ("(统一目录 %s, 仅对新下载生效)" % _flat_iso_dir() if mode == "flat" else
+           "(按类型/发行版分类, 仅对新下载生效)"))
+    return jsonify({"ok": True, "mode": mode})
 
 
 @app.post("/api/custom-sources")
@@ -3188,7 +3315,11 @@ def _torrent_file_names(t: dict) -> list:
 def api_torrent_add():
     """把种子(URL/磁力)交给 qBittorrent 下载。
     body: {urls:[...], distro?, type?, category?}
-    若能推断发行版, 保存路径设为 /data/<type>/<发行版>/; 否则存 /data/_torrents/。
+
+    保存路径随 ISO 存放模式走, 与镜像下载保持一致:
+      * classified(默认) — 能推断发行版则 /data/<type>/<发行版>/, 否则 /data/_torrents/
+      * flat             — 一律落到统一目录 /data/iso/(与镜像下载同一个目录)
+    保存路径经 qBittorrent `torrents/add` 的 `savepath` 参数下发(见 QBClient.add_torrent)。
     """
     ok, err = _ensure_qb_enabled()
     if not ok:
@@ -3227,13 +3358,13 @@ def api_torrent_add():
             target.mkdir(parents=True, exist_ok=True)
             save_path = str(target)
         else:
-            # distro/typ 非法(含 ../ 等): 回退到受控的 _torrents 目录, 不信任用户输入
-            fallback = DATA_DIR / "_torrents"
+            # distro/typ 非法(含 ../ 等): 回退到受控目录, 不信任用户输入
+            fallback = _torrent_fallback_dir()
             fallback.mkdir(parents=True, exist_ok=True)
             save_path = str(fallback)
             log(f"[种子] 拒绝非法保存路径 {typ}/{distro}, 回退到 {save_path}")
     else:
-        fallback = DATA_DIR / "_torrents"
+        fallback = _torrent_fallback_dir()
         fallback.mkdir(parents=True, exist_ok=True)
         save_path = str(fallback)
     try:

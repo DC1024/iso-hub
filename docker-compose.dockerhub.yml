@@ -48,6 +48,8 @@ services:
       # 订阅自动同步间隔(秒),默认 86400=每天;设 0 关闭自动调度,仅手动/定时调用
       - ISO_HUB_SYNC_INTERVAL=${ISO_HUB_SYNC_INTERVAL:-86400}
       - ISO_HUB_SOURCE_STRATEGY=${ISO_HUB_SOURCE_STRATEGY:-A}
+      # ISO 存放模式: classified=按 类型/发行版 分文件夹(默认); flat=全部平铺到单一 iso/ 目录
+      - ISO_HUB_STORAGE_MODE=${ISO_HUB_STORAGE_MODE:-classified}
       # 种子下载(qBittorrent sidecar)连接配置
       - QB_URL=${QB_URL:-http://qbittorrent:8080}
       - QB_USER=${QB_USER:-admin}
