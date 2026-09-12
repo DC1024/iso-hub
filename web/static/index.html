@@ -544,7 +544,7 @@
           </div>
         </div>
         <div class="hint" style="padding:0 4px" data-i18n="shareDesc" data-page-node-id="6nadTGs9xAifLDxWvk0uFP"></div>
-        <div class="hint" style="padding:0 4px;color:var(--warn)" data-i18n="sharePlainWarn">⚠ 安全提示：共享凭据以明文保存在 ./data/settings.json。任何能读取 data 卷的进程或用户都能拿到该密码，请勿把 data 目录交给不受信任的一方。</div>
+        <div class="hint" style="padding:0 4px;color:var(--warn)" data-i18n="sharePlainWarn">⚠ 安全提示：共享凭据默认以明文保存在 ./data/settings.json。若已设置外部密钥 ISO_HUB_SECRET_KEY，将以 AES-GCM 密文存储于磁盘；仍请勿把 data 目录交给不受信任的一方。</div>
       </div>
     </div>
     <div class="card" data-page-node-id="AFLpuLjy2NrQ0pF8L7YDAm">
@@ -872,7 +872,7 @@ const I18N={
   'protectFailed':{zh:'操作失败',en:'Operation failed'},
   'settingsDesc':{zh:'用户、语言、共享设置',en:'User, language & share settings'},
   'shareDesc':{zh:'说明：SMB/WebDAV 共享默认禁用。点击下方开关手动启用，随后设置账号密码；修改后写入 ./data/settings.json。默认凭据仅作兜底，启用后请务必修改。',en:'SMB/WebDAV shares are disabled by default. Toggle to enable, then set credentials; changes are saved to ./data/settings.json. The default credentials are fallbacks only — change them after enabling.'},
-  'sharePlainWarn':{zh:'⚠ 安全提示：共享凭据以明文保存在 ./data/settings.json。任何能读取 data 卷的进程或用户都能拿到该密码，请勿把 data 目录交给不受信任的一方。',en:'⚠ Security note: share credentials are stored in plaintext in ./data/settings.json. Any process or user able to read the data volume can obtain that password — do not expose the data directory to untrusted parties.'},
+  'sharePlainWarn':{zh:'⚠ 安全提示：共享凭据默认以明文保存在 ./data/settings.json。若已设置外部密钥 ISO_HUB_SECRET_KEY，将以 AES-GCM 密文存储于磁盘；仍请勿把 data 目录交给不受信任的一方。',en:'⚠ Security note: by default share credentials are stored in plaintext in ./data/settings.json. If an external key ISO_HUB_SECRET_KEY is configured, they are stored encrypted at rest (AES-GCM); still, do not expose the data directory to untrusted parties.'},
   'sambaDesc':{zh:'PVE/Windows 挂载 ISO 库',en:'Mount ISO library from PVE/Windows'},
   'webdavDesc':{zh:'HTTP WebDAV endpoint',en:'HTTP WebDAV endpoint'},
   'repoTab':{zh:'发行版源 · 追踪最新版本',en:'Distro source · track latest'},

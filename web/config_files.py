@@ -45,6 +45,8 @@ app.py 会 import distro_torrents, 反向引用会形成循环 import。
 """
 from __future__ import annotations
 
+import base64  # noqa: F401  (保留: 将来若改 base64 封装便于迁移)
+import hashlib
 import json
 import os
 import threading
@@ -53,11 +55,90 @@ from pathlib import Path
 
 __all__ = [
     "CorruptJsonFile",
+    "SettingsDecryptError",
     "file_lock",
     "read_json_raw",
     "write_json_atomic",
     "update_json",
 ]
+
+
+# --------------------------------------------------------------------------- 加密落盘 (A+B)
+# settings.json 里含共享凭据(samba/webdav/qb 明文) + 用户/会话/调度/保护清单等敏感数据。
+# 设了 ISO_HUB_SECRET_KEY(原始密钥) 或 ISO_HUB_SECRET_KEY_FILE(密钥文件路径) 时, 对
+# settings.json 整文件做 AES-GCM 加密后再落盘; 未设则保持明文(向后兼容, 现有部署零变化)。
+# 密钥只用于"磁盘加解密", 与登录认证(PBKDF2 哈希) 完全无关, 终端用户永不接触。
+_ENC_MAGIC = b"ISOHUB-SETTINGS-ENC-v1\n"
+
+
+def _resolve_secret_key():
+    raw = os.environ.get("ISO_HUB_SECRET_KEY")
+    if raw:
+        return raw.encode("utf-8")
+    fp = os.environ.get("ISO_HUB_SECRET_KEY_FILE")
+    if fp and os.path.isfile(fp):
+        try:
+            return open(fp, "rb").read().strip()   # 密钥文件可能是二进制
+        except OSError:
+            return None
+    return None
+
+
+def _is_settings(path):
+    return os.path.basename(str(path)) == "settings.json"
+
+
+def _derive_aes_key(secret: bytes) -> bytes:
+    # 静态密钥 -> 32 字节 AES-256 密钥(对静态 at-rest 密钥足够; 非每次会话派生)
+    return hashlib.sha256(secret).digest()
+
+
+class SettingsDecryptError(Exception):
+    """解密失败(密钥不匹配 / 文件被篡改)。
+
+    调用方**绝不能**把它当"损坏文件 -> 重置为空配置"处理, 否则会覆盖一份其实是
+    有效密文、只是密钥不对的文件, 造成不可逆的数据丢失。
+    """
+
+
+def _aesgcm(secret):
+    # 懒导入: 没装 cryptography 且未设密钥的环境(如未装依赖的测试)不会因 import 而崩
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    return AESGCM(_derive_aes_key(secret))
+
+
+def _encrypt_settings(plaintext: bytes) -> bytes:
+    secret = _resolve_secret_key()
+    if secret is None:
+        return plaintext
+    nonce = os.urandom(12)
+    ct = _aesgcm(secret).encrypt(nonce, plaintext, None)
+    return _ENC_MAGIC + nonce + ct
+
+
+def _decrypt_settings(raw: bytes) -> bytes:
+    secret = _resolve_secret_key()
+    if secret is None:
+        return raw
+    if not raw.startswith(_ENC_MAGIC):
+        # 明文回退: 文件早于加密存在, 或刚启用加密但还没重写过 -> 当明文读
+        return raw
+    body = raw[len(_ENC_MAGIC):]
+    if len(body) <= 12:
+        raise SettingsDecryptError("settings.json 密文过短")
+    nonce, ct = body[:12], body[12:]
+    try:
+        return _aesgcm(secret).decrypt(nonce, ct, None)
+    except Exception as e:  # cryptography 对错误密钥/篡改抛 InvalidTag
+        raise SettingsDecryptError(
+            "settings.json 解密失败(密钥不匹配或文件被篡改)") from e
+
+
+def _chmod_600(path):
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass   # 权限不足(如某些只读挂载)不致命, 加密本身已提供主要保护
 
 
 class CorruptJsonFile(Exception):
@@ -96,14 +177,22 @@ def file_lock(path) -> threading.RLock:
 
 
 def read_json_raw(path) -> dict:
-    """读取 JSON 对象: 文件不存在返回 {}; 内容非法抛 CorruptJsonFile(不挪动文件)。"""
+    """读取 JSON 对象: 文件不存在返回 {}; 内容非法抛 CorruptJsonFile(不挪动文件)。
+
+    settings.json 在启用密钥时是 AES-GCM 密文, 这里统一以二进制读入再解密; 解密失败
+    (密钥不对) 抛 SettingsDecryptError, 由调用方决定如何处置(绝不应静默当空配置)。
+    """
     p = Path(path)
     if not p.exists():
         return {}
-    raw = p.read_text(encoding="utf-8")
+    raw = p.read_bytes()
     try:
-        data = json.loads(raw)
-    except ValueError as e:            # JSONDecodeError 是它的子类
+        raw = _decrypt_settings(raw)
+    except SettingsDecryptError:
+        raise
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:   # JSONDecodeError 是 ValueError 子类
         raise CorruptJsonFile(p, None) from e
     if data is None:                   # 空内容 -> 当成空配置, 而不是损坏
         return {}
@@ -120,6 +209,9 @@ def write_json_atomic(path, data: dict) -> None:
     不得不靠 try/except 兜底的原因)。临时文件以 . 开头, 且在异常时清理,
     正常情况下不会残留在数据目录里。
 
+    settings.json 在启用密钥时先整文件 AES-GCM 加密再落盘; 写完后 chmod 600(档位 A),
+    收窄"能读 data 卷的进程/用户"范围(对 root 容器只能挡非 root 读者, 但仍有意义)。
+
     注意: 调用方应当已经持有 file_lock(path)。
 
     os.replace(重命名)在 Windows 上若目标文件正被别的句柄打开(并发读者 / 杀毒 /
@@ -128,14 +220,17 @@ def write_json_atomic(path, data: dict) -> None:
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    blob = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    out = _encrypt_settings(blob) if _is_settings(p) else blob
     # 名字里带 pid + 线程号: 即便将来有两个进程写同一文件, 也不会互相踩临时文件
     tmp = p.parent / (".%s.%d.%d.tmp" % (p.name, os.getpid(), threading.get_ident()))
-    blob = json.dumps(data, ensure_ascii=False, indent=2)
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(blob)
+        with open(tmp, "wb") as fh:
+            fh.write(out)
             fh.flush()
             os.fsync(fh.fileno())     # 落盘后再替换, 避免掉电时拿到新内容的空壳
+        if _is_settings(p):
+            _chmod_600(tmp)
         # 重试吸收 Windows 上"目标被占用"的瞬时失败; 最终仍失败才上抛
         last_err = None
         for _attempt in range(5):
@@ -149,6 +244,8 @@ def write_json_atomic(path, data: dict) -> None:
                     time.sleep(0.02)
         if last_err is not None:
             raise last_err
+        if _is_settings(p):
+            _chmod_600(p)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -167,6 +264,8 @@ def _quarantine(path):
         "%s.corrupt.%s" % (p.name, time.strftime("%Y%m%d%H%M%S")))
     try:
         p.replace(target)
+        if _is_settings(p):
+            _chmod_600(target)   # 备份同样含凭据, 一并锁权限
         return target
     except OSError:
         return None
@@ -192,6 +291,9 @@ def update_json(path, patch, *, on_quarantine=None) -> dict:
         except CorruptJsonFile:
             backup = _quarantine(p)
             cur = {}
+        except SettingsDecryptError:
+            # 密钥不对/文件被篡改: 绝不静默重置为空配置(否则会覆盖有效密文, 数据全丢)
+            raise
         if callable(patch):
             patch(cur)
         else:
