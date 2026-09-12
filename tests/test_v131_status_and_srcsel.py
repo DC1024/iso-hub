@@ -224,8 +224,8 @@ class TestVersionBumped(unittest.TestCase):
         # 锚在声明本身, 而不是"全文任意位置出现过 '1.3.15'"。旧写法
         # assertIn("'1.3.14'", HTML) 只要版本号出现在注释或任何字符串里就能过关,
         # 与 test_download_status.test_version_bumped 的严格写法也不一致。
-        self.assertIn("APP_VERSION='1.3.19'", HTML)
-        self.assertIn("VERSION_TAG='1.3.19'", HTML)
+        self.assertIn("APP_VERSION='beta 2.0'", HTML)
+        self.assertIn("VERSION_TAG='beta 2.0'", HTML)
         self.assertNotIn("'1.2.9'\n", HTML.split("APP_VERSION")[1][:40])
 
 
