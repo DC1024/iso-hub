@@ -1278,6 +1278,40 @@ SERVICE_STATES = ("running", "stopped", "not_deployed", "unknown")
 _CONTAINER_STATUS_TO_STATE = {"running": "running", "created": "stopped", "restarting": "stopped",
                               "paused": "stopped", "exited": "stopped", "dead": "stopped"}
 
+# ---- Docker 查询失败日志降噪 -------------------------------------------------
+# 背景: 未挂载 docker.sock 且未设置 DOCKER_HOST 的部署里, 每一次容器状态查询都会抛
+# FileNotFoundError。启动收敛线程会对 3 个 sidecar 重试 12 轮(间隔 5 秒), 设置页的
+# /api/shares 与 /api/qb/settings 每次访问也各查一轮 —— 面板日志被同一条错误刷满,
+# 真正有用的信息反而被淹没。
+# 策略: 同一 (对象, 异常类型) 在 _DOCKER_ERR_TTL 内只输出首条, 之后静默并累计次数;
+# 首条附带可操作提示, 让用户知道这是"未接 Docker"而不是"功能坏了"。
+# 只影响日志输出, 不改变任何返回值语义(仍是 unknown / None), 故不影响既有行为。
+_DOCKER_ERR_TTL = 300.0
+_DOCKER_ERR_SEEN: dict[str, tuple[float, int]] = {}
+
+
+def _log_docker_once(key: str, msg: str) -> None:
+    """Docker 相关告警的降噪输出: 同 key 在 TTL 内只打首条, 其余静默并计数。"""
+    now = time.time()
+    with _lock:
+        prev = _DOCKER_ERR_SEEN.get(key)
+        if prev and now - prev[0] < _DOCKER_ERR_TTL:
+            _DOCKER_ERR_SEEN[key] = (prev[0], prev[1] + 1)
+            return
+        _DOCKER_ERR_SEEN[key] = (now, 1)
+    log(msg)
+
+
+def _docker_failure_hint(err: BaseException) -> str:
+    """按异常类型给出"该怎么办"的一句话提示(只附在首条日志上)。"""
+    if isinstance(err, FileNotFoundError):
+        return ("；iso-hub 未连接到 Docker, 面板将无法启停共享/种子容器。"
+                "如需该功能, 请为 iso-hub 容器挂载 /var/run/docker.sock, "
+                "或设置环境变量 DOCKER_HOST 指向 socket-proxy。")
+    if isinstance(err, (ConnectionRefusedError, ConnectionResetError, TimeoutError)):
+        return "；Docker 接口不可达, 请检查 socket-proxy 是否运行。"
+    return ""
+
 
 def service_state(name: str) -> str:
     """查询 sidecar 容器并归并为四态之一。任何异常/API 不通都返回 unknown, 绝不抛错。
@@ -1299,7 +1333,8 @@ def service_state(name: str) -> str:
             return "unknown"
         return _CONTAINER_STATUS_TO_STATE.get(st, "stopped")
     except Exception as e:  # noqa: BLE001
-        log(f"[docker] 查询容器 {name} 异常: {e!r}")
+        _log_docker_once(f"state|{name}|{type(e).__name__}",
+                         f"[docker] 查询容器 {name} 异常: {e!r}" + _docker_failure_hint(e))
         return "unknown"
 
 
@@ -1321,7 +1356,8 @@ def container_restart_policy(name: str) -> str | None:
         policy = ((payload.get("HostConfig") or {}).get("RestartPolicy") or {}).get("Name")
         return policy or None
     except Exception as e:  # noqa: BLE001
-        log(f"[docker] 查询容器 {name} 重启策略异常: {e!r}")
+        _log_docker_once(f"policy|{name}|{type(e).__name__}",
+                         f"[docker] 查询容器 {name} 重启策略异常: {e!r}" + _docker_failure_hint(e))
         return None
 
 
@@ -1341,7 +1377,8 @@ def share_container_state(name: str) -> str | None:
             log(f"[docker] 容器 {name} 返回异常结构: State={payload.get('State')!r}")
         return st or None
     except Exception as e:  # noqa: BLE001
-        log(f"[docker] 查询容器 {name} 异常: {e!r}")
+        _log_docker_once(f"raw|{name}|{type(e).__name__}",
+                         f"[docker] 查询容器 {name} 异常: {e!r}" + _docker_failure_hint(e))
         return None
 
 
@@ -3191,7 +3228,6 @@ def api_shares_save():
 def api_qb_settings_get():
     """获取 qBittorrent 设置及容器实时四态状态。"""
     qb = load_qb_settings()
-    qb["container"] = service_state(QB_CONTAINER)
     # 标记 url 是否被用户显式保存过(区别于默认的内部 sidecar 地址 http://qbittorrent:8080)。
     # 前端据此决定输入框是否回显 url —— 未自定义时留空, 由用户按占位提示自行填写。
     try:
@@ -3203,8 +3239,12 @@ def api_qb_settings_get():
     # 或从未自定义), iso-hub 就能管理该 qb 容器, 可改凭据并同步到 sidecar; 若用户填了外部
     # qBittorrent 地址, 那是自行部署的容器, iso-hub 无法改其用户名/密码 → managed=False。
     qb["managed"] = not _qb_is_external(qb)
-    # 外部 QB: 容器状态(上面 service_state 查的是**配套** sidecar)对用户毫无意义,
-    # 真正要看的是"能否连上并登录这个外部实例" —— 直接探测一次并回传, 面板据此显示
+    # 容器状态只在**配套** sidecar 场景才有意义。外部 QB 是用户自行部署的容器, iso-hub 没有
+    # 它可查(查的是同名配套 sidecar, 必然 not_deployed/unknown): 既会污染日志(未接 Docker 的
+    # 部署每次访问都抛 FileNotFoundError), 又会让界面误报"请检查 socket-proxy"。
+    # 故外部 QB 不查询, 直接标记未部署; 界面看 conn 判断"能否连上并登录"。
+    qb["container"] = service_state(QB_CONTAINER) if qb["managed"] else "not_deployed"
+    # 外部 QB 真正要看的是"能否连上并登录这个外部实例" —— 直接探测一次并回传, 面板据此显示
     # 「已连接 / 凭据错误 / 无法连接」, 而不是误导性的"请检查 socket-proxy"。
     qb["conn"] = _probe_qb_connection(qb) if not qb["managed"] else None
     return jsonify({"ok": True, "qb": _redact_password(qb)})
@@ -3287,9 +3327,10 @@ def api_qb_settings_post():
     elif changed:
         save_qb_settings(qb)
 
-    qb["container"] = service_state(QB_CONTAINER)
-    # 与 GET 一致地计算 managed(区分配套/外部容器)
-    qb["managed"] = not _qb_is_external(qb)
+    # 与 GET 一致: 外部 QB 不查配套 sidecar 容器(查了必然 not_deployed/unknown, 只会污染
+    # 日志并让界面误报"请检查 socket-proxy")。复用上面已算好的 _is_ext, 避免重复判断。
+    qb["managed"] = not _is_ext
+    qb["container"] = service_state(QB_CONTAINER) if not _is_ext else "not_deployed"
     return jsonify({"ok": True, "qb": _redact_password(qb)})
 
 
