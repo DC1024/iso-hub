@@ -12,6 +12,8 @@ ISO Hub - 网页版 Linux 发行版 ISO 自动更新器
   * POST /api/stop        终止当前任务
   * GET  /api/state       当前任务状态(含实时文件大小)
   * GET  /api/logs        增量拉取任务日志
+  * GET/POST /api/notify  邮件通知配置(下载完成后发SMTP通知; 密码不回传给前端)
+  * POST /api/notify/test 发一封测试邮件(不落盘)
 
 环境变量:
   ISO_REPO_DIR  上游脚本目录   (默认 /app/iso_download)
@@ -52,6 +54,10 @@ import torrent_categories as tcats  # noqa: E402
 # 放在独立模块而非本文件: distro_torrents.py 是同一个 settings.json 的第二个写方,
 # 它必须能 import 到同一把锁 —— 放在 app.py 会形成循环 import。
 import config_files  # noqa: E402
+
+# 下载完成后的邮件通知(纯模块: 不读盘不写盘, 配置由本文件读出来传进去)。
+# 单向依赖 —— notifier 绝不 import app, 否则循环。
+import notifier  # noqa: E402
 
 # --------------------------------------------------------------------------- paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -922,6 +928,105 @@ def save_storage_mode(mode: str) -> None:
     save_settings_all({"storage_mode": m})
 
 
+# --------------------------------------------------------------------------- 邮件通知配置
+# 存 settings.json 的 notify 段, 读写一律走 load_settings_all / save_settings_all
+# (= config_files.update_json), 不在这里另开写通道。
+NOTIFY_KEY = "notify"
+# 端口默认给 465 —— 2026-09-12 在两台实例上实测: Lighthouse(宿主+容器)的 25 端口
+# 出站被云厂商封死, 465/587 通; Z4Pro 家宽三个都通。25 一律不推荐。
+NOTIFY_FALLBACK = {
+    "hard": "下载失败（不可续传）",
+    "stopped": "下载停止（半成品保留，可续传）",
+}
+
+
+def load_notify_config() -> dict:
+    """读出并归一化邮件通知配置(脏数据/半截配置一律收敛成合法 dict)。"""
+    return notifier.normalize(load_settings_all().get(NOTIFY_KEY) or {})
+
+
+def save_notify_config(cfg: dict) -> dict:
+    """写回邮件通知配置, 返回落盘后的规范化结果。"""
+    full = notifier.normalize(cfg)
+    save_settings_all({NOTIFY_KEY: full})
+    return full
+
+
+def notify_cfg_from_body(body: dict, base: dict = None) -> dict:
+    """把前端提交的局部字段叠加到现有配置上。
+
+    密码单独处理: 提交空串表示「不改」(UI 上密码框留空 = 沿用已保存的), 否则会出现
+    「只想改收件人结果把密码清了」这种事故。
+    """
+    merged = dict(base if base is not None else load_notify_config())
+    patch = {k: v for k, v in body.items() if k in notifier.DEFAULTS}
+    if not str(patch.get("password") or ""):
+        patch.pop("password", None)
+    return notifier.merge(merged, patch)
+
+
+def _notify_entries(snapshot: dict) -> list:
+    """任务快照 -> 邮件明细 [{filename, size, failed, reason}]。
+
+    失败判定**不看**进程退出码: iso_runner 是「尽力而为」地跑完所有条目的, 单个文件
+    失败时整体退出码仍然可能是 0。真正的账本是 `download_failures.json`
+    (`write_fail_record` 写的), 这里以它为准, 并按文件名兜一层 —— 账本的 key 是
+    runner 侧拼的相对路径, 与 `task["downloads"]` 里的绝对路径不一定同形。
+    """
+    failures = load_failures() or {}
+    entries = []
+    for d in snapshot.get("downloads") or []:
+        p = Path(str(d.get("path") or ""))
+        if p.name.endswith(PART_SUFFIX):
+            p = p.with_name(p.name[: -len(PART_SUFFIX)])
+        name = str(d.get("filename") or p.name)
+        rec = failures.get(str(p)) or failures.get(name)
+        if not rec:
+            for k, v in failures.items():
+                if str(k) == p.name or str(k).endswith("/" + p.name):
+                    rec = v
+                    break
+        size = 0
+        try:
+            size = p.stat().st_size if p.exists() else 0
+        except OSError:
+            size = 0
+        if rec:
+            entries.append({"filename": name, "size": size, "failed": True,
+                            "reason": NOTIFY_FALLBACK.get(str(rec.get("kind") or ""),
+                                                          "下载未完成")})
+        else:
+            entries.append({"filename": name, "size": size, "failed": False,
+                            "reason": ""})
+    return entries
+
+
+def notify_download_finished(snapshot: dict) -> None:
+    """后台线程: 给一次「镜像列表下载」任务发结果邮件。
+
+    这里**绝不抛异常** —— 邮件是附加功能, 发不出去最多记一行日志, 绝不能把任务线程
+    拖死或改变已落地的下载结果。种子下载(kind=torrent)不走这里: qBittorrent 自带
+    邮件通知, 再发一遍只是重复打扰。
+    """
+    try:
+        if snapshot.get("kind") != "download" or snapshot.get("cancelled"):
+            return
+        cfg = load_notify_config()
+        entries = _notify_entries(snapshot)
+        if not notifier.should_notify(cfg, entries):
+            return
+        dur = None
+        if snapshot.get("finished") and snapshot.get("started"):
+            dur = snapshot["finished"] - snapshot["started"]
+        subject, body = notifier.build_report(
+            snapshot.get("title") or "下载任务", entries,
+            snapshot.get("exit_code"), dur)
+        ok, detail = notifier.send(cfg, subject, body)
+        log("[邮件] " + detail if ok else "[邮件] 发送失败: " + detail)
+    except Exception as e:  # noqa: BLE001
+        log("[邮件] 通知异常: %r" % (e,))
+
+
 def load_protected() -> list:
     """受保护文件名列表(存 settings.json 的 protected 键, 相对路径 type/name/文件).iso)。"""
     return list(load_settings_all().get("protected", []) or [])
@@ -1778,6 +1883,15 @@ def _spawn_worker() -> None:
         log("[任务已取消]")
     else:
         log(f"[任务结束] 退出码 {code}")
+    # 任务真正落地后(result 已写好)才发邮件。快照此刻的 task 字段 —— 紧接着用户可能
+    # 立刻发起下一个任务, 直接拿 cur(全局 dict)会读到别人的数据。
+    # 只认 download: 种子下载由 qBittorrent 自己通知, sync/meta 也不该发信打扰。
+    if cur.get("kind") == "download" and not cur["cancelled"]:
+        snap = {k: cur.get(k) for k in
+                ("kind", "title", "downloads", "targets",
+                 "started", "finished", "exit_code", "cancelled")}
+        threading.Thread(target=notify_download_finished, args=(snap,),
+                         daemon=True).start()
 
 
 def start_task(kind: str, title: str, cmd: list, downloads=None) -> bool:
@@ -2209,6 +2323,44 @@ def api_storage_mode_set():
         + ("(统一目录 %s, 仅对新下载生效)" % _flat_iso_dir() if mode == "flat" else
            "(按类型/发行版分类, 仅对新下载生效)"))
     return jsonify({"ok": True, "mode": mode})
+
+
+# --------------------------------------------------------------------------- 邮件通知
+@app.get("/api/notify")
+def api_notify_get():
+    """读取邮件通知配置。**密码不回传**, 只用 password_set 告诉 UI 有没有配过。"""
+    cfg = load_notify_config()
+    return jsonify({"config": notifier.redact(cfg),
+                    "ready": notifier.is_ready(cfg),
+                    "missing": notifier.missing_fields(cfg)})
+
+
+@app.post("/api/notify")
+def api_notify_set():
+    """保存邮件通知配置。局部提交即可(只传要改的字段), 密码留空表示不改。"""
+    body = request.get_json(force=True, silent=True) or {}
+    cfg = save_notify_config(notify_cfg_from_body(body))
+    log(f"[设置] 邮件通知已更新(启用={cfg['enabled']}, "
+        f"服务器={cfg['smtp_host']}:{cfg['smtp_port']}/{cfg['security']})")
+    return jsonify({"ok": True, "config": notifier.redact(cfg),
+                    "ready": notifier.is_ready(cfg),
+                    "missing": notifier.missing_fields(cfg)})
+
+
+@app.post("/api/notify/test")
+def api_notify_test():
+    """发一封测试邮件(**不落盘**)——先验证凭据能不能通, 再决定要不要保存。
+
+    正文用表单里当前的值; 密码留空时沿用已保存的那份。
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    submitted = body.get("config") if isinstance(body.get("config"), dict) else body
+    cfg = notify_cfg_from_body(submitted)
+    subject, text = notifier.build_test_mail(
+        "%s:%s (%s)" % (cfg["smtp_host"], cfg["smtp_port"], cfg["security"]))
+    ok, detail = notifier.send(cfg, subject, text)
+    log("[邮件] 测试邮件已发送" if ok else "[邮件] 测试邮件发送失败: " + detail)
+    return (jsonify({"ok": ok, "detail": detail}), 200 if ok else 400)
 
 
 @app.post("/api/custom-sources")
