@@ -9,9 +9,10 @@
 #   docker compose -f docker-compose.dockerhub.yml pull && docker compose -f docker-compose.dockerhub.yml up -d
 #
 # 说明: 主镜像 iso-hub 由 .github/workflows/docker-push.yml 自动构建推送到 Docker Hub
+#   - push beta    -> beta   (开发/测试通道, **不碰 latest**)
 #   - push master  -> latest
 #   - 打 tag v1.0.8 -> 1.0.8 + latest
-# 若要锁定版本, 把下面的 :latest 改成 :1.1.0 之类具体版本号
+# 若要锁定版本, 把下面的 :latest 改成 :1.1.0 之类具体版本号; 要跟开发版就改 :beta。
 #
 # 说明: samba / webdav 两个 sidecar 镜像来自 Docker Hub(dperson/samba、hacdias/webdav),
 #       国内拉取可能较慢; 若拉不动可给 Docker 配置国内镜像加速源后再 pull。
