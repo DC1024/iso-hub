@@ -348,7 +348,9 @@ class TestAllWritersShareTheChannel(SettingsDirCase):
         """
         offenders = []
         for name in ("app.py", "distro_torrents.py", "sync_subscriptions.py",
-                     "torrent_client.py", "iso_runner.py"):
+                     "torrent_client.py", "iso_runner.py",
+                     # 2026-09-12 加入: 邮件通知是第四个碰配置的模块, 一并纳入扫描
+                     "notifier.py"):
             src = (WEB_DIR / name).read_text(encoding="utf-8")
             for i, line in enumerate(src.splitlines(), 1):
                 if "settings.json" not in line:

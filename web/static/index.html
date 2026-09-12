@@ -480,6 +480,32 @@
         <span class="muted" id="storage-hint" style="font-size:12px" data-page-node-id="St0rageModeHint7xQ2mLp"></span>
       </div>
     </div>
+    <div class="card" data-page-node-id="MailNotifyCard4kJd8mQxLp">
+      <div class="card-head" data-page-node-id="MailNotifyHead4kJd8mQxLp"><span class="g-name" data-i18n="mailNotify" data-page-node-id="MailNotifyName4kJd8mQxLp">📧 邮件通知</span><span class="chip" data-i18n="mailNotifyChip" data-page-node-id="MailNotifyChip4kJd8mQxLp">下载完成后发信</span></div>
+      <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px" data-page-node-id="MailNotifyBody4kJd8mQxLp">
+        <span class="muted" data-i18n="mailNotifyDesc" data-page-node-id="MailNotifyDesc4kJd8mQxLp">「镜像列表」下载任务结束时发一封结果邮件(含成功/失败文件清单)。种子下载由 qBittorrent 自带邮件通知, 这里不会重复打扰。</span>
+        <label class="sw" data-page-node-id="MailNotifySwb4kJd8mQxLp"><input type="checkbox" id="sw-mail" onchange="saveMailNotify()" data-page-node-id="MailNotifySwI4kJd8mQxLp"><span data-i18n="enable" data-page-node-id="MailNotifySwL4kJd8mQxLp">启用</span></label>
+        <div class="share-fields" data-page-node-id="MailNotifyFields4kJd8mQxLp">
+          <label data-i18n="mailHost" data-page-node-id="MailNotifyLbH4kJd8mQxLp">SMTP 服务器 <input type="text" id="mail-host" class="inp" placeholder="smtp.qq.com" spellcheck="false" data-page-node-id="MailNotifyInH4kJd8mQxLp"></label>
+          <label data-i18n="mailPort" data-page-node-id="MailNotifyLbP4kJd8mQxLp">端口 <input type="number" id="mail-port" class="inp" style="width:110px" value="465" data-page-node-id="MailNotifyInP4kJd8mQxLp"></label>
+          <label data-i18n="mailSecurity" data-page-node-id="MailNotifyLbS4kJd8mQxLp">加密
+            <select id="mail-sec" class="inp" data-page-node-id="MailNotifyInS4kJd8mQxLp">
+              <option value="ssl" data-i18n="mailSecSsl" data-page-node-id="MailNotifyOpS4kJd8mQxLp">SSL/TLS · 465(推荐)</option>
+              <option value="starttls" data-i18n="mailSecStarttls" data-page-node-id="MailNotifyOpT4kJd8mQxLp">STARTTLS · 587</option>
+              <option value="none" data-i18n="mailSecNone" data-page-node-id="MailNotifyOpN4kJd8mQxLp">不加密(不推荐)</option>
+            </select>
+          </label>
+          <label data-i18n="username" data-page-node-id="MailNotifyLbU4kJd8mQxLp">用户名 <input type="text" id="mail-user" class="inp" autocomplete="off" spellcheck="false" data-page-node-id="MailNotifyInU4kJd8mQxLp"></label>
+          <label data-i18n="mailPassword" data-page-node-id="MailNotifyLbW4kJd8mQxLp">密码/授权码 <input type="password" id="mail-pass" class="inp" autocomplete="new-password" placeholder="留空表示不修改" data-page-node-id="MailNotifyInW4kJd8mQxLp"></label>
+          <label data-i18n="mailTo" data-page-node-id="MailNotifyLbT4kJd8mQxLp">收件人 <input type="text" id="mail-to" class="inp" placeholder="you@example.com" spellcheck="false" data-page-node-id="MailNotifyInT4kJd8mQxLp"></label>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center" data-page-node-id="MailNotifyBars4kJd8mQxLp">
+          <button class="btn-s" onclick="saveMailNotify()" data-i18n="saveCred" data-page-node-id="MailNotifyBtS4kJd8mQxLp">保存凭据</button>
+          <button class="btn-s" onclick="testMailNotify()" data-i18n="mailSendTest" data-page-node-id="MailNotifyBtT4kJd8mQxLp">✉️ 发送测试邮件</button>
+          <span class="muted" id="mail-hint" style="font-size:12px" data-page-node-id="MailNotifyHint4kJd8mQxLp"></span>
+        </div>
+      </div>
+    </div>
     <div class="card" data-page-node-id="UQqIH109pRatTnBXPDEC6p">
       <div class="card-head" data-page-node-id="QFkNsRwB6kRTSK6uC37sUL"><span class="g-name" data-i18n="sharesConfig" data-page-node-id="lGrEBCrv633muKUI5WZ9PP">📡 共享设置</span><span class="chip" data-page-node-id="CEPdfFHlHQZpnEwQf2aGrh">SMB / WebDAV</span></div>
       <div style="padding:6px 16px 12px" data-page-node-id="9S00GjMUeTeaHPAFcG9fUE">
@@ -688,8 +714,8 @@ let LAST_TORRENT_ITEMS=[], LAST_CLASSIFY=null, CATS_CFG=null;
 // v1.3.19 修复: TORR_SEL / PROTECTED 同样在初始化早期(applyLang→syncTorrSelUI、loadDistros→render)被同步访问,
 // 原声明在文件后半段(1689/2319)会踩 let 的 TDZ 并炸断初始化, 故一并上提至顶部。
 let TORR_SEL=new Set(); let PROTECTED=new Set();
-const APP_VERSION='beta 2.1';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='beta 2.1';
+const APP_VERSION='beta 2.2';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='beta 2.2';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -989,6 +1015,25 @@ const I18N={
   'storActiveClassified':{zh:'当前: 按 类型/发行版 分文件夹存放(默认)',en:'Now: stored under type/distro folders (default)'},
   'storActiveFlat':{zh:'当前: 所有 ISO 平铺在同一个目录(data/iso/)',en:'Now: all ISOs flattened into one folder (data/iso/)'},
   'storSaved':{zh:'存放模式已保存(仅对新下载生效)',en:'Storage mode saved (applies to new downloads only)'},
+  /* ---------- 邮件通知(2026-09-12) ---------- */
+  'mailNotify':{zh:'邮件通知',en:'Email Notification'},
+  'mailNotifyChip':{zh:'下载完成后发信',en:'Notify on download finish'},
+  'mailNotifyDesc':{zh:'「镜像列表」下载任务结束时发一封结果邮件(含成功/失败清单)。种子下载由 qBittorrent 自带邮件通知, 这里不会重复打扰。',en:'Sends a result email (with per-file success/failure list) when a mirror-list download task finishes. Torrent downloads are notified by qBittorrent itself and are deliberately not duplicated here.'},
+  'mailHost':{zh:'SMTP 服务器',en:'SMTP host'},
+  'mailPort':{zh:'端口',en:'Port'},
+  'mailSecurity':{zh:'加密方式',en:'Encryption'},
+  'mailSecSsl':{zh:'SSL/TLS · 465(推荐)',en:'SSL/TLS · 465 (recommended)'},
+  'mailSecStarttls':{zh:'STARTTLS · 587',en:'STARTTLS · 587'},
+  'mailSecNone':{zh:'不加密(不推荐)',en:'None (not recommended)'},
+  'mailPassword':{zh:'密码 / 授权码',en:'Password / app token'},
+  'mailTo':{zh:'收件人',en:'Recipient'},
+  'mailSendTest':{zh:'✉️ 发送测试邮件',en:'✉️ Send test email'},
+  'mailSaved':{zh:'邮件通知设置已保存',en:'Email notification settings saved'},
+  'mailTesting':{zh:'正在发送测试邮件…',en:'Sending test email…'},
+  'mailNeedServer':{zh:'请先填写 SMTP 服务器和收件人',en:'SMTP host and recipient are required'},
+  'mailHintMissing':{zh:'还缺: ',en:'Missing: '},
+  'mailHintReady':{zh:'已就绪: 下载任务结束后会按下面两个开关发信。',en:'Ready: an email is sent when a download task finishes (subject to the switches below).'},
+  'mailHintOff':{zh:'未启用: 只有打开开关并填全 SMTP 服务器 / 收件人才会发信。',en:'Disabled: enable it and fill in SMTP host + recipient to receive emails.'},
   'srcPrimary':{zh:'主源',en:'primary'},
   'protectList':{zh:'受保护文件',en:'Protected Files'},
   'protectEmpty':{zh:'暂无受保护文件 —— 在镜像列表每行点 🔒 锁定',en:'No protected files — click 🔒 on any ISO row to lock it'},
@@ -1636,6 +1681,56 @@ async function loadStorageMode(){
   const r=await jget('/api/storage-mode');
   if(r&&r.mode)paintStorageMode(r.mode);
 }
+/* ---------- 邮件通知 ----------
+   只覆盖「镜像列表」下载: 种子下载的完成通知交给 qBittorrent, 避免同一件事发两封信。
+   密码框永远是空的(后端不回传), 留空提交 = 沿用已保存的那份。 */
+function mailVal(id){const e=$(id);return e?String(e.value||'').trim():''}
+function mailPayload(){
+  const p={
+    enabled:!!($('#sw-mail')&&$('#sw-mail').checked),
+    smtp_host:mailVal('#mail-host'),
+    smtp_port:parseInt(mailVal('#mail-port')||'0',10)||0,
+    security:mailVal('#mail-sec')||'ssl',
+    username:mailVal('#mail-user'),
+    mail_to:mailVal('#mail-to')
+  };
+  const pw=mailVal('#mail-pass');
+  if(pw)p.password=pw;                 // 空 = 不改后端已存的密码
+  return p;
+}
+function paintMailNotify(j){
+  const c=(j&&j.config)||{},h=$('#mail-hint'),sw=$('#sw-mail');
+  if(sw)sw.checked=!!c.enabled;
+  [['#mail-host','smtp_host'],['#mail-port','smtp_port'],['#mail-sec','security'],
+   ['#mail-user','username'],['#mail-to','mail_to']].forEach(([id,k])=>{
+    const e=$(id);if(e&&c[k]!==undefined&&c[k]!==null)e.value=c[k];
+  });
+  const pw=$('#mail-pass');if(pw)pw.value='';
+  if(h){
+    const miss=(j&&j.missing)||[];
+    h.textContent=(j&&j.ready)?t('mailHintReady')
+      :t('mailHintOff')+(miss.length?' '+t('mailHintMissing')+miss.join(', '):'');
+  }
+}
+async function loadMailNotify(){
+  const r=await jget('/api/notify');
+  if(r)paintMailNotify(r);
+}
+function saveMailNotify(){
+  jpost('/api/notify',mailPayload()).then(r=>{
+    if(r.s!==200)return toast(r.j.error||t('failed'),'err');
+    toast(t('mailSaved'));paintMailNotify(r.j);
+  });
+}
+function testMailNotify(){
+  const p=mailPayload();
+  if(!p.smtp_host||!p.mail_to)return toast(t('mailNeedServer'),'err');
+  toast(t('mailTesting'));
+  jpost('/api/notify/test',{config:p}).then(r=>{
+    const ok=r.s===200;
+    toast((r.j&&r.j.detail)||(ok?t('mailSaved'):t('failed')),ok?'':'err');
+  });
+}
 function loadSettings(){
   loadShares();
   loadQbSettings();
@@ -1644,6 +1739,7 @@ function loadSettings(){
   renderSchedules();
   loadSrcStrat();
   loadStorageMode();
+  loadMailNotify();
 }
 function renderProtectedList(){
   const box=$('#protect-list');if(!box)return;
