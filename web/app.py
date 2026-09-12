@@ -2461,26 +2461,57 @@ def _resolve_rel_path(rel: str) -> Path | None:
 
 
 def _resolve_dl_target(typ: str, name: str, fname: str) -> Path | None:
-    """「下载到本机」统一寻址: 两种形态走不同解析器。
+    """「下载到本机」统一寻址: 三种形态走不同解析器。
 
     * typ == "_rel": fname 是 DATA_DIR 内的相对路径(种子/任意文件)
-    * 否则:        (type, distribution, filename) catalog 三元组(走 _safe_join)
+    * typ == "_abs": fname 是容器内绝对路径, 且**必须**是 qB 当前报告为已完成的
+                     种子文件(name=种子 hash)。客户端无法凭空伪造 —— 伪造路径
+                     过不了 qB 复核, 避免退化成任意文件读。
+    * 否则:          (type, distribution, filename) catalog 三元组(走 _safe_join)
     """
     if typ == "_rel":
         return _resolve_rel_path(fname)
+    if typ == "_abs":
+        return _resolve_abs_qb(name, fname)
     return _resolve_local_file(typ, name, fname)
 
 
-def _torrent_completed_files(hashes: list) -> tuple[list, list]:
-    """给定种子 hash 列表, 返回 (可下载的相对路径列表, 跳过说明列表)。
+def _resolve_abs_qb(h: str, path: str) -> Path | None:
+    """_abs 寻址复核: 路径必须与 qB 此刻报告的已完成文件**逐字符串相等**。
 
-    只挑**已完成**的文件(progress>=1 或 is_seed), 且必须在 DATA_DIR 内、非半成品。
+    外部 qB 的下载目录不在 DATA_DIR 内(典型: 独立部署的 qB 写 /downloads),
+    只要把该目录挂载进 iso-hub 容器(路径与 qB 的 save_path 一致), 就能下载。
+    若路径在容器内不可见或 qB 未报告, 一律拒绝。
+    """
+    if not h or not path:
+        return None
+    p = Path(path)
+    if not p.is_file() or _partial_base_name(p.name):
+        return None
+    try:
+        entries, _sk = _torrent_completed_files([h])
+    except Exception:  # noqa: BLE001
+        return None
+    for kind, v in entries:
+        if kind == "abs" and v == str(p):
+            return p
+    return None
+
+
+def _torrent_completed_files(hashes: list) -> tuple[list, list]:
+    """给定种子 hash 列表, 返回 (可下载条目列表, 跳过说明列表)。
+
+    条目是 (kind, value) 二元组:
+      * ("rel", 相对路径) —— 文件在 DATA_DIR 内, 走 _rel 票据;
+      * ("abs", 绝对路径) —— 文件在 DATA_DIR 外但容器内真实可见(外部 qB 把
+        下载目录挂进容器的形态), 走 _abs 票据(下载时还会再过一次 qB 复核)。
+    只挑**已完成**的文件(progress>=1 或 is_seed), 非半成品。
     依赖 qBittorrent sidecar; 未启用/不可用时返回空(由调用方决定如何提示)。
     """
-    rels, skipped = [], []
+    entries, skipped = [], []
     ok, _err = _ensure_qb_enabled()
     if not ok or not TORRENT_AVAILABLE:
-        return rels, skipped
+        return entries, skipped
     try:
         qb = _qb()
         toks = qb.list_torrents() or []
@@ -2501,23 +2532,37 @@ def _torrent_completed_files(hashes: list) -> tuple[list, list]:
                 skipped.append(f"{t.get('name', h)}: 列举文件失败: {e}")
                 continue
             found = 0
+            hidden = 0
             for f in files:
                 prog = float(f.get("progress") or 0)
                 if prog < 1.0 and not f.get("is_seed"):
                     continue  # 未完成: 不提供下载
-                fp_rel = (Path(save_path) / (f.get("name") or "")).resolve()
+                fp = (Path(save_path) / (f.get("name") or "")).resolve()
                 try:
-                    fp_rel = fp_rel.relative_to(DATA_DIR.resolve())
+                    rel = fp.relative_to(DATA_DIR.resolve())
                 except ValueError:
+                    # DATA_DIR 外(外部 qB 的典型形态): 容器内真实可见才提供,
+                    # 否则计入 hidden, 给出可行动的提示而不是笼统的"没有文件"
+                    if fp.is_file() and not _partial_base_name(fp.name):
+                        entries.append(("abs", str(fp)))
+                        found += 1
+                    else:
+                        hidden += 1
                     continue
-                if _resolve_rel_path(str(fp_rel)):
-                    rels.append(str(fp_rel).replace("\\", "/"))
+                if _resolve_rel_path(str(rel)):
+                    entries.append(("rel", str(rel).replace("\\", "/")))
                     found += 1
+                else:
+                    hidden += 1
             if not found:
-                skipped.append(f"{t.get('name', h)}: 没有已完成的可下载文件")
+                skipped.append(
+                    f"{t.get('name', h)}: "
+                    + (f"{hidden} 个已完成文件不在 iso-hub 数据目录"
+                       "(外部 qB 需把下载目录按原路径挂载进容器)"
+                       if hidden else "没有已完成的可下载文件"))
     except Exception as e:  # noqa: BLE001
         log(f"[下载] 列举种子文件失败: {e!r}")
-    return rels, skipped
+    return entries, skipped
 
 
 def _issue_ticket_for(typ: str, name: str, fname: str) -> tuple:
@@ -2576,10 +2621,14 @@ def api_files_ticket():
         # 形态 1: 种子下载(按 hash 枚举已完成文件, 后端走 qBittorrent)
         h = it.get("hash")
         if h:
-            rels, hskip = _torrent_completed_files([h])
+            entries, hskip = _torrent_completed_files([h])
             skipped.extend(hskip)
-            for rel in rels:
-                tk, sk = _issue_ticket_for("_rel", "", rel)
+            h = str(h).strip().lower()
+            for kind, val in entries:
+                # DATA_DIR 内的走 _rel; 目录外(外部 qB 挂载形态)的走 _abs,
+                # _abs 票据在下载时还会再对照 qB 报告复核一次, 防伪路径
+                tk, sk = (_issue_ticket_for("_abs", h, val) if kind == "abs"
+                          else _issue_ticket_for("_rel", "", val))
                 if tk is not None:
                     tickets.append(tk)
                 else:

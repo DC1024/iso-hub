@@ -614,15 +614,130 @@ class TestTorrentHashDownload(LocalDownloadBase):
         self.assertTrue(j["skipped"])
 
 
-class TestTorrentPanelDownloadUI(unittest.TestCase):
-    """种子面板「下载完成」筛选 + 勾选下载 的 HTML 契约(纯字符串断言)。"""
+class TestExternalQBAbsDownload(LocalDownloadBase):
+    """外部 qB 形态: 种子文件在 DATA_DIR 外(如 /downloads), 按原路径挂进容器。
 
-    def test_filter_chips_and_download_button_present(self):
+    这是 Z4Pro 部署的真实形态 —— iso-hub 只挂 /data, qB 写独立目录。修复前
+    relative_to 失败会静默跳过, 用户只能看到笼统的"没有已完成的可下载文件"。
+    修复后: 容器内真实可见 → 签发 _abs 票据; 不可见 → 给出可行动提示。
+    """
+
+    def setUp(self):
+        super().setUp()
+        # DATA_DIR 之外的"NAS 媒体目录"(容器内同路径可见)
+        self._ext = tempfile.TemporaryDirectory()
+        self.addCleanup(self._ext.cleanup)
+        self.ext_dir = Path(self._ext.name).resolve()
+        # Windows 的 tempdir 是 8.3 短路径(RUNNER~1), 而被测代码对路径做 resolve()
+        # 会得到长路径 → 逐字符串比对必然不等。统一换成短路径的长路径形态,
+        # 让"qB 报告的字符串"与"resolve 后的字符串"一致(真机上 qB 报告即真实路径)。
+        self.ext_dir = Path(os.path.realpath(str(self.ext_dir)))
+        (self.ext_dir / "动漫").mkdir()
+        self.ext_file = self.ext_dir / "动漫" / "Player S3.mp4"
+        self.ext_file.write_bytes(BODY)
+        self._fake = FakeQB(self.ext_dir,
+                            [{"name": "动漫/Player S3.mp4", "progress": 1.0,
+                              "is_seed": True, "size": len(BODY)}])
+        # += 扩展, 绝不重新赋值(见 TestTorrentHashDownload 注释的泄漏教训)
+        self._patches += [
+            patch.object(app, "TORRENT_AVAILABLE", True),
+            patch.object(app, "_ensure_qb_enabled", lambda: (True, None)),
+            patch.object(app, "_qb", lambda: self._fake),
+        ]
+        for p in self._patches[-3:]:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def post_hash(self, h="abc123"):
+        return self.client.post("/api/files/ticket",
+                                json={"items": [{"hash": h}]}).get_json()
+
+    def test_abs_file_outside_data_dir_is_issued_and_downloadable(self):
+        j = self.post_hash()
+        self.assertTrue(j["ok"], j)
+        self.assertEqual(j["skipped"], [])
+        self.assertEqual(len(j["tickets"]), 1)
+        tk = j["tickets"][0]
+        self.assertEqual(tk["filename"], "Player S3.mp4")
+        self.assertEqual(tk["type"], "_abs")
+        self.assertIsNone(tk["rel"], "_abs 票据不应有 DATA_DIR 相对路径")
+        g = self.client.get(tk["url"])
+        self.assertEqual(g.status_code, 200)
+        self.assertEqual(g.data, BODY)
+
+    def test_abs_partial_file_not_issued(self):
+        (self.ext_dir / "动漫" / "Player S3.mp4.part").write_bytes(b"x" * 16)
+        self._fake.files = [{"name": "动漫/Player S3.mp4.part", "progress": 1.0,
+                             "is_seed": False, "size": 16}]
+        j = self.post_hash()
+        self.assertEqual(j["tickets"], [])
+
+    def test_abs_invisible_file_gives_actionable_hint(self):
+        """文件在 qB 报告里但容器内看不到(没挂卷): 提示要挂卷, 而不是笼统报错。"""
+        ghost = self.ext_dir / "动漫" / "gone.mp4"
+        self._fake.files = [{"name": "动漫/gone.mp4", "progress": 1.0,
+                             "is_seed": True, "size": 1}]
+        j = self.post_hash()
+        self.assertEqual(j["tickets"], [])
+        self.assertTrue(any("挂载进容器" in s for s in j["skipped"]), j["skipped"])
+        ghost.unlink(missing_ok=True)
+
+    def test_forged_abs_path_refused(self):
+        """绕过签票直接伪造 _abs 票据: 下载时 qB 复核不过 → 403/404, 不得读文件。"""
+        victim = self.ext_dir / "动漫" / "Player S3.mp4"
+        tok = app._issue_dl_ticket("_abs", "abc123", str(victim))
+        # 先确认正常情况下这张票可用(证明拒绝来自复核, 而不是"文件本来就不在")
+        self.assertEqual(self.client.get("/api/files/get?t=" + tok).status_code, 200)
+        # qB 不再报告该文件(种子被删/改名) → 同一张票必须失效
+        self._fake.files = []
+        g = self.client.get("/api/files/get?t=" + tok)
+        self.assertIn(g.status_code, (403, 404))
+
+    def test_forged_abs_hash_refused(self):
+        """hash 换成 qB 里不存在的种子: 复核直接失败, 即使路径真实存在。"""
+        victim = self.ext_dir / "动漫" / "Player S3.mp4"
+        tok = app._issue_dl_ticket("_abs", "deadbeef", str(victim))
+        g = self.client.get("/api/files/get?t=" + tok)
+        self.assertIn(g.status_code, (403, 404))
+
+    def test_resolve_abs_qb_rejects_partial_and_missing(self):
+        good = app._resolve_abs_qb("abc123", str(self.ext_file))
+        self.assertIsNotNone(good)
+        self.assertEqual(good.name, "Player S3.mp4")
+        part = self.ext_dir / "动漫" / "p.mkv.part"
+        part.write_bytes(b"z")
+        self.assertIsNone(app._resolve_abs_qb("abc123", str(part)))
+        self.assertIsNone(app._resolve_abs_qb("abc123", str(self.ext_dir / "nope.mkv")))
+        self.assertIsNone(app._resolve_abs_qb("", str(self.ext_file)))
+        self.assertIsNone(app._resolve_abs_qb("abc123", ""))
+
+
+class TestTorrentPanelDownloadUI(unittest.TestCase):
+    """种子面板「下载完成」筛选 + 勾选下载 的 HTML 契约(纯字符串断言)。
+
+    v1.3.18 起「下载到本机」只剩工具条一个按钮: 面板内的 torrDlLocalBtn 已删除,
+    由 downloadLocalSel() 按当前面板分发(种子面板走 TORR_CHECKED 的 {hash} 形态)。
+    """
+
+    def test_filter_chips_present(self):
         self.assertIn('id="torr-state-filter"', HTML)
         for f in ("all", "dl", "done", "seed"):
             self.assertIn('data-f="%s"' % f, HTML)
-        self.assertIn('id="torrDlLocalBtn"', HTML)
-        self.assertIn("torrDlLocalSel()", HTML)
+
+    def test_single_download_button(self):
+        """全局只允许一个「下载到本机」按钮(工具条), 面板内不得再有第二个。"""
+        self.assertIn('id="btnDlLocal"', HTML)
+        self.assertNotIn('id="torrDlLocalBtn"', HTML)
+        self.assertNotIn("torrDlLocalBtn", HTML)
+        self.assertEqual(HTML.count("onclick=\"downloadLocalSel()\""), 1)
+
+    def test_toolbar_button_dispatches_by_panel(self):
+        """工具条按钮在种子面板必须分发到 torrDlLocalSel(), 其余面板走 .ck 勾选。"""
+        m = re.search(r"async function downloadLocalSel\(\)\{(.*?)const cks=", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 downloadLocalSel 的分发段")
+        head = m.group(1)
+        self.assertIn("dataset.tab==='torrent'", head)
+        self.assertIn("return torrDlLocalSel()", head)
 
     def test_render_functions_defined(self):
         for fn in ("function torrStateClass(", "function renderTorrList(",
@@ -633,8 +748,13 @@ class TestTorrentPanelDownloadUI(unittest.TestCase):
     def test_hash_items_sent_to_ticket(self):
         self.assertIn("{hash:h}", HTML)
 
+    def test_subtab_renamed_to_download_list(self):
+        """子标签「下载中」已改名「下载列表」, 且中英文都进了 i18n。"""
+        self.assertRegex(HTML, r"'torrRunning':\{zh:'⏳ 下载列表',en:'⏳ Downloads'\}")
+        self.assertIn('data-i18n="torrRunning"', HTML)
+
     def test_new_i18n_keys_present_and_used(self):
-        for k in ("torrDlLocal", "torrFilterAll", "torrFilterDl",
+        for k in ("torrFilterAll", "torrFilterDl",
                   "torrFilterDone", "torrFilterSeed", "torrNoTorrents",
                   "torrFilteredEmpty"):
             with self.subTest(key=k):
@@ -642,6 +762,10 @@ class TestTorrentPanelDownloadUI(unittest.TestCase):
                 used = (re.findall(r"t\('%s'\)" % k, HTML)
                         or re.findall(r'data-i18n="%s"' % k, HTML))
                 self.assertTrue(used, "%s 定义了但没使用" % k)
+
+    def test_removed_i18n_key_gone(self):
+        """面板按钮删除后, 其专属 i18n 键不得残留(残留=死代码)。"""
+        self.assertNotIn("'torrDlLocal':", HTML)
 
 
 if __name__ == "__main__":
