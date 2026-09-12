@@ -16,7 +16,10 @@ name: Tests
 on:
   pull_request:
   push:
-    branches: [master]
+    # beta = 开发分支: 推到 beta 也要跑全量测试, 否则"在 beta 上改测试"根本验证不了
+    # (2026-09-12 补: 此前只有 master, 导致改完测试推到 beta 后什么都没跑)
+    # 注意: 两个镜像工作流仍只监听 master —— 镜像是发布产物, 不该被开发迭代反复重推。
+    branches: [master, beta]
   workflow_dispatch:
 
 permissions:
