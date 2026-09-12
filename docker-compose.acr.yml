@@ -9,9 +9,12 @@
 #   docker compose -f docker-compose.acr.yml pull && docker compose -f docker-compose.acr.yml up -d
 #
 # 说明: 主镜像 iso-hub 由 .github/workflows/aliyun-acr.yml 自动构建推送
+#   - push beta    -> beta   (开发/测试通道, **不碰 latest**)
 #   - push master  -> latest
 #   - 打 tag v1.0.6 -> 1.0.6 + latest
-# 若要锁定版本, 把下面的 :latest 改成 :1.0.6 之类具体版本号
+# 若要锁定版本, 把下面的 :latest 改成 :1.0.6 之类具体版本号。
+# 想让某台机器跟着开发版跑, 就把 image 的 tag 换成 :beta —— 这只是**该实例**的选择,
+# 不影响"不写 tag 时默认拉 latest"这个语义, 正式部署依旧默认拿稳定版。
 #
 # 说明: samba / webdav 两个 sidecar 镜像来自 Docker Hub(dperson/samba、hacdias/webdav),
 #       国内拉取可能较慢; 若拉不动可给 Docker 配置国内镜像加速源后再 pull。
