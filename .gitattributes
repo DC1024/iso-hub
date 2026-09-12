@@ -1,0 +1,5 @@
+# 统一仓库行尾为 LF, 避免 Windows 下编辑把 CRLF 写回后, 经 Git Data API 推送时
+# 反复产生"内容相同但 blob SHA 不同"的冗余提交(推送脚本会把工作区 CRLF 归一成
+# LF 再传, 于是远端是 LF、本地是 CRLF, 每次推送都判为"有改动")。
+# text=auto: 自动识别二进制(不转换); 文本文件入库与检出一律 LF。
+* text=auto eol=lf
