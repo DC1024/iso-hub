@@ -19,7 +19,9 @@ name: Lint & Security
 on:
   pull_request:
   push:
-    branches: [master]
+    # 同 test.yml: beta 是开发分支, 推上去就要跑, 否则代码只在合并进 master 后才第一次被 lint
+    # (那个阶段来回修很贵)。镜像工作流仍只在 master。
+    branches: [master, beta]
   workflow_dispatch:
 
 permissions:
