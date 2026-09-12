@@ -520,7 +520,7 @@
               <div class="managed-hint" id="managed-hint-samba2" style="display:none;color:var(--warn);font-size:12px;padding:2px 0" data-i18n="managedHint"></div>
               <div class="share-cred" data-page-node-id="PsWNRSpTTVjH5JVYVv2zCy">
                 <label data-i18n="username" data-page-node-id="r8Hl4zwQQAwSTpLem4GkFE">用户名 <input type="text" id="u-samba2" class="inp" data-page-node-id="tFNKrosuVrd0OgK4OkgCnt"></label>
-                <label data-i18n="password" data-page-node-id="XL2p0DA9ctjT66lkYTzG8a">密码 <input type="text" id="p-samba2" class="inp" data-page-node-id="ocfb4v8164FbRflDqKgCLK"></label>
+                <label data-i18n="password" data-page-node-id="XL2p0DA9ctjT66lkYTzG8a">密码 <input type="password" id="p-samba2" class="inp" autocomplete="new-password" placeholder="留空表示不修改" data-page-node-id="ocfb4v8164FbRflDqKgCLK"></label>
                 <button class="btn-s" onclick="saveShareCred2('samba')" data-i18n="saveCred" data-page-node-id="BMu3eWVhByGPnGPFq63C1r">保存凭据</button>
               </div>
             </div>
@@ -537,7 +537,7 @@
               <div class="managed-hint" id="managed-hint-webdav2" style="display:none;color:var(--warn);font-size:12px;padding:2px 0" data-i18n="managedHint"></div>
               <div class="share-cred" data-page-node-id="THk7FEo5IwlCiBpFoIalwU">
                 <label data-i18n="username" data-page-node-id="sb0qSBGbsrPmLzA6c82brK">用户名 <input type="text" id="u-webdav2" class="inp" data-page-node-id="MAvdtS1wqwnXTpldW8sCiH"></label>
-                <label data-i18n="password" data-page-node-id="uwhWoNc9LEQBw9cxZjrTqU">密码 <input type="text" id="p-webdav2" class="inp" data-page-node-id="Vw16gJcBQVJfQCRfkuwp2a"></label>
+                <label data-i18n="password" data-page-node-id="uwhWoNc9LEQBw9cxZjrTqU">密码 <input type="password" id="p-webdav2" class="inp" autocomplete="new-password" placeholder="留空表示不修改" data-page-node-id="Vw16gJcBQVJfQCRfkuwp2a"></label>
                 <button class="btn-s" onclick="saveShareCred2('webdav')" data-i18n="saveCred" data-page-node-id="6euJIheiZRPojnjEUJon9G">保存凭据</button>
               </div>
             </div>
@@ -558,7 +558,7 @@
           <div class="managed-hint" id="managed-hint-qb" style="display:none;color:var(--warn);font-size:12px;padding:2px 0" data-i18n="managedHintQb"></div>
           <div class="share-cred" data-page-node-id="e9XDvr2NrEAclYsspL2KOD">
             <label data-i18n="username" data-page-node-id="jTw5hYng7xCz6wGfYXlzIa">用户名 <input type="text" id="u-qb" class="inp" data-page-node-id="FDICQavOtkHBQr0plW7C4c"></label>
-            <label data-i18n="password" data-page-node-id="0dnGcIXH2qzzYG0cifdN2p">密码 <input type="text" id="p-qb" class="inp" data-page-node-id="DEPCcLm96x5QNXDspZhIth"></label>
+            <label data-i18n="password" data-page-node-id="0dnGcIXH2qzzYG0cifdN2p">密码 <input type="password" id="p-qb" class="inp" autocomplete="new-password" placeholder="留空表示不修改" data-page-node-id="DEPCcLm96x5QNXDspZhIth"></label>
             <button class="btn-s" id="btn-save-qb" onclick="saveQbCred()" data-i18n="saveCred" data-page-node-id="j1y1fRANCXqgOKDMwXuhbM">保存凭据</button>
           </div>
         </div>
@@ -714,8 +714,8 @@ let LAST_TORRENT_ITEMS=[], LAST_CLASSIFY=null, CATS_CFG=null;
 // v1.3.19 修复: TORR_SEL / PROTECTED 同样在初始化早期(applyLang→syncTorrSelUI、loadDistros→render)被同步访问,
 // 原声明在文件后半段(1689/2319)会踩 let 的 TDZ 并炸断初始化, 故一并上提至顶部。
 let TORR_SEL=new Set(); let PROTECTED=new Set();
-const APP_VERSION='beta 2.2';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='beta 2.2';
+const APP_VERSION='beta 2.3';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='beta 2.3';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -2696,13 +2696,13 @@ async function loadShares(){
     const cfg=s[proto]||{};
     const sw=$('#sw-'+proto); if(sw)sw.checked=!!cfg.enabled;
     const uin=$('#u-'+proto); if(uin)uin.value=cfg.username||'';
-    const pin=$('#p-'+proto); if(pin)pin.value=cfg.password||'';
+    const pin=$('#p-'+proto); if(pin)pin.value='';   // 密码不回传: 留空即不修改
     const key=cfg.container||'unknown';
     paintServiceState($('#st-'+proto),key,!!cfg.enabled,$('#cmd-'+proto),proto);
     // 设置面板镜像控件
     if($('#sw-'+proto+'2'))$('#sw-'+proto+'2').checked=!!cfg.enabled;
     if($('#u-'+proto+'2'))$('#u-'+proto+'2').value=cfg.username||'';
-    if($('#p-'+proto+'2'))$('#p-'+proto+'2').value=cfg.password||'';
+    if($('#p-'+proto+'2'))$('#p-'+proto+'2').value='';   // 密码不回传: 留空即不修改
     paintServiceState($('#st-'+proto+'2'),key,!!cfg.enabled,$('#cmd-'+proto+'2'),proto);
     // 用后端真实端口动态填充地址(端口可随 docker-compose 的 SAMBA_PORT/WEBDAV_PORT 修改)
     const port=cfg.port||'<端口号>';
@@ -2724,7 +2724,9 @@ async function saveShare(proto,enabled){
   loadShares();
 }
 async function saveShareCred2(proto){
-  const body={};body[proto]={username:$('#u-'+proto+'2').value.trim(),password:$('#p-'+proto+'2').value.trim()};
+  const body={};const p={username:$('#u-'+proto+'2').value.trim()};
+  const pw=$('#p-'+proto+'2').value.trim();if(pw)p.password=pw;   // 留空 = 不改已存密码
+  body[proto]=p;
   const r=await jpost('/api/shares',body);
   if(r.s===401)return toast(t('pleaseLogin'),'err');
   if(r.s!==200)return toast(r.j&&r.j.error||t('saveFailed'),'err');
@@ -2733,13 +2735,15 @@ async function saveShareCred2(proto){
 }
 
 /* ---------- qBittorrent ---------- */
+let QB_PW_SET=false;   // 后端不回传密码: 用 password_set 记住"是否已配过", 供启用校验
 async function loadQbSettings(){
   let r={};try{r=await jget('/api/qb/settings');}catch(e){r={};}
   const cfg=(r&&r.qb)||{};
+  QB_PW_SET=!!cfg.password_set;
   const sw=$('#sw-qb'); if(sw)sw.checked=!!cfg.enabled;
   paintQbOverlay(!!cfg.enabled);
   const uin=$('#u-qb'); if(uin)uin.value=cfg.username||'';
-  const pin=$('#p-qb'); if(pin)pin.value=cfg.password||'';
+  const pin=$('#p-qb'); if(pin)pin.value='';   // 密码不回传: 留空即不修改
   // 地址输入框: 仅当用户显式保存过 url 时回显, 否则留空(placeholder 提示格式)
   const urlIn=$('#url-qb'); if(urlIn)urlIn.value=cfg.url_saved ? (cfg.url||'') : '';
   // 区分配套/外部容器: 外部 qb 只是"借用凭据登录连接", 用户名/密码**保持可填**,
@@ -2759,10 +2763,13 @@ async function saveQbEnabled(enabled){
   const username=$('#u-qb').value.trim();
   const password=$('#p-qb').value.trim();
   const url=$('#url-qb').value.trim();
-  if(enabled && (!username || !password)){
+  // 密码框留空时, 只要后端说"已配过"(password_set)就视为有效 —— 否则没法只切开关
+  if(enabled && (!username || (!password && !QB_PW_SET))){
     return toast(t('qbNeedCred')||'启用 qBittorrent 前请填写用户名和密码','err');
   }
-  const r=await jpost('/api/qb/settings',{enabled:enabled,username:username,password:password,url:url});
+  const body={enabled:enabled,username:username,url:url};
+  if(password)body.password=password;   // 留空 = 沿用已存密码
+  const r=await jpost('/api/qb/settings',body);
   if(r.s===401)return toast(t('pleaseLogin'),'err');
   if(r.s!==200)return toast(r.j&&r.j.error||t('shareErr'),'err');
   toast((enabled?t('enabledMsg'):t('disabledMsg'))+' qBittorrent '+t('savedShare'));
@@ -2772,17 +2779,13 @@ async function saveQbCred(){
   const username=$('#u-qb').value.trim();
   const password=$('#p-qb').value.trim();
   const url=$('#url-qb').value.trim();
-  const r=await jpost('/api/qb/settings',{username:username,password:password,url:url});
+  const body={username:username,url:url};
+  if(password)body.password=password;   // 留空 = 沿用已存密码
+  const r=await jpost('/api/qb/settings',body);
   if(r.s===401)return toast(t('pleaseLogin'),'err');
   if(r.s!==200)return toast(r.j&&r.j.error||t('saveFailed'),'err');
   toast(t('qbSaved'));
-  if(r.j&&r.j.qb){
-    const uin=$('#u-qb'), pin=$('#p-qb'), urlIn=$('#url-qb');
-    if(uin)uin.value=r.j.qb.username||username;
-    if(pin)pin.value=r.j.qb.password||password;
-    if(urlIn)urlIn.value=r.j.qb.url||'';
-  }
-  loadQbSettings();
+  loadQbSettings();   // 重新拉取: 密码不回传, 输入框自然保持留空
 }
 function paintQbOverlay(enabled){
   const ov=$('#qb-disabled-overlay'), box=$('#qb-enabled-content');
@@ -2792,6 +2795,7 @@ function paintQbOverlay(enabled){
 async function checkQbEnabled(){
   const r=await jget('/api/qb/settings');
   const cfg=(r&&r.qb)||{};
+  QB_PW_SET=!!cfg.password_set;
   const enabled=!!cfg.enabled;
   paintQbOverlay(enabled);
   if(enabled){
