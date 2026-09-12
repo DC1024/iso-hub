@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-import json
+import logging
 import os
 import time
 import urllib.parse
@@ -19,6 +19,12 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List
+
+# settings.json 的共享读写通道(加锁 + 原子写 + 损坏隔离)。
+# app.py 也在写同一个文件 —— 两个模块必须共用同一把锁, 否则锁只保护了一半写方。
+import config_files  # noqa: E402
+
+_log = logging.getLogger(__name__)
 
 try:  # 优先使用 defusedxml 防御 XML 炸弹/XXE
     from defusedxml import ElementTree as ET
@@ -43,19 +49,42 @@ def _is_http_url(url: str) -> bool:
 
 
 def _load_settings() -> dict:
-    if not SETTINGS_JSON.exists():
-        return {}
+    """读取整个 settings.json, 不存在或损坏返回 {}。
+
+    v1.3.16: 走 config_files 的共享通道。损坏不再静默 —— 会写一条 warning。
+    读取**不**挪动文件(并发读会打架), 原件会保留到下一次写入时备份为 .corrupt。
+    """
     try:
-        return json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) or {}
-    except Exception:  # noqa: BLE001
+        return config_files.read_json_raw(SETTINGS_JSON)
+    except config_files.CorruptJsonFile:
+        _log.warning("%s 不是合法 JSON 对象, 已按空配置处理;"
+                     " 下一次保存会把原件备份为 %s.corrupt",
+                     SETTINGS_JSON, SETTINGS_JSON.name)
         return {}
+    except Exception as e:  # noqa: BLE001  读盘/权限/解码异常: 保持不外抛
+        _log.warning("读取 %s 失败: %s", SETTINGS_JSON, e)
+        return {}
+
+
+def _on_settings_quarantined(backup) -> None:
+    """settings.json 损坏并被隔离后的告警。
+
+    由 config_files.update_json 在**释放 json 锁之后**回调 —— 回调里可以安全地
+    去做别的事, 但在锁内做会产生环路死锁(见 config_files 模块文档第 3 条)。
+    """
+    _log.warning("%s 不是合法 JSON 对象, 原文件已备份到 %s; 本次以空配置写回。"
+                 "请检查其中的凭据/用户/会话/种子源是否需要恢复。", SETTINGS_JSON, backup)
 
 
 def _save_settings(data: dict) -> None:
-    cur = _load_settings()
-    cur.update(data)
-    SETTINGS_JSON.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_JSON.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+    """写回 settings.json(保留其它顶层键)。
+
+    v1.3.16: 这里过去是与 app.py 完全独立的一套 read+write_text。两个模块各自读写
+    同一个文件却互不知情, 恰好是"JSON 文件写竞争"最难发现的一面 —— 在 app.py 里
+    加锁也只能保护一半的写方。现在两边都锁在同一把 `config_files.file_lock` 上。
+    """
+    config_files.update_json(SETTINGS_JSON, data,
+                             on_quarantine=_on_settings_quarantined)
 
 
 def get_user_rss() -> List[str]:

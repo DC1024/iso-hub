@@ -27,9 +27,24 @@ import requests
 
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 
+def _warn(msg: str) -> None:
+    """订阅同步是被 Popen 出来的子进程: 它的 stdout 会被主进程按行读取并展示,
+    告警走 **stderr** 才不会污染进度流。"""
+    print(msg, file=sys.stderr, flush=True)
+
+
+def _on_settings_quarantined(backup) -> None:
+    """settings.json 损坏并被隔离后的告警(子进程版本)。"""
+    _warn("[sync] settings.json 不是合法 JSON 对象, 原文件已备份到 %s; "
+          "本次以空配置写回。" % backup)
+
 # P1-⑤b: GPG 验证状态账本(同目录模块; 订阅同步路径验签后同样落账)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpg_ledger  # noqa: E402
+# settings.json 的共享读写通道(加锁 + 原子写 + 损坏隔离)。
+# 注意: 本脚本是被 app.py **Popen 出来的独立进程**, 所以线程锁这部分用不上 ——
+# 与主进程的互斥必须要文件锁才做得到。这里真正拿到的是**原子写**: 见下方注释。
+import config_files  # noqa: E402
 
 
 def natural_key(value: str):
@@ -326,12 +341,20 @@ def main() -> None:
         # 受保护名单(settings.json 的 protected, 相对路径或文件名)
         protected = set()
         hist = {}
+        # v1.3.16: 解析失败不再静默回退 —— protected 被当成"空的"会让本轮清理
+        # 删掉用户本来受保护的文件, 这种事必须留下线索。
+        # 注意这里**不**挪动文件(读取路径保持无副作用), 备份发生在真正要覆盖它的写入里。
         try:
-            stj = json.loads((download_dir / "settings.json").read_text(encoding="utf-8"))
+            stj = config_files.read_json_raw(download_dir / "settings.json")
             protected = set(stj.get("protected", []) or [])
             hist = stj.get("manifest_history", {}) or {}
-        except Exception:  # noqa: BLE001
-            protected = set()
+        except config_files.CorruptJsonFile:
+            protected, hist = set(), {}
+            _warn("[sync] settings.json 不是合法 JSON 对象, protected 名单按空处理 —— "
+                  "本轮过期清理将只能依赖 manifest_history 之外的判据。")
+        except Exception as e:  # noqa: BLE001  读盘/权限异常
+            protected, hist = set(), {}
+            _warn("[sync] 读取 settings.json 失败: %s" % e)
         # B7 修复: 先把当前清单文件名并入历史(只删"曾出现在清单里"的文件, 保护用户自有 ISO)
         known = set(hist.get(f"{typ}/{name}", []) or [])
         know_set_before = set(known)
@@ -341,13 +364,15 @@ def main() -> None:
                 known.add(fn)
         if known != know_set_before:
             hist[f"{typ}/{name}"] = sorted(known)
-            try:
-                cur = json.loads((download_dir / "settings.json").read_text(encoding="utf-8")) or {}
-            except Exception:  # noqa: BLE001
-                cur = {}
-            cur["manifest_history"] = hist
-            (download_dir / "settings.json").write_text(
-                json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+            # v1.3.16: 走共享通道。这里过去是 `write_text` 裸写 —— 本进程一旦在写途中
+            # 被中断(比如用户在 UI 上停止订阅同步), settings.json 就会留下半截内容,
+            # 而**主进程**下一次读取只能靠 except 兜底, 于是凭据/用户/保护列表看起来
+            # 全部"消失"。改成原子替换后, 主进程要么看到旧内容、要么看到完整新内容。
+            # 跨进程互斥做不到(需要文件锁), 但那条竞争的最坏后果只是 manifest_history
+            # 少记一次, 且随时会被下一次同步补回来。
+            config_files.update_json(download_dir / "settings.json",
+                                     {"manifest_history": hist},
+                                     on_quarantine=_on_settings_quarantined)
         if target.exists():
             for f in target.iterdir():
                 if (

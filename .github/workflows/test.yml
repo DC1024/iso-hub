@@ -44,6 +44,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r web/requirements.txt -r iso_download/requirements.txt
+          # pyyaml: TestComposeConfig 解析 compose 模板要用; 缺它会在 setUpClass 里
+          # 抛 ImportError -> 整类被 unittest 静默跳过(SkipTest), CI 仍报绿, 实际没跑。
+          python -m pip install pyyaml
 
       - name: Run full unit test suite
         run: python -m unittest discover -s tests -p "test_*.py" -v

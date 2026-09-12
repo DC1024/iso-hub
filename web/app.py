@@ -48,6 +48,11 @@ except Exception as e:  # noqa: BLE001
 # 应当直接暴露而不是静默降级(分类是纯展示功能, 不该被 qBittorrent 可用性绑架)。
 import torrent_categories as tcats  # noqa: E402
 
+# settings.json 的共享读写通道(加锁 + 原子写 + 损坏隔离)。
+# 放在独立模块而非本文件: distro_torrents.py 是同一个 settings.json 的第二个写方,
+# 它必须能 import 到同一把锁 —— 放在 app.py 会形成循环 import。
+import config_files  # noqa: E402
+
 # --------------------------------------------------------------------------- paths
 BASE_DIR = Path(__file__).resolve().parent
 REPO_DIR = Path(os.environ.get("ISO_REPO_DIR", "/app/iso_download"))
@@ -654,13 +659,12 @@ QB_CONF_PATH = Path("/qb-config/qBittorrent/qBittorrent.conf")
 
 
 def load_shares() -> dict:
-    """读取共享设置, 缺失键回退环境变量默认。"""
-    data = {}
-    if SETTINGS_JSON.exists():
-        try:
-            data = json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) or {}
-        except Exception:  # noqa: BLE001
-            data = {}
+    """读取共享设置, 缺失键回退环境变量默认。
+
+    v1.3.16: 解析失败不再用裸 except 静默吞掉 —— 统一走 `load_settings_all()`,
+    它会写日志说明文件被判为损坏、以及应当去看 `.corrupt` 备份。
+    """
+    data = load_settings_all()
     out = {}
     for k, dft in DEFAULT_SHARES.items():
         s = dict(dft)
@@ -670,19 +674,23 @@ def load_shares() -> dict:
 
 
 def save_shares(shares: dict) -> None:
-    cur = load_settings_all()
-    cur.update(shares)  # 保留 protected 等其它顶层键
-    SETTINGS_JSON.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+    """写回共享设置, 保留 protected 等其它顶层键。
+
+    v1.3.16: 走 `config_files.update_json` —— 在同一把 json 锁里完成
+    读 → 合并 → 原子写。旧实现是无锁的 read + write_text, 两条写线程交错时
+    后写的整份覆盖先写的, 丢掉一次更新且**没有任何报错**(典型受害者:
+    改共享密码与加保护项几乎同时点保存)。
+    """
+    config_files.update_json(SETTINGS_JSON, shares,
+                             on_quarantine=_settings_quarantined)
 
 
 def load_qb_settings() -> dict:
-    """读取 qBittorrent 设置, 缺失键回退环境变量默认。"""
-    data = {}
-    if SETTINGS_JSON.exists():
-        try:
-            data = json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) or {}
-        except Exception:  # noqa: BLE001
-            data = {}
+    """读取 qBittorrent 设置, 缺失键回退环境变量默认。
+
+    v1.3.16: 解析失败不再静默返回默认值, 原因走 `load_settings_all()` 写日志。
+    """
+    data = load_settings_all()
     out = dict(DEFAULT_QB)
     out.update({k: v for k, v in data.get("qb", {}).items() if k in out})
     return out
@@ -740,28 +748,65 @@ def _probe_qb_connection(qb: dict, timeout: float = 3.0) -> dict:
 
 
 def save_qb_settings(qb: dict) -> None:
-    cur = load_settings_all()
-    cur["qb"] = qb
-    SETTINGS_JSON.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+    """写回 qBittorrent 设置, 保留其它顶层键。
+
+    v1.3.16: 与 save_shares 同样走 `config_files.update_json`(加锁 + 原子写)。
+    """
+    config_files.update_json(SETTINGS_JSON, {"qb": qb},
+                             on_quarantine=_settings_quarantined)
 
 
 # ---------- 通用 settings.json 读写 (保护名单与共享并存, 不互相覆盖) ----------
+# v1.3.16 起, 这一组读写的三项保证由 web/config_files.py 提供(详见该模块文档):
+#   * **独立的** json 锁 —— _lock 是保护内存状态的, 包进来会重演历史上那次死锁
+#   * 先写临时文件再 os.replace, 不再 write_text 裸写(写一半被打断会留残缺文件)
+#   * 内容损坏时被隔离到 .corrupt 并写日志, 不再静默当成"空配置"
+def _settings_quarantined(backup) -> None:
+    """settings.json 损坏并被隔离后的告警。
+
+    由 update_json 在**释放 json 锁之后**回调 —— 这里可以安全调用 log()(它要 _lock),
+    反过来若在锁内调就会与"持 _lock 再进 save_*"的调用链形成环路死锁。
+    """
+    log("[settings] %s 不是合法 JSON 对象, 原文件已备份到 %s;"
+        " 本次以空配置写回。请检查其中的凭据/用户/会话/保护列表是否需要恢复。"
+        % (SETTINGS_JSON.name, backup))
+
+
 def load_settings_all() -> dict:
-    """读取整个 settings.json, 缺失返回 {}。"""
-    if not SETTINGS_JSON.exists():
-        return {}
+    """读取整个 settings.json, 缺失返回 {}。
+
+    v1.3.16: 内容损坏时**不再静默当没看见**。读取故意**不**挪动文件(并发读会打架),
+    而是写一条日志说明处境: 下一次任何保存会把原件备份成 settings.json.corrupt 再重写。
+    """
     try:
-        data = json.loads(SETTINGS_JSON.read_text(encoding="utf-8")) or {}
-    except Exception:  # noqa: BLE001
-        data = {}
-    return data
+        return config_files.read_json_raw(SETTINGS_JSON)
+    except config_files.CorruptJsonFile:
+        log("[settings] %s 不是合法 JSON 对象, 已按空配置处理;"
+            " 下一次保存会将原件备份为 %s.corrupt。请检查该文件。"
+            % (SETTINGS_JSON.name, SETTINGS_JSON.name))
+        return {}
+    except Exception as e:  # noqa: BLE001  读盘失败/权限/解码异常: 保持不外抛
+        log("[settings] 读取 %s 失败: %s" % (SETTINGS_JSON.name, e))
+        return {}
 
 
 def save_settings_all(data: dict) -> None:
-    """原子写整个 settings.json(合并已存在键)。"""
-    cur = load_settings_all()
-    cur.update(data)
-    SETTINGS_JSON.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+    """写整个 settings.json(合并已存在键)。
+
+    v1.3.16 之前这里的 docstring 自称"原子写", 实际是 read_text → 内存合并 →
+    write_text 三步裸操作, 两个问题都很实在:
+      ① **非原子**: 写一半被中断(进程被 kill / 磁盘满)会留下残缺文件, 之后每次
+         读取都只能靠 except 兜底 —— 这正是一条条"静默返回 {}"的来由。
+      ② **无锁**: waitress 8 线程 + 1 个调度线程共享这一个文件, 两条写线程交错时
+         后写的整份覆盖先写的, 丢掉一次更新且毫无报错。
+    现在统一由 `config_files.update_json` 在同一把 json 锁内完成三步, 并先写
+    临时文件再 os.replace。
+
+    锁的范围只有"读 → 合并 → 写"这段纯磁盘 IO。**绝不**把容器操作(改共享密码要去
+    stop → rm → create → start samba, 最长约 50 秒)包进来, 否则整个设置页会被串行化。
+    """
+    config_files.update_json(SETTINGS_JSON, data,
+                             on_quarantine=_settings_quarantined)
 
 
 def load_source_strategy() -> str:
@@ -870,8 +915,13 @@ def _sessions_persist() -> None:
     """把内存会话原子写盘到 settings.json（容器重建后 token 仍有效）。"""
     try:
         save_settings_all({SESSION_KEY: dict(_sessions)})
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        # v1.3.16: 会话写盘失败会让"重启后仍保持登录"静默失效 —— 之前是裸 except: pass。
+        # 这里不向上抛(登录流程不该因为持久化失败而 500), 但必须留下线索。
+        try:
+            log("[auth] 会话持久化失败(重启后将需要重新登录): %s" % e)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _sessions_load() -> None:
