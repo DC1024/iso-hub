@@ -485,5 +485,161 @@ class TestFrontendI18n(unittest.TestCase):
         self.assertIn("download to this computer", HTML.lower())
 
 
+class TestRelPathDownload(LocalDownloadBase):
+    """POST /api/files/ticket 的 {rel} 形态 + GET /api/files/get 的 _rel 解析。
+
+    种子/手动放入的文件常落在 catalog 结构之外(如 /data/_torrents/),
+    只能靠相对路径定位。安全边界与 catalog 形态一致: 必须仍在 DATA_DIR 内、
+    不得是半成品、不得用 .. 越界。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.rel_dir = self.data / "_torrents"
+        self.rel_dir.mkdir(parents=True)
+        (self.rel_dir / "ubuntu.iso").write_bytes(BODY)
+
+    def ticket_rel(self, rel):
+        return self.client.post("/api/files/ticket", json={"items": [{"rel": rel}]})
+
+    def test_rel_path_issues_ticket_and_downloads(self):
+        r = self.ticket_rel("_torrents/ubuntu.iso")
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["ok"])
+        self.assertEqual(j["skipped"], [])
+        self.assertEqual(len(j["tickets"]), 1)
+        tk = j["tickets"][0]
+        self.assertEqual(tk["filename"], "ubuntu.iso")
+        self.assertEqual(tk["rel"], "_torrents/ubuntu.iso")
+        tok = tk["url"].split("t=", 1)[1]
+        g = self.client.get("/api/files/get?t=" + tok)
+        self.assertEqual(g.status_code, 200)
+        self.assertEqual(g.data, BODY)
+
+    def test_rel_path_traversal_refused(self):
+        r = self.ticket_rel("../secret.txt")
+        j = r.get_json()
+        self.assertEqual(j["tickets"], [])
+        self.assertTrue(j["skipped"])
+
+    def test_rel_path_absolute_refused(self):
+        r = self.ticket_rel("/etc/passwd")
+        self.assertEqual(r.get_json()["tickets"], [])
+
+    def test_rel_path_partial_refused(self):
+        (self.rel_dir / "x.iso.part").write_bytes(b"z")
+        r = self.ticket_rel("_torrents/x.iso.part")
+        self.assertEqual(r.get_json()["tickets"], [])
+
+    def test_rel_path_nonexistent_skipped(self):
+        r = self.ticket_rel("_torrents/nope.iso")
+        j = r.get_json()
+        self.assertEqual(j["tickets"], [])
+        self.assertTrue(j["skipped"])
+
+
+class FakeQB:
+    """极简 qBittorrent 客户端桩, 只实现 list_torrents / torrent_files。"""
+
+    def __init__(self, save_path, files):
+        self.save_path = save_path
+        self.files = files
+
+    def list_torrents(self, tag=""):
+        return [{"hash": "abc123", "name": "ubuntu-26.04",
+                 "save_path": str(self.save_path), "progress": 1.0,
+                 "state": "uploading"}]
+
+    def torrent_files(self, h):
+        return self.files
+
+
+class TestTorrentHashDownload(LocalDownloadBase):
+    """POST /api/files/ticket 的 {hash} 形态: 走 qBittorrent 枚举已完成文件。"""
+
+    def setUp(self):
+        super().setUp()
+        self.rel_dir = self.data / "_torrents"
+        self.rel_dir.mkdir(parents=True)
+        (self.rel_dir / "ubuntu.iso").write_bytes(BODY)
+        self._fake = FakeQB(self.rel_dir,
+                            [{"name": "ubuntu.iso", "progress": 1.0,
+                              "is_seed": True, "size": len(BODY)}])
+        self._patches = [
+            patch.object(app, "TORRENT_AVAILABLE", True),
+            patch.object(app, "_ensure_qb_enabled", lambda: (True, None)),
+            patch.object(app, "_qb", lambda: self._fake),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+        super().tearDown()
+
+    def test_hash_issues_ticket_for_completed_file(self):
+        r = self.client.post("/api/files/ticket",
+                              json={"items": [{"hash": "abc123"}]})
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertTrue(j["ok"])
+        self.assertEqual(j["skipped"], [])
+        self.assertEqual(len(j["tickets"]), 1)
+        tk = j["tickets"][0]
+        self.assertEqual(tk["rel"], "_torrents/ubuntu.iso")
+        tok = tk["url"].split("t=", 1)[1]
+        g = self.client.get("/api/files/get?t=" + tok)
+        self.assertEqual(g.status_code, 200)
+        self.assertEqual(g.data, BODY)
+
+    def test_hash_skips_incomplete_file(self):
+        self._fake.files = [{"name": "ubuntu.iso", "progress": 0.5,
+                             "is_seed": False, "size": 10}]
+        r = self.client.post("/api/files/ticket",
+                              json={"items": [{"hash": "abc123"}]})
+        j = r.get_json()
+        self.assertEqual(j["tickets"], [])
+        self.assertTrue(any("没有已完成" in s for s in j["skipped"]), j["skipped"])
+
+    def test_hash_unknown_is_skipped(self):
+        r = self.client.post("/api/files/ticket",
+                              json={"items": [{"hash": "deadbeef"}]})
+        j = r.get_json()
+        self.assertEqual(j["tickets"], [])
+        self.assertTrue(j["skipped"])
+
+
+class TestTorrentPanelDownloadUI(unittest.TestCase):
+    """种子面板「下载完成」筛选 + 勾选下载 的 HTML 契约(纯字符串断言)。"""
+
+    def test_filter_chips_and_download_button_present(self):
+        self.assertIn('id="torr-state-filter"', HTML)
+        for f in ("all", "dl", "done", "seed"):
+            self.assertIn('data-f="%s"' % f, HTML)
+        self.assertIn('id="torrDlLocalBtn"', HTML)
+        self.assertIn("torrDlLocalSel()", HTML)
+
+    def test_render_functions_defined(self):
+        for fn in ("function torrStateClass(", "function renderTorrList(",
+                   "function setTorrFilter(", "function torrCkChange(",
+                   "async function torrDlLocalSel("):
+            self.assertIn(fn, HTML, fn)
+
+    def test_hash_items_sent_to_ticket(self):
+        self.assertIn("{hash:h}", HTML)
+
+    def test_new_i18n_keys_present_and_used(self):
+        for k in ("torrDlLocal", "torrFilterAll", "torrFilterDl",
+                  "torrFilterDone", "torrFilterSeed", "torrNoTorrents",
+                  "torrFilteredEmpty"):
+            with self.subTest(key=k):
+                self.assertRegex(HTML, r"'%s':\{zh:'[^']+',en:'[^']+'\}" % k)
+                used = (re.findall(r"t\('%s'\)" % k, HTML)
+                        or re.findall(r'data-i18n="%s"' % k, HTML))
+                self.assertTrue(used, "%s 定义了但没使用" % k)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

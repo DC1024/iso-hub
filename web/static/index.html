@@ -652,7 +652,13 @@
     </div>
     <div id="torr-running" style="display:none" data-page-node-id="jpR1UAHaNx3ZFCyyPpYssS">
       <div class="card" data-page-node-id="f52BQkk9o5v4UapklLD8B2">
-        <div class="card-head" data-page-node-id="IsbDZvFWPPb3UJywIHoQZd"><span class="g-name" data-i18n="torrRunning" data-page-node-id="DbNgQ64yogT625uClOGWaf">⏳ 下载中</span><span class="chip" id="qb-tcount" data-page-node-id="xOaN2LxS7u5UoMuqbihByW">0</span></div>
+        <div class="card-head" data-page-node-id="IsbDZvFWPPb3UJywIHoQZd"><span class="g-name" data-i18n="torrRunning" data-page-node-id="DbNgQ64yogT625uClOGWaf">⏳ 下载中</span><span class="chip" id="qb-tcount" data-page-node-id="xOaN2LxS7u5UoMuqbihByW">0</span><span style="flex:1"></span><button class="btn-s" id="torrDlLocalBtn" data-i18n="torrDlLocal" onclick="torrDlLocalSel()" disabled data-page-node-id="torrDlLocalBtn">⬇ 下载到本机</button><button class="btn-s" onclick="loadTorrentInfo()" data-i18n="torrRefresh" data-page-node-id="lxodCwdevs6i7UZDFQyxOD">🔄 刷新</button></div>
+        <div class="src-tabs" style="display:flex;gap:8px;margin:10px 0" id="torr-state-filter" data-page-node-id="torrStateFilter">
+          <button class="src-tab active" data-f="all" onclick="setTorrFilter('all')" data-i18n="torrFilterAll">全部</button>
+          <button class="src-tab" data-f="dl" onclick="setTorrFilter('dl')" data-i18n="torrFilterDl">下载中</button>
+          <button class="src-tab" data-f="done" onclick="setTorrFilter('done')" data-i18n="torrFilterDone">已完成</button>
+          <button class="src-tab" data-f="seed" onclick="setTorrFilter('seed')" data-i18n="torrFilterSeed">做种</button>
+        </div>
         <div id="qb-list" style="padding:10px 16px;display:flex;flex-direction:column;gap:10px" data-page-node-id="5GEWLVJLgURtIoL81XabPv"></div>
       </div>
     </div>
@@ -668,8 +674,8 @@ let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
 // 种子分类的内存态。声明放最上方: applyLang() 在初始化早期就会用到它们,
 // 若声明在文件后半段会踩 let 的暂时性死区(TDZ) ReferenceError。
 let LAST_TORRENT_ITEMS=[], LAST_CLASSIFY=null, CATS_CFG=null;
-const APP_VERSION='1.3.16';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
-const VERSION_TAG='1.3.16';
+const APP_VERSION='1.3.17';   // 前端版本号: 每改一版递增, 刷新后右上角徽标显示
+const VERSION_TAG='1.3.17';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -748,6 +754,13 @@ const I18N={
   'dlNothingLocal':{zh:'所选项目中没有可下载到本机的文件',en:'None of the selected items can be downloaded to this computer'},
   'dlMultiConfirm':{zh:'个文件将同时下载 — 浏览器可能提示「允许下载多个文件」。继续？',en:'files will download at once — the browser may ask to allow multiple downloads. Continue?'},
   'skipped':{zh:'跳过',en:'skipped'},
+  'torrDlLocal':{zh:'⬇ 下载到本机',en:'⬇ Download to local'},
+  'torrNoTorrents':{zh:'暂无种子',en:'No torrents'},
+  'torrFilteredEmpty':{zh:'当前筛选下没有种子',en:'No torrents match this filter'},
+  'torrFilterAll':{zh:'全部',en:'All'},
+  'torrFilterDl':{zh:'下载中',en:'Downloading'},
+  'torrFilterDone':{zh:'已完成',en:'Completed'},
+  'torrFilterSeed':{zh:'做种',en:'Seeding'},
   'andMore':{zh:'还有',en:'and'},
   'favGroup':{zh:'收藏',en:'Favorite'},
   'unfavGroup':{zh:'取消收藏',en:'Unfavorite'},
@@ -1801,6 +1814,15 @@ async function saveTorrCats(){
   CATS_CFG=r.j; renderTorrCats(); toast(t('torrCatSaved'));
   if(LAST_TORRENT_ITEMS.length)classifyAndRender();   // 用内存 items 立刻重排, 不重抓外网
 }
+let TORR_LIST=[], TORR_FILTER='all', TORR_CHECKED=new Set();
+function torrStateClass(tk){
+  const p=tk.progress||0, st=(tk.state||'').toUpperCase();
+  if(p>=1.0){
+    if(/UP|SEED/.test(st)||st==='SEEDING')return 'seed';
+    return 'done';
+  }
+  return 'dl';
+}
 async function loadTorrentInfo(){
   const st=document.getElementById('qb-status'); const r=await jget('/api/torrent/info');
   if(!r.ok){ if(st)st.textContent=('⚠ '+(r.error||'未连接')); return; }
@@ -1808,22 +1830,58 @@ async function loadTorrentInfo(){
   if(st)st.textContent='🟢 '+t('torrConn');
   const v=document.getElementById('qb-ver'); if(v)v.textContent=r.version||'';
   const tc=document.getElementById('qb-tcount'); if(tc)tc.textContent=(r.torrents||[]).length;
+  TORR_LIST=r.torrents||[];
+  renderTorrList();
+}
+function renderTorrList(){
   const box=document.getElementById('qb-list'); if(!box)return;
-  const ts=r.torrents||[];
-  box.innerHTML=!ts.length?('<div class="empty" style="padding:14px 0">暂无正在下载的种子</div>')
+  const cur=new Set((TORR_LIST||[]).map(x=>x.hash));
+  for(const h of [...TORR_CHECKED]) if(!cur.has(h))TORR_CHECKED.delete(h);
+  const f=TORR_FILTER;
+  const ts=(TORR_LIST||[]).filter(tk=>{
+    if(f==='all')return true;
+    const c=torrStateClass(tk);
+    if(f==='dl')return c==='dl';
+    if(f==='done')return c==='done'||c==='seed';
+    if(f==='seed')return c==='seed';
+    return true;
+  });
+  box.innerHTML=!ts.length?('<div class="empty" style="padding:14px 0">'+(TORR_LIST&&TORR_LIST.length?t('torrFilteredEmpty'):t('torrNoTorrents'))+'</div>')
     : ts.map(tk=>{
       const prog=Math.round((tk.progress||0)*100);
       const dl=tk.dlspeed||0, up=tk.upspeed||0;
       const stt=(tk.state||'').toUpperCase();
-      return '<div class="prot-row" style="align-items:flex-start"><div style="flex:1;min-width:0">'
-        +'<div class="pn" style="font-size:13px">'+esc(tk.name||'')+(tk.local_has?' <span class="badge ok" style="font-size:10px">'+t('torrLocalHas')+'</span>':'')+'</div>'
+      const h=tk.hash||'';
+      const checked=TORR_CHECKED.has(h)?'checked':'';
+      return '<div class="prot-row" style="align-items:flex-start"><label style="flex:1;min-width:0;display:flex;gap:8px;align-items:flex-start">'
+        +'<input type="checkbox" class="tk-ck" data-h="'+esc(h)+'" '+checked+' onchange="torrCkChange(this)">'
+        +'<div style="flex:1;min-width:0"><div class="pn" style="font-size:13px">'+esc(tk.name||'')+(tk.local_has?' <span class="badge ok" style="font-size:10px">'+t('torrLocalHas')+'</span>':'')+'</div>'
         +'<div class="muted" style="font-size:11px">'+esc(stt)+' · '+prog+'% · ↓'+fmt(dl)+'/s ↑'+fmt(up)+'/s · '+esc((tk.save_path||'').replace('/data/','/'))+'</div>'
         +'<div style="height:6px;background:#16253d;border-radius:4px;margin-top:4px;max-width:320px"><div style="height:6px;width:'+prog+'%;background:var(--brand2);border-radius:4px"></div></div>'
-        +'</div>'
-        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="torrDel(\''+esc(tk.hash)+'\',false)">'+t('torrDel')+'</button>'
-        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="torrDel(\''+esc(tk.hash)+'\',true)">'+t('torrDelFiles')+'</button>'
-        +'</div>';
+        +'</div></label>'
+        +'<div style="display:flex;flex-direction:column;gap:4px">'
+        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="torrDel(\''+esc(h)+'\',false)">'+t('torrDel')+'</button>'
+        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="torrDel(\''+esc(h)+'\',true)">'+t('torrDelFiles')+'</button>'
+        +'</div></div>';
     }).join('');
+  const b=document.getElementById('torrDlLocalBtn'); if(b)b.disabled=!TORR_CHECKED.size;
+}
+function setTorrFilter(f){ TORR_FILTER=f; document.querySelectorAll('#torr-state-filter .src-tab').forEach(x=>x.classList.toggle('active',x.dataset.f===f)); renderTorrList(); }
+function torrCkChange(box){ const h=box.dataset.h; if(box.checked)TORR_CHECKED.add(h); else TORR_CHECKED.delete(h); const b=document.getElementById('torrDlLocalBtn'); if(b)b.disabled=!TORR_CHECKED.size; }
+async function torrDlLocalSel(){
+  const hs=[...TORR_CHECKED];
+  if(!hs.length)return toast(t('pleaseSel'),'err');
+  const items=hs.map(h=>({hash:h}));
+  const r=await jpost('/api/files/ticket',{items});
+  const j=r.j||{};
+  const tks=(j.tickets)||[];
+  const sk=(j.skipped)||[];
+  if(r.s!==200||!tks.length){
+    const msg=(j.error)||(sk.length?sk.join('; '):t('dlTicketFail'));
+    return toast(msg,'err');
+  }
+  tks.forEach((tk,i)=>setTimeout(()=>triggerDownload(tk.url),i*400));
+  toast(t('dlStarted')+' '+tks.length+' '+t('files')+(sk.length?(' ('+sk.length+' '+t('skipped')+')'):''));
 }
 async function torrAdd(url,distro){
   const r=await jpost('/api/torrent/add',{urls:[url],distro:distro||''});

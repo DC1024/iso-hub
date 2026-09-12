@@ -192,6 +192,16 @@ class QBClient:
             arr = [x for x in arr if tag in [s.strip() for s in (x.get("tags") or "").split(",")]]
         return arr
 
+    def torrent_files(self, hash: str) -> List[Dict]:
+        """列出某种子的文件(含 progress / is_seed / size / name)。
+
+        name 是相对 save_path 的路径(单文件种子即文件名本身)。用于「下载到本机」
+        时筛选已完成文件。
+        """
+        self._ensure_login()
+        code, t = self._request("GET", "/api/v2/torrents/files?hash=" + (hash or ""))
+        return t if code == 200 and isinstance(t, list) else []
+
     @staticmethod
     def _ok(code: int) -> bool:
         """qBittorrent 写操作成功码: 旧版 200, 5.x 可能 202(异步)/204。"""

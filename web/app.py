@@ -2433,6 +2433,110 @@ def _resolve_local_file(typ: str, name: str, fname: str) -> Path | None:
     return fp if fp.is_file() else None
 
 
+def _resolve_rel_path(rel: str) -> Path | None:
+    """把 DATA_DIR 内的相对路径解析为真实文件, 非法/越界/半成品则 None。
+
+    用于「下载到本机」的第二种寻址: 种子/手动放入的文件不一定落在
+    <type>/<distro>/ 的 catalog 结构里(如 /data/_torrents/), 只能靠相对路径
+    定位。安全边界与 _resolve_local_file 一致: 必须仍在 DATA_DIR 内、不得是
+    半成品、不得用 .. 越界。
+    """
+    if not rel:
+        return None
+    rel = rel.replace("\\", "/")
+    if rel.startswith("/") or rel.startswith("\\") or rel in (".", ".."):
+        return None
+    if any(part in (".", "..") for part in rel.split("/")):
+        return None
+    fp = (DATA_DIR / rel).resolve()
+    try:
+        fp.relative_to(DATA_DIR.resolve())
+    except ValueError:
+        return None
+    if not fp.is_file():
+        return None
+    if _partial_base_name(fp.name):
+        return None
+    return fp
+
+
+def _resolve_dl_target(typ: str, name: str, fname: str) -> Path | None:
+    """「下载到本机」统一寻址: 两种形态走不同解析器。
+
+    * typ == "_rel": fname 是 DATA_DIR 内的相对路径(种子/任意文件)
+    * 否则:        (type, distribution, filename) catalog 三元组(走 _safe_join)
+    """
+    if typ == "_rel":
+        return _resolve_rel_path(fname)
+    return _resolve_local_file(typ, name, fname)
+
+
+def _torrent_completed_files(hashes: list) -> tuple[list, list]:
+    """给定种子 hash 列表, 返回 (可下载的相对路径列表, 跳过说明列表)。
+
+    只挑**已完成**的文件(progress>=1 或 is_seed), 且必须在 DATA_DIR 内、非半成品。
+    依赖 qBittorrent sidecar; 未启用/不可用时返回空(由调用方决定如何提示)。
+    """
+    rels, skipped = [], []
+    ok, _err = _ensure_qb_enabled()
+    if not ok or not TORRENT_AVAILABLE:
+        return rels, skipped
+    try:
+        qb = _qb()
+        toks = qb.list_torrents() or []
+        by_hash = {str(t.get("hash", "")).lower(): t for t in toks}
+        for h in hashes:
+            h = str(h or "").strip().lower()
+            t = by_hash.get(h)
+            if not t:
+                skipped.append(f"{h or '(空)'}: 种子不存在或 qBittorrent 未连接")
+                continue
+            save_path = (t.get("save_path") or "").rstrip("/")
+            if not save_path:
+                skipped.append(f"{t.get('name', h)}: 未知保存路径")
+                continue
+            try:
+                files = qb.torrent_files(h) or []
+            except Exception as e:  # noqa: BLE001
+                skipped.append(f"{t.get('name', h)}: 列举文件失败: {e}")
+                continue
+            found = 0
+            for f in files:
+                prog = float(f.get("progress") or 0)
+                if prog < 1.0 and not f.get("is_seed"):
+                    continue  # 未完成: 不提供下载
+                fp_rel = (Path(save_path) / (f.get("name") or "")).resolve()
+                try:
+                    fp_rel = fp_rel.relative_to(DATA_DIR.resolve())
+                except ValueError:
+                    continue
+                if _resolve_rel_path(str(fp_rel)):
+                    rels.append(str(fp_rel).replace("\\", "/"))
+                    found += 1
+            if not found:
+                skipped.append(f"{t.get('name', h)}: 没有已完成的可下载文件")
+    except Exception as e:  # noqa: BLE001
+        log(f"[下载] 列举种子文件失败: {e!r}")
+    return rels, skipped
+
+
+def _issue_ticket_for(typ: str, name: str, fname: str) -> tuple:
+    """解析并签发单张票据; 成功返回 (票据dict, None), 失败返回 (None, 跳过原因)。"""
+    fp = _resolve_dl_target(typ, name, fname)
+    if fp is None:
+        return None, f"{fname or '(空文件名)'}: 文件不存在或参数非法"
+    try:
+        size = fp.stat().st_size
+    except OSError as e:
+        return None, f"{fname}: {e}"
+    rel = str(fp.resolve().relative_to(DATA_DIR.resolve())).replace("\\", "/") if typ == "_rel" else None
+    return {
+        "url": "/api/files/get?t=" + _issue_dl_ticket(typ, name, fname),
+        "filename": fp.name, "type": typ, "distribution": name,
+        "size": size, "rel": rel,
+    }, None
+
+
 def _dl_tickets_purge() -> None:
     """清理过期票据。每次都清一遍 —— 票据量极小, 不需要定时器。"""
     now = time.time()
@@ -2469,22 +2573,36 @@ def api_files_ticket():
 
     tickets, skipped = [], []
     for it in items:
-        typ = str(it.get("type") or "").strip()
-        name = str(it.get("distribution") or "").strip()
-        fname = str(it.get("filename") or "").strip()
-        fp = _resolve_local_file(typ, name, fname)
-        if fp is None:
-            skipped.append(f"{fname or '(空文件名)'}: 文件不存在或参数非法")
+        # 形态 1: 种子下载(按 hash 枚举已完成文件, 后端走 qBittorrent)
+        h = it.get("hash")
+        if h:
+            rels, hskip = _torrent_completed_files([h])
+            skipped.extend(hskip)
+            for rel in rels:
+                tk, sk = _issue_ticket_for("_rel", "", rel)
+                if tk is not None:
+                    tickets.append(tk)
+                else:
+                    skipped.append(sk)
             continue
-        try:
-            size = fp.stat().st_size
-        except OSError as e:
-            skipped.append(f"{fname}: {e}")
+        # 形态 2: 相对路径(种子/手动放入的任意文件, 不依赖 catalog)
+        rel = it.get("rel")
+        if rel:
+            tk, sk = _issue_ticket_for("_rel", "", str(rel))
+            if tk is not None:
+                tickets.append(tk)
+            else:
+                skipped.append(sk)
             continue
-        tickets.append({
-            "url": "/api/files/get?t=" + _issue_dl_ticket(typ, name, fname),
-            "filename": fname, "type": typ, "distribution": name, "size": size,
-        })
+        # 形态 3: catalog 三元组(历史形态, 保持兼容)
+        tk, sk = _issue_ticket_for(
+            str(it.get("type") or "").strip(),
+            str(it.get("distribution") or "").strip(),
+            str(it.get("filename") or "").strip())
+        if tk is not None:
+            tickets.append(tk)
+        else:
+            skipped.append(sk)
 
     if tickets:
         user = _valid_session() or ("token" if AUTH_TOKEN else "匿名")
@@ -2507,7 +2625,7 @@ def api_files_get():
         return jsonify({"error": "下载链接无效或已过期, 请在面板上重新点击下载"}), 403
     typ, name, fname, _exp = hit
     # 二次校验: 票据里存的是 (type, distro, 文件名) 分量而不是路径, 必须重新过一遍约束
-    fp = _resolve_local_file(typ, name, fname)
+    fp = _resolve_dl_target(typ, name, fname)
     if fp is None:
         return jsonify({"error": f"文件不存在: {fname}"}), 404
     resp = send_file(fp, as_attachment=True, download_name=fname, conditional=True)
