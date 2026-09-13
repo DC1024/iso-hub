@@ -36,7 +36,7 @@ jobs:
       ISO_DATA_DIR: /tmp/iso-hub-data
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
