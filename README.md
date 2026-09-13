@@ -2,6 +2,7 @@
 
 > **项目源码：** <https://github.com/DC1024/iso-hub><br>
 > **Docker Hub 镜像：** <https://hub.docker.com/r/dcchendockeruser/iso-hub><br>
+> **GHCR 镜像：**`docker pull ghcr.io/dc1024/iso-hub:beta`<br>
 > **阿里云 ACR 镜像（国内推荐）：** `registry.cn-hangzhou.aliyuncs.com/dcchen/isohub`
 
 ISO Hub 是一个带网页界面的 Docker 化 Linux 发行版 ISO 自动更新器，支持在网页上勾选发行版/版本进行实时下载与 SHA256 校验、自动抓取镜像站刷新最新版本元数据、订阅同步自动跟新版，并提供过期 ISO 可视化清理与 SMB/WebDAV 网络共享功能。
