@@ -32,6 +32,8 @@ sudo docker compose -f docker-compose.acr.yml --profile share up -d webdav
 sudo docker compose -f docker-compose.acr.yml --profile share up -d samba webdav
 ```
 
+> ⚠️ **部署 webdav 前必须先建好 `./webdav-config/webdav.yml`**：webdav 容器启动时读这个文件（`-c /config/webdav.yml`），文件不存在会直接起不来。格式与示例见下文「webdav.yml 格式」。想跳过手建，也可先 `up -d webdav`（它会因缺文件失败），再去面板「设置 → 共享设置」改一次 WebDAV 密码，主容器会用 `.env` 的 `WEBDAV_USER/PASS` 自动生成该文件，再 `restart webdav`。
+
 > 加 `--profile` 不会影响已在跑的默认两个容器。查看 / 停用同样要带 profile：
 > `sudo docker compose -f docker-compose.acr.yml --profile share ps`、`... --profile share stop samba webdav`。
 > 两个共享容器的 `restart` 策略是 `no`，**宿主机重启后不会自动起来**，需要再跑一次上面的 up 命令。
@@ -73,6 +75,24 @@ samba / webdav 的完整定义已包含在 [快速部署](部署-快速开始) �
   环境变量 `SAMBA_UID/GROUPID`（默认 0=root，映射文件属主）。
 - `webdav`：`hacdias/webdav` 镜像，映射 `8081:6065`，只读共享 `./data` 为 `/data`。
   账号密码写在 `./webdav-config/webdav.yml`（初始来自 `.env` 的 `WEBDAV_USER/PASS`），网页端改密后主容器会重写该文件；新版 compose 把该目录同时挂给主容器（`/webdav-config`）与 webdav 容器（`/config`）。
+
+### webdav.yml 格式
+
+`hacdias/webdav` 的配置文件即 `./webdav-config/webdav.yml`（容器内挂成 `/config/webdav.yml`），内容如下：
+
+```yaml
+address: 0.0.0.0
+port: 6065
+users:
+  - username: iso
+    password: iso123
+    scope: /data        # 共享宿主 ./data(即 ISO 目录)
+    modify: false       # false=只读, 与 samba 一致; 改 true 才允许 webdav 写入
+```
+
+- `username` / `password` 换成你自己的（也可沿用 `.env` 的 `WEBDAV_USER` / `WEBDAV_PASS` 默认值 `iso` / `iso123`）。
+- `scope` 是共享根目录，写 `/data` 即把宿主 `./data` 整个共享出去（与 samba 一致的只读 ISO 目录）。
+- 文件就绪后再 `docker compose -f docker-compose.acr.yml --profile share up -d webdav`；否则 webdav 容器会因找不到 `/config/webdav.yml` 而启动失败。
 
 > 若你确实只想**单独部署**共享容器（不跑 iso-hub 主服务），也可以手动把上面的 samba/webdav 两个服务定义从快速部署的 compose 里复制出来用。
 
