@@ -45,7 +45,7 @@ samba / webdav 的完整定义已包含在 [快速部署](部署-快速开始) �
   `command` 的 `-s "iso;/srv/iso;no;no;no;user,pass"` 意思是——共享名 `iso`、路径 `/srv/iso`、只读、仅列共享、不允许访客，可写用户为 `user`。
   环境变量 `SAMBA_UID/GROUPID`（默认 0=root，映射文件属主）。
 - `webdav`：`hacdias/webdav` 镜像，映射 `8081:6065`，只读共享 `./data` 为 `/data`。
-  账号密码写在 `./data/webdav.yml`（初始来自 `.env` 的 `WEBDAV_USER/PASS`），网页端改密后主容器会重写该文件。
+  账号密码写在 `./webdav-config/webdav.yml`（初始来自 `.env` 的 `WEBDAV_USER/PASS`），网页端改密后主容器会重写该文件；新版 compose 把该目录同时挂给主容器（`/webdav-config`）与 webdav 容器（`/config`）。
 
 > 若你确实只想**单独部署**共享容器（不跑 iso-hub 主服务），也可以手动把上面的 samba/webdav 两个服务定义从快速部署的 compose 里复制出来用。
 
