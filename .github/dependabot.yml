@@ -1,0 +1,40 @@
+# Dependabot - 依赖升级自动 PR
+#
+# 覆盖两个 pip 依赖清单(web/ 与 iso_download/) + 全部 workflow 的 action 版本。
+# PR 提出后 Tests Gate / Lint & Security Gate 自动跑, 绿了之后:
+#   镜像类依赖(cryptography 等)的 PR 走标准流程: 等 :beta 镜像实测 + 显式授权再合并
+#   (铁律 2 与人工改动完全一致 —— Dependabot 只是替你发现了升级, 不替你承担发布)。
+#
+# 降噪策略:
+#   * monthly 频率: 维护节奏本来就是 1-2 个月一轮, weekly 会攒一堆并发 PR。
+#   * minor+patch 打包成组: 一次 PR 升一批, 避免每个小版本一个 PR。
+#   * major 留单独 PR: 大版本升级有破坏性, 需要单独评估, 不混进组里。
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/web"
+    schedule:
+      interval: monthly
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: pip
+    directory: "/iso_download"
+    schedule:
+      interval: monthly
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch

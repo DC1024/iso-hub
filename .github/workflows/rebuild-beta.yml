@@ -1,0 +1,41 @@
+# ISO Hub - 月度基础镜像 rebuild(:beta)
+#
+# 为什么需要: Dockerfile 基础镜像是浮动 tag(python:3.12-slim), 远端 digest
+# 会随 Debian 安全更新漂移, 但没有新 commit 时现有 workflow 不会重跑,
+# 镜像里的基础层就一直停在旧 digest。每月 3 日强制重建一次 :beta,
+# 让「基础镜像吃到了安全更新」这件事至少每月发生一次。
+#
+# 实现方式: 不重复写构建逻辑, 直接用 workflow_dispatch 触发现有的
+# docker-push.yml / aliyun-acr.yml(ref=beta, 只推 :beta 不碰 :latest)。
+# GITHUB_TOKEN 触发 workflow_dispatch 是 GitHub 文档明文的例外(允许递归触发),
+# 无需额外 PAT/secret。
+#
+# 注意: 重建的是 :beta(开发通道)。:latest 只随 master 合并/发版推进,
+# 不在本 workflow 范围内 —— 生产镜像的更新依然走「实测 + 显式授权」铁律。
+
+name: Rebuild beta image (monthly)
+
+on:
+  schedule:
+    - cron: '33 2 3 * *'        # 每月 3 日 UTC 02:33(北京 10:33)
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Docker Hub rebuild (beta)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run docker-push.yml --ref beta
+
+      - name: Trigger Aliyun ACR rebuild (beta)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run aliyun-acr.yml --ref beta
