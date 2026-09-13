@@ -122,5 +122,104 @@ class TestWikiDeployDocCompose(unittest.TestCase):
                          "文档里重新出现了裸 docker.sock 挂载")
 
 
+# --------------------------------------------------------------------------
+# 按需部署约定: 默认只起 iso-hub + socket-proxy, 其余 sidecar 必须挂在 profile 下。
+# 背景: 文档曾两次把默认容器数量写错(三容器 / 四容器), 用户照抄后得到与预期不同的部署。
+# --------------------------------------------------------------------------
+
+COMPOSE_FILES = ["docker-compose.yml", "docker-compose.dockerhub.yml",
+                 "docker-compose.acr.yml"]
+
+DEFAULT_SERVICES = ["iso-hub", "socket-proxy"]   # 不带 profile、随 up -d 起来的
+SIDECAR_PROFILES = {"samba": "share", "webdav": "share", "qbittorrent": "bt"}
+
+
+def _load_yaml(path):
+    import yaml
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+class TestProfileDeploymentContract(unittest.TestCase):
+    """仓库 compose 与文档对「默认起几个容器」的说法必须一致。"""
+
+    def test_repo_compose_defaults_to_two_containers(self):
+        """三份 compose 都不带 profile 的服务恰好是 iso-hub + socket-proxy。"""
+        try:
+            import yaml  # noqa: F401
+        except ImportError:  # pragma: no cover
+            raise unittest.SkipTest("pyyaml 不可用, 跳过 compose 校验")
+        for name in COMPOSE_FILES:
+            path = REPO_ROOT / name
+            if not path.exists():
+                self.skipTest("%s 不存在" % name)
+            with self.subTest(file=name):
+                services = (_load_yaml(path).get("services") or {})
+                default = sorted(n for n, s in services.items()
+                                 if not (s or {}).get("profiles"))
+                self.assertEqual(default, sorted(DEFAULT_SERVICES),
+                                 "%s: 默认启动的服务应为 %s, 实际 %s"
+                                 % (name, DEFAULT_SERVICES, default))
+
+    def test_repo_compose_sidecars_behind_profiles(self):
+        """samba/webdav 属于 share, qbittorrent 属于 bt —— 默认不部署。"""
+        try:
+            import yaml  # noqa: F401
+        except ImportError:  # pragma: no cover
+            raise unittest.SkipTest("pyyaml 不可用, 跳过 compose 校验")
+        for name in COMPOSE_FILES:
+            path = REPO_ROOT / name
+            if not path.exists():
+                self.skipTest("%s 不存在" % name)
+            with self.subTest(file=name):
+                services = (_load_yaml(path).get("services") or {})
+                for svc, want in SIDECAR_PROFILES.items():
+                    if svc not in services:
+                        continue
+                    self.assertEqual((services[svc] or {}).get("profiles"), [want],
+                                     "%s: %s 应挂在 profile %s 下" % (name, svc, want))
+
+    def test_deploy_doc_states_two_containers_and_profiles(self):
+        """快速部署必须说清「默认两个容器」+ 给出 profile 命令, 且不能再用旧数量说法。"""
+        try:
+            import yaml  # noqa: F401
+        except ImportError:  # pragma: no cover
+            raise unittest.SkipTest("pyyaml 不可用, 跳过文档校验")
+        text = DOC.read_text(encoding="utf-8")
+        self.assertIn("两个容器", text, "文档未说明默认只起两个容器")
+        self.assertIn("--profile share", text, "文档缺少 --profile share 用法")
+        self.assertIn("--profile bt", text, "文档缺少 --profile bt 用法")
+        self.assertIn("cd /opt/iso-hub", text, "文档未给出先 cd 进 compose 目录的提示")
+        # 文档里的 compose 示例同样要带 profile, 否则照抄会起出四容器
+        blocks = re.findall(r"```yaml\n(.*?)```", text, re.S)
+        for i, block in enumerate(blocks):
+            with self.subTest(block=i):
+                services = (_load_yaml_str(block).get("services") or {})
+                for svc, want in SIDECAR_PROFILES.items():
+                    if svc not in services:
+                        continue
+                    self.assertEqual((services[svc] or {}).get("profiles"), [want],
+                                     "文档第 %d 块: %s 缺少 profiles: [%s]" % (i, svc, want))
+        for stale in ("四容器", "四个容器"):
+            self.assertNotIn(stale, text, "文档仍有过时的「%s」说法" % stale)
+
+    def test_share_and_seed_docs_document_profiles(self):
+        """网络共享 / 种子下载两篇也要给出启用命令, 否则用户不知道要加 --profile。"""
+        share = REPO_ROOT / "wiki" / "网络共享-SMB-WebDAV.md"
+        seed = REPO_ROOT / "wiki" / "种子下载.md"
+        if share.exists():
+            text = share.read_text(encoding="utf-8")
+            self.assertIn("--profile share", text,
+                          "网络共享文档未说明需用 --profile share 启用")
+        if seed.exists():
+            text = seed.read_text(encoding="utf-8")
+            self.assertIn("--profile bt", text,
+                          "种子下载文档未说明需用 --profile bt 启用")
+
+
+def _load_yaml_str(text):
+    import yaml
+    return yaml.safe_load(text)
+
+
 if __name__ == "__main__":
     unittest.main()

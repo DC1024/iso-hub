@@ -29,7 +29,7 @@
 上游 `iso_download` 是一个命令行脚本，需要手动编辑配置、在终端敲命令、等待下载。ISO Hub 把它变成：
 
 - 一个 **Web 界面**：勾选、下载、看进度、删旧版，全程可视化。
-- 一个 **Docker 服务**：一条 `docker compose up -d --build` 起三件事（主服务 + SMB 共享 + WebDAV 共享）。
+- 一个 **Docker 服务**：一条 `docker compose up -d --build` 起 iso-hub 主服务 + socket-proxy 两个容器即可开箱使用；SMB / WebDAV 共享挂在 `share` profile、种子下载 qBittorrent 挂在 `bt` profile，**默认不部署**，需要时 `--profile share` / `--profile bt` 单独启用（见 [快速部署](部署-快速开始) 的「按需启用 sidecar 容器」）。
 - 一个 **自动更新器**：订阅同步定时抓镜像站最新版本、自动下载、自动清理过期版本。
 
 ## 一句话流程
