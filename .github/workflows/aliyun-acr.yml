@@ -99,9 +99,11 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.ver.outputs.tags }}
-          # 多架构构建: 覆盖 Intel/AMD(x86)、ARM 64 位(Apple Silicon/树莓派4/5/飞腾/鲲鹏)、
-          # ARM 32 位(老树莓派2/3 32 位系统)。QEMU+Buildx 已在上方 setup, 逐平台交叉构建。
-          platforms: linux/amd64, linux/arm64, linux/arm/v7
+          # 多架构构建: 覆盖 Intel/AMD(x86) 与 ARM 64 位(Apple Silicon/树莓派4/5/飞腾/鲲鹏)。
+          # 暂不含 linux/arm/v7 —— 32 位 ARM 在 QEMU 交叉编译下依赖链构建不稳且极慢。
+          # (cryptography 本身有 armv7l wheel, 但完整依赖链 + apt 装 gnupg 在 armv7 上易超时)
+          # QEMU+Buildx 已在上方 setup。如确需 armv7 可单独验证后放开。
+          platforms: linux/amd64, linux/arm64
           provenance: false
           sbom: false
           cache-from: type=gha
