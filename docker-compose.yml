@@ -28,6 +28,11 @@ services:
       - WEBDAV_CONF=${WEBDAV_CONF:-/webdav-config/webdav.yml}
       # 需要鉴权时在宿主机同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
+      # 可选: 对 data/settings.json 整文件做 AES-GCM 静态加密(不设则明文, 向后兼容)。
+      # 与登录密码无关; 生产建议用 ISO_HUB_SECRET_KEY_FILE 从 Docker secret/只读文件读密钥。
+      # 例: .env 里 ISO_HUB_SECRET_KEY=<随机字符串> 或 ISO_HUB_SECRET_KEY_FILE=/run/secrets/iso_hub_secret
+      - ISO_HUB_SECRET_KEY=${ISO_HUB_SECRET_KEY:-}
+      - ISO_HUB_SECRET_KEY_FILE=${ISO_HUB_SECRET_KEY_FILE:-}
       # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
       - ISO_HUB_REQUIRE_LOGIN=${ISO_HUB_REQUIRE_LOGIN:-1}
       # 管理员账号播种: 首次启动时用这两个变量自动创建管理员

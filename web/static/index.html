@@ -327,7 +327,7 @@
         <option value="ok" data-i18n="logOk" data-page-node-id="9Be18X8GlCssBAomMiI1hH">成功</option>
         <option value="info" data-i18n="logInfo" data-page-node-id="Yw8LUK2GVJwIFKU74PYuyf">信息</option>
       </select>
-      <span class="muted" data-i18n="clear" data-page-node-id="SQaqVCb04CNuEijxyW5lfB">清除</span>
+      <span class="muted" data-i18n="clear" data-page-node-id="SQaqVCb04CNuEijxyW5lfB" onclick="clearLog()" style="cursor:pointer">清除</span>
     </span>
   </div>
   <div id="log" data-page-node-id="GvACO4PaxjkAAGHToUlljB"></div>
@@ -814,6 +814,7 @@ const I18N={
   'taskLogTitle':{zh:'任务日志（实时）',en:'Task Log (live)'},
   'taskLogHidden':{zh:'任务日志（实时）',en:'Task Log (live)'},
   'clear':{zh:'清除',en:'Clear'},
+  'logCleared':{zh:'日志已清除',en:'Log cleared'},
   'logEmpty':{zh:'暂无日志 —— 运行任务后将在此实时输出（含下载进度/校验结果）',en:'No logs yet — task output appears here in real time'},
   'taskMeta':{zh:'元数据',en:'Meta'},
   'taskDownload':{zh:'下载',en:'Download'},
@@ -1585,6 +1586,9 @@ function applyLogFilter(){
   });
 }
 function toggleLog(){const l=$('#log');l.style.display=l.style.display==='none'?'':'none';const h=document.querySelector('.loghead span');if(l.style.display==='none')h.textContent='▸ '+t('taskLogTitle');else h.textContent='▾ '+t('taskLogTitle')}
+// 清除任务日志(只清前端显示): 清空日志框 DOM 并重置增量游标, 服务器日志缓冲仍保留;
+// 下次任务启动时 AFTER=0 会自动拉到最新。改为右侧「清除」按钮的可点击动作。
+function clearLog(){const box=$('#log');if(box)box.innerHTML='';AFTER=0;toast(t('logCleared'));}
 
 refreshProtected();   // 先加载受保护名单, 再渲染列表以显示🔒状态
 (function(){const s=$('#logflt');if(s){s.value=LOGF;}applyLogFilter();})();
