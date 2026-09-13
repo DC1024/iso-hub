@@ -70,6 +70,9 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.ver.outputs.tags }}
+          # 多架构构建: 覆盖 Intel/AMD(x86)、ARM 64 位(Apple Silicon/树莓派4/5/飞腾/鲲鹏)、
+          # ARM 32 位(老树莓派2/3 32 位系统)。QEMU+Buildx 已在上方 setup, 逐平台交叉构建。
+          platforms: linux/amd64, linux/arm64, linux/arm/v7
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
