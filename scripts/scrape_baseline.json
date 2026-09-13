@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "updated_at": "2026-09-13",
+  "sources": {
+    "https://mirrors.tuna.tsinghua.edu.cn/archlinux/iso/": {
+      "distribution": "Arch",
+      "versions_total": 3,
+      "latest": "2026.09.01",
+      "entries": 3
+    },
+    "https://mirrors.tuna.tsinghua.edu.cn/deepin-cd/": {
+      "distribution": "Deepin",
+      "versions_total": 6,
+      "latest": "25.2.0",
+      "entries": 3
+    },
+    "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/": {
+      "distribution": "Fedora",
+      "versions_total": 24,
+      "latest": "44",
+      "entries": 2
+    },
+    "https://mirrors.tuna.tsinghua.edu.cn/proxmox/iso/": {
+      "distribution": "Proxmox",
+      "versions_total": null,
+      "latest": null,
+      "entries": 3
+    },
+    "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-releases/": {
+      "distribution": "Ubuntu",
+      "versions_total": 18,
+      "latest": "26.04.1",
+      "entries": 3
+    }
+  }
+}

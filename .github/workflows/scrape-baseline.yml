@@ -1,0 +1,66 @@
+# ISO Hub - 镜像源深度解析巡检(季度)
+#
+# 与 endpoint-smoke.yml(每日, 只查 URL 活性)的分工:
+#   本 workflow 每季度对 sources_config.json 里每个非 static source 跑
+#   **真实的版本正则 + 真实的 build_entries() 解析链**, 与基线快照对比,
+#   抓出「页面还在但 DOM 改版导致正则静默匹配不到」这类解析层失效。
+#   判定逻辑全在 scripts/scrape_check.py(纯 Python, 可本地跑):
+#     0 = 正常(仅上游自然推进的 DIFF)        -> 绿
+#     1 = 存疑(列表页拉取失败/首跑无基线)     -> warning 注释
+#     2 = BROKEN(正则 0 匹配/解析异常/0 条目) -> error, job 失败(cron 失败发邮件)
+#     3 = 配置异常(配置读不出/基线 JSON 坏)    -> error
+#
+# 首跑无基线会整体归为 SUSPECT(退出码 1): 确认输出无误后, 人工执行
+#   python scripts/scrape_check.py --update-baseline
+# 落基线(scripts/scrape_baseline.json), 之后走纯对比。
+#
+# ⚠️ runner 是数据中心 IP, 个别源站可能 403/429 -> 脚本归为 SUSPECT 不判死,
+#    与 endpoint_smoke 的「存疑」语义一致, 避免把网络环境差异当故障告警。
+
+name: Scrape Robustness (quarterly)
+
+on:
+  schedule:
+    - cron: '23 5 1 1,4,7,10 *'   # 每年 1/4/7/10 月 1 日 UTC 05:23(北京 13:23)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scrape-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install requests
+        run: python -m pip install --quiet requests
+
+      - name: Run scrape check
+        id: check
+        # 存疑(1)不失败只告警; 损坏(2)/配置异常(3)才让 job 红
+        run: python scripts/scrape_check.py; code=$?; echo "exitcode=$code" >> "$GITHUB_OUTPUT"; [ "$code" -le 1 ]
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## 镜像源深度解析巡检结果"
+            echo '```'
+            cat artifacts/scrape_result.json 2>/dev/null || echo "(无结果文件)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-result
+          path: artifacts/scrape_result.json
+          retention-days: 90
