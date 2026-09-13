@@ -1,6 +1,8 @@
 # 网络共享（SMB / WebDAV）
 
-ISO Hub 的 compose 会额外启动**两个只读共享容器**，把 `./data` 里的 ISO 分享给局域网/PVE/其他设备挂载。
+ISO Hub 的 compose 里预置了**两个只读共享容器**（`samba` / `webdav`），需要时把 `./data` 里的 ISO 分享给局域网/PVE/其他设备挂载。
+
+⚠️ **它们默认不启动** —— 两个服务都挂在 compose profile `share` 下，直接 `docker compose up -d` 只会起 iso-hub + socket-proxy，此时共享是「未部署」状态。**必须显式加 `--profile share` 才会部署**（见下方「怎么手动启用」）。
 
 | 协议 | 访问地址 | 默认账号/密码 |
 |---|---|---|
@@ -9,11 +11,36 @@ ISO Hub 的 compose 会额外启动**两个只读共享容器**，把 `./data` �
 
 两个共享都**只读**，防止误改 ISO。
 
+## 怎么手动启用（必读）
+
+**第一步：先 `cd` 进 compose 文件所在目录。** compose 里的挂载都是相对路径（`./data`、`./webdav-config`），Compose 以当前 shell 目录为基准解释；在别的目录跑会把卷建到别处（甚至直接报 `no configuration file provided`）。下文示例假设文件放在 `/opt/iso-hub`（ACR 源那份叫 `docker-compose.acr.yml`）：
+
+```bash
+cd /opt/iso-hub
+```
+
+**第二步：带 profile 启动。** 用哪份 compose 就写哪个文件名；文件名是默认的 `docker-compose.yml` 时可省略 `-f`：
+
+```bash
+# SMB 共享（端口 1445）
+sudo docker compose -f docker-compose.acr.yml --profile share up -d samba
+
+# WebDAV（端口 8081）
+sudo docker compose -f docker-compose.acr.yml --profile share up -d webdav
+
+# 两个一起起
+sudo docker compose -f docker-compose.acr.yml --profile share up -d samba webdav
+```
+
+> 加 `--profile` 不会影响已在跑的默认两个容器。查看 / 停用同样要带 profile：
+> `sudo docker compose -f docker-compose.acr.yml --profile share ps`、`... --profile share stop samba webdav`。
+> 两个共享容器的 `restart` 策略是 `no`，**宿主机重启后不会自动起来**，需要再跑一次上面的 up 命令。
+
 ## 在哪里管理
 
 「设置 → 共享设置」面板可：
 - 实时**启用/停用**每个共享容器（调 `/api/shares` 启停对应 docker 容器）
-- **修改账号密码**（写入 `./data/settings.json`；运行中的共享需 restart 生效）
+- **修改账号密码**（写入 `./data/settings.json`；运行中的共享需 restart 生效：`sudo docker compose -f docker-compose.acr.yml --profile share restart samba webdav`）
 
 ## PVE 挂载 SMB（把 ISO 当 PVE 存储）
 
@@ -39,7 +66,7 @@ ISO Hub 的 compose 会额外启动**两个只读共享容器**，把 `./data` �
 
 ## 两个共享容器长什么样
 
-samba / webdav 的完整定义已包含在 [快速部署](部署-快速开始) 的 docker compose 示例 和仓库根目录 `docker-compose.yml` 里，**无需单独编写**。这里仅列出关键点：
+samba / webdav 的完整定义已包含在 [快速部署](部署-快速开始) 的 docker compose 示例 和仓库根目录 `docker-compose.yml` 里，**无需单独编写**，但两者都带 `profiles: ["share"]`，按上面的命令手动启用后才会真正运行。这里仅列出关键点：
 
 - `samba`：`dperson/samba` 镜像，映射 `1445(445)/1139(139)/1137(137)/1138(138)` 端口，只读共享 `./data` 为 `/srv/iso`。
   `command` 的 `-s "iso;/srv/iso;no;no;no;user,pass"` 意思是——共享名 `iso`、路径 `/srv/iso`、只读、仅列共享、不允许访客，可写用户为 `user`。
