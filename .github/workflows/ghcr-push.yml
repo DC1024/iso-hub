@@ -45,9 +45,10 @@ jobs:
 
       - name: Resolve image tags
         id: ver
-        env:
-          IMAGE: ghcr.io/${{ github.repository }}
         run: |
+          # GHCR 要求 repository 名全小写, 而 github.repository 是 DC1024/iso-hub
+          # (owner 含大写), 用 bash 的 ${VAR,,} 整体转小写
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             # v1.0.8 -> 1.0.8 (去 v 前缀); 正式发版同时推进 latest
             VER="${GITHUB_REF_NAME#v}"
