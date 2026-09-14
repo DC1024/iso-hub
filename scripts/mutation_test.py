@@ -40,7 +40,9 @@ def run_mutation(mut: dict, test_cmd_template: str, python: str) -> tuple:
     """注入单个变异体并跑目标测试, 返回 (mutant_id, killed, detail)。"""
     target = REPO_ROOT / mut["file"]
     original = target.read_bytes()
-    text = original.decode("utf-8")
+    # 统一换行符: 仓库内不同文件可能是 LF/CRLF 混用, mutations.json 统一按 LF 维护,
+    # 这样无论目标文件是 LF 还是 CRLF, 锚点都能匹配。
+    text = original.decode("utf-8").replace("\r\n", "\n")
     find, replace = mut["find"], mut["replace"]
 
     count = text.count(find)
