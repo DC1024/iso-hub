@@ -668,6 +668,17 @@ class LinuxDistributionDownloader:
                     )
                     if success:
                         print(f"✓ {message}")
+                        # 完整文件已校验通过 -> 同名的 .part 是上一轮中断留下的冗余字节。
+                        # 不清理会让 UI 长期误报「下载停止(已下载部分)」: 后端 build_distros()
+                        # 在同名的完整文件与 .part 之间取 mtime 较新者作条目代表, 残留
+                        # .part 通常更新, 于是"已完整"的文件被判成半成品。
+                        stale_part = filepath.with_name(filepath.name + PART_SUFFIX)
+                        try:
+                            if stale_part.exists():
+                                stale_part.unlink()
+                                print(f"  清理冗余半成品: {stale_part}")
+                        except OSError as e:  # noqa: BLE001
+                            print(f"  清理冗余半成品失败(忽略): {e}")
                         success_count += 1
                         continue
                     else:

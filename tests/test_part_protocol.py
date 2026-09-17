@@ -385,6 +385,61 @@ class TestTruncationVsCorruption(unittest.TestCase):
         self.assertTrue(self.final.exists())
 
 
+class TestStalePartCleanup(unittest.TestCase):
+    """「完整文件已校验通过」时, 上一轮中断留下的同名 .part 必须被清理。
+
+    线上 bug(2026-09-18 用户报障): 面板显示「下载停止(已下载部分)」, 但任务日志是
+    「文件已存在 + URL校验和验证通过 + 退出码 0」。磁盘实况:
+
+        xxx.iso        (完整, 校验通过, mtime 较旧)
+        xxx.iso.part   (上一轮被 kill 留下的残留, 大小相同但 mtime 更新)
+
+    后端 build_distros() 在同名的完整文件与 .part 之间取 **mtime 较新者** 作为条目
+    代表 → 残留 .part 胜出 → 状态判成 partial → UI 显示「下载停止(已下载部分)」。
+    修复: 「文件已存在 + 校验通过」分支必须顺手清掉这个冗余半成品。
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.final = self.dir / "pve.iso"
+        self.part = self.dir / "pve.iso.part"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_verified_existing_file_drops_stale_part(self):
+        """完整文件校验通过 -> 残留 .part 被删除, 完整文件本身不动。"""
+        self.final.write_bytes(b"iso-bytes")
+        self.part.write_bytes(b"iso-bytes")  # 残留, mtime 更新
+        iso_runner._drop_stale_part(self.part)
+        self.assertFalse(self.part.exists(), "冗余半成品应被清理")
+        self.assertTrue(self.final.exists(), "完整文件绝不能被误删")
+        self.assertEqual(self.final.read_bytes(), b"iso-bytes")
+
+    def test_absent_part_is_noop(self):
+        """没有 .part 时清理是空操作, 不抛异常。"""
+        self.final.write_bytes(b"iso-bytes")
+        iso_runner._drop_stale_part(self.part)
+        self.assertTrue(self.final.exists())
+
+    def test_runner_calls_cleanup_in_verified_existing_branch(self):
+        """源码护栏: 「文件已存在 + 校验通过」的 continue 之前必须调用清理。"""
+        src = (REPO_ROOT / "web" / "iso_runner.py").read_text(encoding="utf-8")
+        idx = src.index("文件已存在: {filepath}")
+        seg = src[idx:idx + 1200]
+        self.assertIn("_drop_stale_part(part_path)", seg,
+                      "runner 的已存在分支必须调用 _drop_stale_part, 否则 UI 会长期误报下载停止")
+
+    def test_upstream_downloader_cleans_stale_part(self):
+        """订阅同步走 download_linux, 同一分支也要清理。"""
+        dl_src = (REPO_ROOT / "iso_download" / "download_linux.py").read_text(encoding="utf-8")
+        idx = dl_src.index('print(f"文件已存在: {filepath}")')
+        seg = dl_src[idx:idx + 1200]
+        self.assertIn("stale_part", seg,
+                      "download_linux 的已存在分支必须清理残留 .part")
+
+
 class TestRunnerSourceContract(unittest.TestCase):
     """源码静态断言: 防止回归到"直接写最终名"的旧实现。"""
 
