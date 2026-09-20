@@ -668,6 +668,19 @@ class LinuxDistributionDownloader:
                     )
                     if success:
                         print(f"✓ {message}")
+                        # 完整文件校验通过 → 顺手清掉同名残留半成品(.part), 与
+                        # web/iso_runner.py 同分支的处理保持一致。
+                        # 背景: 上一轮下载在「校验通过 → 原子改名」前被中断时, .part
+                        # 已具备全量正确字节却没落定, 导致 .iso 与 .part 并存; UI 按
+                        # "较新者"取代表 → 一直显示「下载停止」。这里补清理, 状态回
+                        # 「已下载」。完整文件已校验通过, 旧半成品必然冗余。
+                        _stale = filepath.with_name(filepath.name + PART_SUFFIX)
+                        try:
+                            if _stale.exists():
+                                _stale.unlink()
+                                print(f"  已清理残留半成品: {_stale.name}")
+                        except OSError as _e:  # noqa: BLE001
+                            print(f"  ⚠ 残留半成品清理失败(不影响已下载状态): {_e}")
                         success_count += 1
                         continue
                     else:
