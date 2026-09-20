@@ -467,6 +467,24 @@ def main() -> None:
                 if ok:
                     print(f"✓ {msg}")
                     _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)
+                    # 完整文件校验通过 → 顺手清掉同名残留半成品(.part)。
+                    #
+                    # 场景(生产实测): 上一轮下载在「校验通过 → 原子改名」之前被中断
+                    # (容器重启 / 任务被停 / 超时), .part 已写入全量且正确的字节却没落定。
+                    # 于是磁盘上 .iso 与 .part 并存, 而 build_distros 取"较新者"作为条目
+                    # 代表 → .part 更新 → UI 永远显示「下载停止 + 已下载部分」。
+                    # 用户在 UI 上无解: 点「下载所选」会走本分支直接 continue(压根不碰
+                    # .part), 点删除又会连完好的 .iso 一起删掉。
+                    # 这里补上清理, 状态自然回「已下载」。零风险: 完整文件已校验通过,
+                    # 残留的旧半成品必然是冗余数据。
+                    _stale = Path(str(filepath) + PART_SUFFIX)
+                    try:
+                        if _stale.exists():
+                            _stale.unlink()
+                            print(f"  已清理残留半成品: {_stale.name}")
+                    except OSError as _e:  # noqa: BLE001
+                        # 清理失败不影响判定: 文件本体已校验通过, 保持"已下载"语义
+                        print(f"  ⚠ 残留半成品清理失败(不影响已下载状态): {_e}")
                     continue
                 print(f"✗ {msg}")
                 print("校验和验证失败, 将重新下载")
