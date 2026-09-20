@@ -207,6 +207,28 @@ def _clear_failure(data_dir, typ: str, name: str, fname: str) -> None:
         pass
 
 
+def _drop_stale_part(part_path) -> None:
+    """删掉与"已校验通过的完整文件"同名的残留半成品(.part)。
+
+    真实场景(线上 bug): 上一轮任务被「停止任务」kill, 留下 ``xxx.iso.part``;
+    而完整文件 ``xxx.iso`` 其实早已落定并通过校验。此时本轮走到"文件已存在 +
+    校验通过"分支, 直接 continue —— .part 永远不会被清理。
+
+    后果: 后端 build_distros() 在同名的完整文件与 .part 之间取 **mtime 较新者**
+    作为条目代表, 残留的 .part 通常更新 → 条目被判成 partial, UI 一直显示
+    「下载停止(已下载部分)」, 即便文件本身完整且校验和与官方清单一致。
+
+    所以这里必须显式清理: 完整文件已校验通过, .part 只是冗余字节。
+    """
+    try:
+        if part_path.exists():
+            part_path.unlink()
+            print(f"  清理冗余半成品: {part_path}")
+    except OSError as e:  # noqa: BLE001
+        # 清理失败不影响下载结果(文件本身已校验通过), 只留日志
+        print(f"  清理冗余半成品失败(忽略): {e}")
+
+
 def _resolve_total(resp, have: int, head_total: int) -> int:
     """确定这次传输的**完整文件应有字节数**, 三级兜底, 拿不到返回 0。
 
@@ -467,24 +489,9 @@ def main() -> None:
                 if ok:
                     print(f"✓ {msg}")
                     _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)
-                    # 完整文件校验通过 → 顺手清掉同名残留半成品(.part)。
-                    #
-                    # 场景(生产实测): 上一轮下载在「校验通过 → 原子改名」之前被中断
-                    # (容器重启 / 任务被停 / 超时), .part 已写入全量且正确的字节却没落定。
-                    # 于是磁盘上 .iso 与 .part 并存, 而 build_distros 取"较新者"作为条目
-                    # 代表 → .part 更新 → UI 永远显示「下载停止 + 已下载部分」。
-                    # 用户在 UI 上无解: 点「下载所选」会走本分支直接 continue(压根不碰
-                    # .part), 点删除又会连完好的 .iso 一起删掉。
-                    # 这里补上清理, 状态自然回「已下载」。零风险: 完整文件已校验通过,
-                    # 残留的旧半成品必然是冗余数据。
-                    _stale = Path(str(filepath) + PART_SUFFIX)
-                    try:
-                        if _stale.exists():
-                            _stale.unlink()
-                            print(f"  已清理残留半成品: {_stale.name}")
-                    except OSError as _e:  # noqa: BLE001
-                        # 清理失败不影响判定: 文件本体已校验通过, 保持"已下载"语义
-                        print(f"  ⚠ 残留半成品清理失败(不影响已下载状态): {_e}")
+                    # 完整文件已校验通过 -> 同名的 .part 是上一轮中断留下的冗余字节。
+                    # 不清理会让 UI 长期误报「下载停止(已下载部分)」, 见 _drop_stale_part。
+                    _drop_stale_part(part_path)
                     continue
                 print(f"✗ {msg}")
                 print("校验和验证失败, 将重新下载")
