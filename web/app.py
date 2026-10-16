@@ -231,13 +231,67 @@ _log_lines = deque(maxlen=4000)
 _log_seq = 0
 task = {"proc": None}
 
+# v1.3.17: 日志落盘。此前日志**只存在内存 deque(4000 条)**, 容器一重启全部消失 ——
+# 排查"昨晚 03:55 那批下载为什么失败"时, 唯一的证据已经蒸发, 只剩 download_failures.json
+# 里干巴巴的 {at, kind}(那时连 err 字段都没有)。
+# 现在: 每条日志同时追加到 <DATA_DIR>/logs/iso-hub-YYYY-MM-DD.log, 按天切分,
+# 保留最近 LOG_KEEP_DAYS 天。落盘失败(只读卷/磁盘满)**绝不影响主流程**。
+LOG_DIR = DATA_DIR / "logs"
+LOG_KEEP_DAYS = 7
+# 落盘开关: ISO_HUB_LOG_TO_FILE=0 可关(如把日志挂到外部收集器时不想要双写)
+LOG_TO_FILE = os.environ.get("ISO_HUB_LOG_TO_FILE", "1").strip().lower() in (
+    "1", "true", "yes", "on")
+
+
+def _log_file_path(ts: float | None = None) -> Path:
+    day = time.strftime("%Y-%m-%d", time.localtime(ts if ts is not None else time.time()))
+    return LOG_DIR / f"iso-hub-{day}.log"
+
+
+def _rotate_logs() -> None:
+    """删除超过 LOG_KEEP_DAYS 天的日志文件。失败静默(日志不该拖垮业务)。"""
+    try:
+        files = sorted(LOG_DIR.glob("iso-hub-*.log"))
+        for f in files[:-LOG_KEEP_DAYS]:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _persist_log_line(seq: int, ts: float, text: str) -> None:
+    """把一行日志追加到当日日志文件。任何异常都吞掉。"""
+    if not LOG_TO_FILE:
+        return
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))} "
+                f"[{seq}] {text}\n")
+        with open(_log_file_path(ts), "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:  # noqa: BLE001 - 日志落盘失败不得影响请求/下载主流程
+        pass
+
 
 def log(msg: str) -> None:
     global _log_seq
     # L2 修复: 序号自增放进锁内, waitress 多线程下不再重复/乱序
     with _lock:
         _log_seq += 1
-        _log_lines.append({"i": _log_seq, "t": time.time(), "l": str(msg).rstrip()})
+        _text = str(msg).rstrip()
+        _ts = time.time()
+        _log_lines.append({"i": _log_seq, "t": _ts, "l": _text})
+    # 落盘放在锁外: 磁盘 IO 不该阻塞 waitress 的其它线程
+    _persist_log_line(_log_seq, _ts, _text)
+
+
+try:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _rotate_logs()
+except Exception:  # noqa: BLE001
+    pass
 
 
 def human(n: float) -> str:
@@ -272,18 +326,26 @@ def meta_updated_at() -> float:
         return 0.0
 
 
-def write_fail_record(rel: str, kind: str = "hard") -> None:
+def write_fail_record(rel: str, kind: str = "hard", err: str = "", url: str = "") -> None:
     """记录一次下载失败到 download_failures.json: {rel: {"at": ts, "kind": kind}}。
 
     由各下载 runner 在文件级失败时调用(子进程写)。kind 语义由调用方决定:
       * "hard"    — 不可续传的失败(半成品已被清理), 下次只能从头下 → 下载失败
       * "stopped" — 已停止/被中断, 半成品保留, 下次可续传 → 下载停止
+
+    v1.3.17: 新增 err/url 两个诊断字段, 并在写入时按 TTL 清理过期记录。
     """
     try:
         data = {}
         if FAILURES_JSON.exists():
             data = json.loads(FAILURES_JSON.read_text(encoding="utf-8")) or {}
-        data[rel] = {"at": int(time.time()), "kind": kind}
+        data = drop_expired_failures(data)
+        data[rel] = {
+            "at": int(time.time()),
+            "kind": kind,
+            **({"err": err[:300]} if err else {}),
+            **({"url": url[:500]} if url else {}),
+        }
         tmp = FAILURES_JSON.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(FAILURES_JSON)
@@ -291,12 +353,44 @@ def write_fail_record(rel: str, kind: str = "hard") -> None:
         log(f"[WARN] 写下载失败记录失败: {e}")
 
 
+def failure_ttl_days() -> float:
+    """失败记录的存活天数。0 = 永不清理。可用 ISO_HUB_FAILURE_TTL_DAYS 覆盖。"""
+    try:
+        return float(os.environ.get("ISO_HUB_FAILURE_TTL_DAYS", "7"))
+    except (TypeError, ValueError):
+        return 7.0
+
+
+def drop_expired_failures(data: dict) -> dict:
+    """丢弃超过 TTL 的失败记录(与 web/iso_runner.py 同名函数同策略)。
+
+    背景(生产实测): 一次瞬时网络抖动留下的 hard 记录, 在 URL 早已恢复 200 之后
+    仍挂在 UI 上 10 天 —— 失败记录没有 TTL, 而旧版本的文件不会再被订阅重下,
+    于是"疤"永远不会自己消失, 用户也没有手动清除入口。
+    """
+    ttl = failure_ttl_days()
+    if ttl <= 0 or not isinstance(data, dict):
+        return data
+    cutoff = time.time() - ttl * 86400
+    return {
+        k: v for k, v in data.items()
+        if not (isinstance(v, dict) and isinstance(v.get("at"), (int, float))
+                and v["at"] < cutoff)
+    }
+
+
 def load_failures() -> dict:
-    """读取下载失败记录 {rel: {"at": ts, "kind": kind}}。"""
+    """读取下载失败记录 {rel: {"at": ts, "kind": kind, "err":?, "url":?}}。
+
+    v1.3.17: 读取时同样按 TTL 过滤 —— 写入侧清理只能覆盖"又失败过一次"的文件,
+    那些再没被重试过的旧疤要靠读取侧消掉。
+    """
     try:
         if FAILURES_JSON.exists():
             data = json.loads(FAILURES_JSON.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
+            if isinstance(data, dict):
+                return drop_expired_failures(data)
+            return {}
     except Exception as e:  # noqa: BLE001
         log(f"[WARN] 解析下载失败记录失败: {e}")
     return {}

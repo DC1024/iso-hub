@@ -35,6 +35,11 @@ sys.path.insert(0, str(REPO_ROOT / "web"))
 import app  # noqa: E402
 import notifier  # noqa: E402
 
+# 失败记录时间戳基准: v1.3.17 起 load_failures() 会按 TTL(默认 7 天)过滤过期记录,
+# 测试里不能再写死 0/1 这类 1970 年的时间戳(会被当成过期的历史疤痕丢掉)。
+_NOW = int(time.time())
+
+
 HTML = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
 
 SMTP_IDS = ["#mail-host", "#mail-port", "#mail-sec", "#mail-user", "#mail-pass",
@@ -526,21 +531,21 @@ class TestNotifyEntries(NotifyAppBase):
                                     "failed": False, "reason": ""}])
 
     def test_failure_ledger_marks_the_file(self):
-        self.write_failures({str(self.dl / "ubuntu.iso"): {"at": 0, "kind": "hard"}})
+        self.write_failures({str(self.dl / "ubuntu.iso"): {"at": _NOW, "kind": "hard"}})
         entries = app._notify_entries(self.snap)
         self.assertTrue(entries[0]["failed"])
         self.assertIn("下载失败", entries[0]["reason"])
 
     def test_part_path_lookup(self):
         """.part 路径要去后缀后再查账本 —— 账本记的是最终名。"""
-        self.write_failures({str(self.dl / "ubuntu.iso"): {"at": 0, "kind": "stopped"}})
+        self.write_failures({str(self.dl / "ubuntu.iso"): {"at": _NOW, "kind": "stopped"}})
         e = app._notify_entries(self.snap)[0]
         self.assertTrue(e["failed"])
         self.assertIn("可续传", e["reason"])
 
     def test_filename_fallthrough(self):
         """runner 写账本用的是相对路径, 与 task 里的绝对路径不同形 -> 按文件名兜一层。"""
-        self.write_failures({"linux/Ubuntu/ubuntu.iso": {"at": 0, "kind": "hard"}})
+        self.write_failures({"linux/Ubuntu/ubuntu.iso": {"at": _NOW, "kind": "hard"}})
         self.assertTrue(app._notify_entries(self.snap)[0]["failed"])
 
     def test_missing_file_is_not_a_crash(self):

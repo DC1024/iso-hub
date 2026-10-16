@@ -29,6 +29,61 @@ PART_SUFFIX = ".part"
 STORAGE_MODES = ("classified", "flat")
 FLAT_DIRNAME = "iso"
 
+# v1.3.17: 网络抖动/镜像限流的统一重试策略。
+# 背景(生产实测): ubuntu-26.04(.1) 与 archlinux-2026.08.01 三条下载在同一分钟内
+# 全部 hard 失败, 事后探测 URL 均 200 —— 典型的出口瞬时抖动。旧代码一次失败就
+# 记 failure 且**永不重试**(failure 记录也没有 TTL), 于是"一分钟的网络抖动"在 UI 上
+# 留了一道永久的失败疤。这里在 HTTP 层加指数退避重试, 覆盖:
+#   * 连接/读取超时、连接被重置(瞬时抖动)
+#   * 429(被限流)与 5xx(镜像站临时故障)
+# 注意: 只对幂等的 GET/HEAD 生效, 且 **不重试 416**(416 是"已完成"信号, 见下载主流程)。
+RETRY_TOTAL = 3
+RETRY_BACKOFF = 1.5
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+
+
+def http_get_with_retry(url: str, *, headers=None, stream: bool = False,
+                        timeout=None, retries: int = RETRY_TOTAL):
+    """带指数退避的 GET: 瞬时网络抖动/镜像限流不再直接判死。
+
+    刻意**不走** requests.Session + HTTPAdapter(Retry): 本仓库的测试与生产代码都
+    围绕模块级 ``requests.get`` 打桩(``patch.object(requests, "get", ...)``), 换成
+    Session 会让全部既有桩点失效。这里保持调用 ``requests.get``, 只在它外面加退避。
+
+    重试条件(缺一不可):
+      * 抛 RequestException(连接超时/重置/读超时) —— 典型瞬时抖动
+      * 响应码落在 RETRY_STATUSES(429 限流 / 5xx 镜像临时故障)
+
+    **不重试** 416: 那是"断点已满"的完成信号(见 download_distribution), 重试无意义。
+    """
+    last_exc = None
+    for attempt in range(max(1, retries)):
+        try:
+            resp = requests.get(url, headers=headers, stream=stream, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            if attempt + 1 < max(1, retries):
+                _delay = RETRY_BACKOFF * (2 ** attempt)
+                print(f"  网络异常({e.__class__.__name__}), {_delay:.1f}s 后重试"
+                      f" ({attempt + 1}/{retries})")
+                time.sleep(_delay)
+                continue
+            raise
+        code = getattr(resp, "status_code", 0) or 0
+        if code in RETRY_STATUSES and attempt + 1 < max(1, retries):
+            _delay = RETRY_BACKOFF * (2 ** attempt)
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001 - 关闭失败不影响重试
+                pass
+            print(f"  服务器返回 {code}, {_delay:.1f}s 后重试 ({attempt + 1}/{retries})")
+            time.sleep(_delay)
+            continue
+        return resp
+    if last_exc is not None:
+        raise last_exc
+    raise requests.exceptions.RequestException("重试耗尽且无响应")
+
 
 def _safe_dist_dir(download_dir: Path, typ: str, name: str,
                    flat: bool = False) -> Path | None:
@@ -159,7 +214,9 @@ class LinuxDistributionDownloader:
             query_name = query_name[: -len(PART_SUFFIX)]
 
         try:
-            response = requests.get(checksum_url, headers=self.headers, timeout=30)
+            # v1.3.17: 带退避重试 —— checksum 是几十字节的小文件, 一次 502/超时
+            # 就判"校验失败"代价太大(历史上因此误删/重下了完整 ISO)。
+            response = http_get_with_retry(checksum_url, headers=self.headers, timeout=30)
             response.raise_for_status()
 
             checksum_content = response.text
@@ -520,8 +577,17 @@ class LinuxDistributionDownloader:
 
     def verify_checksum_smart(self, filepath: Path, checksum_url: Optional[str],
                              stored_checksum: Optional[str],
-                             dist: Optional[dict] = None) -> tuple[bool, str]:
+                             dist: Optional[dict] = None) -> tuple[Optional[bool], str]:
         """智能校验和验证，按优先级进行。
+
+        返回值是**三态**, 调用方必须区分对待(这是 v1.3.17 的核心修复):
+
+          * ``True``  —— 校验通过
+          * ``False`` —— **确认不符**: 拿到了官方摘要且比对不一致, 文件确实损坏
+          * ``None``  —— **无法判定**: 校验源不可达(404/超时)或清单里没有该文件名。
+                         此时"没验过"不等于"验不过", 绝不能据此删文件/重下 ——
+                         否则 Proxmox 那种"checksum 模板配错 → 每周期 416 → 死循环"
+                         就是典型后果(生产实测: 完整 ISO 与等大 .part 并存, 周周重下)。
 
         dist: 发行版条目(dict), 含可选的 gpg_verify/signature_url/gpg_key_url/
               gpg_key_fingerprint 字段。配置了 gpg_verify 时, 先验证 checksum 文件的
@@ -564,10 +630,14 @@ class LinuxDistributionDownloader:
                     return False, (f"内容校验不符: 期望 {url_checksum}, 实际 {got}"
                                    " —— 文件内容与官方清单不一致(下载损坏或镜像同步中)")
             else:
-                # 解析不到校验和 ≠ 校验不通过。分开报, 避免"两个可信源都失败"式的误判。
+                # v1.3.17: 这里过去直接 return False, 被上层当成"校验失败 → 重新下载"。
+                # 但"取不到官方摘要"和"摘要对不上"是两回事: 前者可能是镜像站 404、
+                # checksum 模板配错、文件尚未进清单 —— 本地文件本身也许完好无损。
+                # 现返回 None(无法判定), 由调用方决定是"当作完整"还是"换源重试",
+                # 不再无条件重下。
                 got = self.sha256_of(filepath)
-                return False, (f"未能在清单中找到该文件名, 无法校验"
-                               f"(本地实际 SHA256={got}, 来源 {checksum_url})")
+                return None, (f"无法判定: 未能在校验源中找到该文件名, 或校验源不可达"
+                              f"(本地实际 SHA256={got}, 来源 {checksum_url})")
 
         # 第二优先级：使用JSON中存储的checksum
         if stored_checksum:
@@ -681,7 +751,16 @@ class LinuxDistributionDownloader:
                             print(f"  清理冗余半成品失败(忽略): {e}")
                         success_count += 1
                         continue
-                    else:
+                    if success is None:
+                        # v1.3.17: 校验源不可达/清单里没这个文件名 —— "没验过"不等于"验不过"。
+                        # 旧代码在这里也走 else 分支 → 打印"校验和验证失败，将重新下载",
+                        # 于是每个周期都把完好的 ISO 重下一遍(Proxmox 就是这么循环了 10 天)。
+                        # 现在: 保留现有文件不动, 明确告警, 不触发重下。
+                        print(f"⚠ {message}")
+                        print("  完整性无法判定(校验源不可用), 保留现有文件, 不重新下载")
+                        success_count += 1
+                        continue
+                    if not success:
                         print(f"✗ {message}")
                         print("校验和验证失败，将重新下载")
             
@@ -702,10 +781,21 @@ class LinuxDistributionDownloader:
                     _headers["Range"] = f"bytes={_have}-"
 
                 # B6 修复: 显式超时(连接 15s, 读 60s), 避免镜像站半开连接时下载线程永久挂起
-                response = requests.get(target_dist["download_url"], headers=_headers,
-                                        stream=True, timeout=(15, 60))
+                # v1.3.17: 再套一层退避重试, 覆盖瞬时抖动与 429/5xx(不重试 416)
+                response = http_get_with_retry(target_dist["download_url"], headers=_headers,
+                                               stream=True, timeout=(15, 60))
+                # v1.3.17: 416 = Range 起点越界, 说明 .part 字节数已 >= 远端文件全长。
+                # 旧实现把它归进 else 分支(同 200 处理) → 从头重下整个文件, 下完 .part
+                # 又是全量 → 下一轮再 416 → 无限循环(Proxmox 实测每天一轮, 10 天未自愈)。
+                # 正确语义: .part 已是**完整候选**, 跳过传输直接进校验。
+                _already_complete = bool(_have and response.status_code == 416)
+                if _already_complete:
+                    print(f"断点已满({_have/1024/1024:.1f} MiB): 服务器返回 416, "
+                          f"{part_path.name} 视为完整候选, 直接进入校验")
+                    response.close()
+                    total_size = _have
                 # 服务器支持 Range 时返回 206, 此时应追加写入
-                if _have and response.status_code == 206:
+                elif _have and response.status_code == 206:
                     _cr = response.headers.get('content-range', '')
                     try:
                         total_size = int(_cr.rsplit('/', 1)[-1]) if '/' in _cr else 0
@@ -728,23 +818,26 @@ class LinuxDistributionDownloader:
                         total_size = int(response.headers.get('content-length') or 0)
                     except (TypeError, ValueError):
                         total_size = 0
-                response.raise_for_status()
+                if not _already_complete:
+                    # 416 是"已完成"信号而非错误, 上面已 close, 不能再 raise_for_status
+                    response.raise_for_status()
 
-                # 使用tqdm创建进度条
-                with open(part_path, _mode) as f:
-                    with tqdm(
-                        total=total_size,
-                        initial=_have,
-                        unit='B',
-                        unit_scale=True,
-                        unit_divisor=1024,
-                        desc=f"下载 {filename}",
-                        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
-                    ) as pbar:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                f.write(chunk)
-                                pbar.update(len(chunk))
+                # 使用tqdm创建进度条(416 时跳过传输, 直接落校验)
+                if not _already_complete:
+                    with open(part_path, _mode) as f:
+                        with tqdm(
+                            total=total_size,
+                            initial=_have,
+                            unit='B',
+                            unit_scale=True,
+                            unit_divisor=1024,
+                            desc=f"下载 {filename}",
+                            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+                        ) as pbar:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                                    pbar.update(len(chunk))
 
                 print(f"\n下载完成: {part_path}")
 
@@ -770,7 +863,21 @@ class LinuxDistributionDownloader:
                         target_dist.get("checksum"),
                         dist=target_dist
                     )
-                    if success:
+                    if success is None:
+                        # v1.3.17: 校验源不可达/清单无此文件名。长度已与服务器声明一致,
+                        # 只是拿不到官方摘要 —— 若此时不落定, .part 会一直躺在磁盘上,
+                        # UI 永远显示「下载停止」(正是本次要根治的症状)。故按"尽最大努力
+                        # 验证"落定, 但留醒目告警, 便于事后发现源配置问题。
+                        print(f"⚠ {message}")
+                        if total_size and actual_bytes == total_size:
+                            print("  长度已与服务器声明一致, 按无法校验处理并落定(请检查 checksum 源配置)")
+                            if filepath.exists():
+                                filepath.unlink()
+                            os.replace(part_path, filepath)
+                            success_count += 1
+                        else:
+                            print("  长度未知或不匹配, 保守保留半成品供下次续传")
+                    elif success:
                         print(f"✓ {message}")
                         # 校验通过 → 原子改名为最终文件名, 此刻才算真正下载完成
                         if filepath.exists():
