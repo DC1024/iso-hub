@@ -152,17 +152,33 @@ class TestDiagnostics(unittest.TestCase):
         self.assertIn(ISO, out, "应提示查的是最终名")
 
     def test_verify_smart_distinguishes_not_found_from_mismatch(self):
-        """解析不到 vs 内容不符, 返回信息必须不同。"""
+        """三态契约(v1.3.17): 查不到摘要 = None(无法判定), 与 False(确认不符)必须区分。
+
+        这是 Proxmox 死循环的根因修复点: 旧实现把"校验源 404 / 清单里没这个文件"
+        也返回 False, 上层一律当作"校验失败 → 删除 .part → 重新下载", 于是完整
+        的 ISO 每周被重下一次, 且永远修不好(重下后依然取不到摘要)。
+        """
         d = _downloader()
         with tempfile.TemporaryDirectory() as td:
             f = Path(td) / (ISO + ".part")
             f.write_bytes(b"whatever")
             with patch.object(M.requests, "get", lambda *a, **k: _FakeResp("nothing\n")):
                 ok, msg = d.verify_checksum_smart(f, "https://x/s.txt", "")
-        self.assertFalse(ok)
-        self.assertIn("未能在清单中找到该文件名", msg,
-                      "应明确是'找不到文件名', 而不是含糊的'校验和验证失败'")
+        self.assertIsNone(ok, "查不到官方摘要应返回 None(无法判定), 不能是 False(确认损坏)")
+        self.assertIn("无法判定", msg, "应明示无法判定, 而不是含糊的'校验和验证失败'")
         self.assertIn("实际 SHA256=", msg, "应带上实际摘要便于排查")
+
+    def test_verify_smart_returns_false_only_on_real_mismatch(self):
+        """拿到了官方摘要却比对不上 → 必须是 False(确认损坏), 不能是 None。"""
+        d = _downloader()
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / (ISO + ".part")
+            f.write_bytes(b"wrong-bytes")
+            body = f"{ISO_HASH}  {ISO}\n"
+            with patch.object(M.requests, "get", lambda *a, **k: _FakeResp(body)):
+                ok, msg = d.verify_checksum_smart(f, "https://x/s.txt", "")
+        self.assertFalse(ok, "官方摘要存在且比对不上, 必须是确认失败(False)")
+        self.assertIn("内容校验不符", msg)
 
 
 class TestVerifyChecksumNormalization(unittest.TestCase):

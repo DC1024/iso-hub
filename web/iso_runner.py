@@ -102,6 +102,54 @@ _tqdm_stub.tqdm = lambda *a, **k: _NoopTqdm()
 sys.modules["tqdm"] = _tqdm_stub
 
 
+# v1.3.17: 网络抖动/镜像限流的统一重试参数。
+#   背景(生产实测): ubuntu-26.04(.1)、archlinux-2026.08.01 三条下载在同一分钟内
+#   全部 hard 失败, 事后探测 URL 均 200 —— 典型的出口瞬时抖动。旧代码一次失败即
+#   记 failure, 且 failure 无 TTL、无重试 → 一分钟的抖动在 UI 上留永久的失败疤。
+#   现在: 连接/读超时与 429/5xx 各退避重试 3 次(1.5s → 3s → 6s)。
+#   与 iso_download/download_linux.py 保持同参(该模块有同名实现, 因 runner 需
+#   单文件可运行而独立复制 —— 与 ALLOWED_TYPES/PART_SUFFIX 的既有约定一致)。
+RETRY_TOTAL = 3
+RETRY_BACKOFF = 1.5
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+
+
+def _http_get_with_retry(url: str, *, headers=None, stream: bool = False,
+                         timeout=None, retries: int = RETRY_TOTAL):
+    """带指数退避的 GET。保持调用模块级 ``requests.get``(测试与生产都按此打桩)。
+
+    **不重试 416** —— 416 表示 .part 已写满(断点越界), 是"完成"信号而非故障,
+    由调用方当作完整候选送进校验(见 _download_file_with_failover)。
+    """
+    last_exc = None
+    for attempt in range(max(1, retries)):
+        try:
+            resp = requests.get(url, headers=headers, stream=stream, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            if attempt + 1 < max(1, retries):
+                _delay = RETRY_BACKOFF * (2 ** attempt)
+                print(f"  网络异常({e.__class__.__name__}), {_delay:.1f}s 后重试"
+                      f" ({attempt + 1}/{retries})")
+                time.sleep(_delay)
+                continue
+            raise
+        code = getattr(resp, "status_code", 0) or 0
+        if code in RETRY_STATUSES and attempt + 1 < max(1, retries):
+            _delay = RETRY_BACKOFF * (2 ** attempt)
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001 - 关闭失败不影响重试
+                pass
+            print(f"  服务器返回 {code}, {_delay:.1f}s 后重试 ({attempt + 1}/{retries})")
+            time.sleep(_delay)
+            continue
+        return resp
+    if last_exc is not None:
+        raise last_exc
+    raise requests.exceptions.RequestException("重试耗尽且无响应")
+
+
 def _head_target_size(url: str, headers: dict) -> int:
     """对下载 URL 发 HEAD 请求获取目标文件字节数(总大小), 用于 UI 进度条。失败返回 0。"""
     try:
@@ -168,11 +216,19 @@ def _pick_candidates(strategy: str, entry: dict, headers: dict):
     return list(zip(urls, cs))
 
 
-def _record_failure(data_dir, typ: str, name: str, fname: str, kind: str) -> None:
+def _record_failure(data_dir, typ: str, name: str, fname: str, kind: str,
+                    err: str = "", url: str = "") -> None:
     """把文件级失败写进 download_failures.json(供前端显示「下载失败/下载停止」)。
 
     kind="hard"    半成品已清理, 下次只能从头下 → 下载失败
     kind="stopped" 半成品保留, 下次可续传     → 下载停止
+
+    v1.3.17 增强:
+      * 新增 ``err``/``url`` 字段 —— 旧记录只有 ``{at, kind}``, 事后完全看不出
+        到底是 404、超时还是校验失败, 排查只能靠翻(内存里、重启即失的)日志;
+      * 写入时顺带**按 TTL 清理过期记录** —— failure 过去没有过期机制, 一次
+        瞬时网络抖动留下的"疤"会永久显示在 UI 上(生产实测: 10-05 三条 hard
+        记录, URL 早已恢复 200, 疤却挂了 10 天)。
     """
     try:
         jf = Path(data_dir) / "download_failures.json"
@@ -182,12 +238,40 @@ def _record_failure(data_dir, typ: str, name: str, fname: str, kind: str) -> Non
                 data = json.loads(jf.read_text(encoding="utf-8")) or {}
             except Exception:  # noqa: BLE001
                 data = {}
-        data[f"{typ}/{name}/{fname}"] = {"at": int(time.time()), "kind": kind}
+        data = _drop_expired_failures(data)
+        data[f"{typ}/{name}/{fname}"] = {
+            "at": int(time.time()),
+            "kind": kind,
+            # 只在有值时写, 避免把 JSON 撑满空字段
+            **({"err": err[:300]} if err else {}),
+            **({"url": url[:500]} if url else {}),
+        }
         tmp = jf.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(jf)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _drop_expired_failures(data: dict) -> dict:
+    """丢弃超过 TTL 的失败记录。
+
+    TTL 默认 7 天(可用环境变量 ISO_HUB_FAILURE_TTL_DAYS 覆盖, 0 表示不清理)。
+    语义: 失败记录只代表"最近一次同步的状态"; 超过 TTL 仍未重下, 说明该文件
+    已不在订阅/清单里, 继续显示失败只会误导(且用户无从手动清除)。
+    """
+    try:
+        ttl_days = float(os.environ.get("ISO_HUB_FAILURE_TTL_DAYS", "7"))
+    except (TypeError, ValueError):
+        ttl_days = 7.0
+    if ttl_days <= 0:
+        return data
+    cutoff = time.time() - ttl_days * 86400
+    return {
+        k: v for k, v in data.items()
+        if not (isinstance(v, dict) and isinstance(v.get("at"), (int, float))
+                and v["at"] < cutoff)
+    }
 
 
 def _clear_failure(data_dir, typ: str, name: str, fname: str) -> None:
@@ -265,10 +349,14 @@ def _resolve_total(resp, have: int, head_total: int) -> int:
 
 
 def _download_file_with_failover(downloader, target_dist: dict, candidates, filename: str,
-                                 dist_dir, filepath, head_total: int = 0) -> tuple:
+                                 dist_dir, filepath, head_total: int = 0,
+                                 err_out: list | None = None) -> tuple:
     """逐个候选源下载同一文件, 失败/校验失败自动切换下一候选源。
 
     返回 (成功与否, 实际使用的下载URL)。全部候选失败返回 (False, None)。
+
+    err_out: 可选的 list, 由调用方传入; 函数把最后一次失败原因 append 进去,
+             供 download_failures.json 记录 err 字段(保持返回值为 2 元组不破坏调用方)。
 
     落盘协议(关键): 下载期间一律写 ``<最终名>.part``, 只有"大小校验 + 校验和"
     全部通过后才 ``os.replace`` 原子改名为最终文件名。这样:
@@ -298,8 +386,29 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
             headers = dict(downloader.headers or {})
             if have:
                 headers["Range"] = f"bytes={have}-"
-            resp = requests.get(url, headers=headers, stream=True, timeout=60)
-            if have and resp.status_code == 206:
+            # v1.3.17: 带指数退避的重试(瞬时抖动/429限流/5xx), 不重试 416。
+            # 与 download_linux.http_get_with_retry 同策略; 这里独立实现是因为
+            # iso_runner 必须保持单文件可运行(仅在运行期才 import download_linux),
+            # 且全部测试都围绕模块级 requests.get 打桩。
+            resp = _http_get_with_retry(url, headers=headers, stream=True, timeout=60)
+            if have and resp.status_code == 416:
+                # v1.3.17 核心修复: 416 = Range 起点 >= 文件全长, 也就是说 .part
+                # **已经是完整文件**。旧代码在这里 `raise Exception("将重下")` →
+                # 切下一候选源从头下 → 下完又变全量 → 下一轮再 416 → 死循环。
+                # 生产实测: Proxmox 9.1/9.2 的 .part 与正式 ISO 字节完全相同(SHA 已核对),
+                # 却因为这个分支每天重下一次, UI 长期显示「下载停止」。
+                # 现在: 不再传输任何字节, 直接把 .part 当完整候选送进校验。
+                print(f"  断点已满({have/1024/1024:.1f} MiB): 服务器返回 416, "
+                      f"{part.name} 视为完整候选, 直接进入校验")
+                try:
+                    resp.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                # 416 保证了 have >= 远端全长, 因此以 have 为准最可靠(此时
+                # head_total 可能是上一轮的陈旧值, 反而会误判成"未下完")
+                total = have
+                already_complete = True
+            elif have and resp.status_code == 206:
                 # 服务器支持 Range: 追加写入
                 total = _resolve_total(resp, have, head_total)
                 if total:
@@ -309,26 +418,29 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                     print(f"  续传: 从 {have/1024/1024:.1f} MiB 继续 "
                           f"(服务器未提供总大小, 将无法核对完整性)")
                 mode = "ab"
+                already_complete = False
             elif have and resp.status_code == 200:
                 # 服务器不支持 Range(返回 200 全量) → 只能从头下, 截断重写
                 total = _resolve_total(resp, 0, head_total)
                 print(f"  服务器不支持断点续传, 从头下载 (已丢弃 {have/1024/1024:.1f} MiB)")
                 have = 0
                 mode = "wb"
+                already_complete = False
             else:
-                # 无 .part(全新下载) 或 Range 返回 416(断点已越界)等
-                if resp.status_code == 416:
-                    raise Exception("断点位置越界(416), 将重下")
                 total = _resolve_total(resp, 0, head_total)
                 mode = "wb"
                 have = 0
-            resp.raise_for_status()
+                already_complete = False
+            if not already_complete:
+                # 416 是"已完成"信号而非错误, 上面已 close, 不能再 raise_for_status
+                resp.raise_for_status()
 
-            # 下载到 .part; 下载途中被 kill 也会留下 .part 供识别
-            with open(part, mode) as f:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+            if not already_complete:
+                # 下载到 .part; 下载途中被 kill 也会留下 .part 供识别
+                with open(part, mode) as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
             written = part.stat().st_size
 
             # ---- 完整性判据(v1.2.9) ----
@@ -357,6 +469,24 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                     filepath.unlink()
                 os.replace(part, filepath)
                 return True, url
+
+            if success is None:
+                # v1.3.17: 校验源不可达/清单里没这个文件名 —— 不是"验不过", 是"没验成"。
+                # 旧代码在这里与 False 同路 → 尺寸达标就**删掉 .part 重下**, 于是
+                # "checksum 模板配错"这种纯配置问题变成每周一次的整文件重下, 且
+                # 永远修不好(重下后依然取不到摘要)。现在:
+                #   * 尺寸已达标 → 尽最大努力验证后落定(留告警, 提示检查 checksum 源)
+                #   * 尺寸未知   → 保留 .part, 不删不重下(避免坏数据判别与无谓流量)
+                print(f"  ⚠ 完整性无法判定: {msg}")
+                if total and written == total:
+                    print("    长度已与服务器声明一致, 按无法校验处理并落定"
+                          "(请检查该发行版的 checksum 源配置)")
+                    if filepath.exists():
+                        filepath.unlink()
+                    os.replace(part, filepath)
+                    return True, url
+                print("    长度未知, 保留半成品供下次续传(不删除、不重下)")
+                raise TruncatedTransfer("校验源不可用且长度未知, 保留半成品")
 
             # 校验和不符: 区分"尺寸已达标 → 内容损坏"与"尺寸未知 → 无法判定"
             print(f"  ✗ 校验和验证失败: {msg}")
@@ -389,6 +519,8 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
             print(f"  ✗ 候选源失败, 尝试下一源: {e}")
     if last_err is not None:
         print(f"  ✗ 该文件所有候选源均失败: {last_err}")
+        if err_out is not None:
+            err_out.append(last_err)
     return False, None
 
 
@@ -486,6 +618,15 @@ def main() -> None:
                     filepath, entry.get("checksum_url"), entry.get("checksum"), dist=entry
                 )
                 gpg_ledger.record_from_msg(entry, ok, msg)
+                if ok is None:
+                    # v1.3.17: 校验源不可达/清单无此文件名 → 无法判定, 但文件已在磁盘上。
+                    # 旧代码与 False 同路 → "校验和验证失败, 将重新下载" → 每周期把
+                    # 完整 ISO 重下一遍(Proxmox 因此循环 10 天)。现在: 保留不动。
+                    print(f"⚠ {msg}")
+                    print("  完整性无法判定(校验源不可用), 保留现有文件, 不重新下载")
+                    _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)
+                    _drop_stale_part(part_path)
+                    continue
                 if ok:
                     print(f"✓ {msg}")
                     _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)
@@ -496,14 +637,21 @@ def main() -> None:
                 print(f"✗ {msg}")
                 print("校验和验证失败, 将重新下载")
 
+            # err_out: 收集最后一次失败原因, 供 _record_failure 落到 download_failures.json
+            # (v1.3.17: 旧记录只有 {at, kind}, 排查时完全看不出是 404 还是超时)
+            err_out: list = []
             ok, used_url = _download_file_with_failover(
-                downloader, entry, candidates, fname, dist_dir, filepath, head_total=total
+                downloader, entry, candidates, fname, dist_dir, filepath,
+                head_total=total, err_out=err_out,
             )
             if not ok:
                 failed = True
                 # 半成品(.part)保留 → 下次可续传, 记 stopped; 连 .part 都没有记 hard
                 kind = "stopped" if part_path.exists() else "hard"
-                _record_failure(args.download_dir, entry.get("type", "linux"), name, fname, kind)
+                _record_failure(args.download_dir, entry.get("type", "linux"), name, fname,
+                                kind,
+                                err=str(err_out[-1])[:300] if err_out else "",
+                                url=used_url or primary)
             else:
                 _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)
 

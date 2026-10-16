@@ -12,6 +12,7 @@
 
 import json
 import sys
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "web"))
 
 import app  # noqa: E402
+
+# 失败记录时间戳基准: v1.3.17 起 load_failures() 会按 TTL(默认 7 天)过滤过期记录,
+# 测试里不能再写死 0/1 这类 1970 年的时间戳(会被当成过期的历史疤痕丢掉)。
+_NOW = int(time.time())
+
 
 
 class DeleteFilesTestBase(unittest.TestCase):
@@ -277,7 +283,7 @@ class TestDeletePartFiles(DeleteFilesTestBase):
     def test_clears_failure_record_for_part(self):
         """删除停止的半成品后, 「下载停止」失败记录必须被清理。"""
         self.failures.write_text(json.dumps(
-            {"linux/Ubuntu/ubuntu-26.04.iso": {"at": 1, "kind": "stopped"}}),
+            {"linux/Ubuntu/ubuntu-26.04.iso": {"at": _NOW, "kind": "stopped"}}),
             encoding="utf-8")
         (self.data / "linux" / "Ubuntu" / "ubuntu-26.04.iso").unlink()
         self._put_part("ubuntu-26.04.iso")
