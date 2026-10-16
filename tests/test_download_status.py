@@ -10,6 +10,7 @@
 
 import json
 import sys
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +20,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "web"))
 
 import app  # noqa: E402
+
+# 失败记录时间戳基准: v1.3.17 起 load_failures() 会按 TTL(默认 7 天)过滤过期记录,
+# 测试里不能再写死 0/1 这类 1970 年的时间戳(会被当成过期的历史疤痕丢掉)。
+_NOW = int(time.time())
+
 
 
 class BaselineTestBase(unittest.TestCase):
@@ -159,18 +165,18 @@ class TestEntryStatus(BaselineTestBase):
 
     def test_partial_beats_failure_record(self):
         """半成品存在时, 无论历史记录是什么都算可续传(partial)。"""
-        fails = {"linux/Ubuntu/a.iso": {"at": 1, "kind": "hard"}}
+        fails = {"linux/Ubuntu/a.iso": {"at": _NOW, "kind": "hard"}}
         st, _ = app._entry_status(self.KEY, "a.iso", {"size": 42, "partial": True}, fails)
         self.assertEqual(st, "partial")
 
     def test_no_file_with_hard_failure_is_failed(self):
-        fails = {"linux/Ubuntu/a.iso": {"at": 1, "kind": "hard"}}
+        fails = {"linux/Ubuntu/a.iso": {"at": _NOW, "kind": "hard"}}
         st, ps = app._entry_status(self.KEY, "a.iso", None, fails)
         self.assertEqual(st, "failed")
         self.assertEqual(ps, 0)
 
     def test_no_file_with_stopped_failure_is_stopped(self):
-        fails = {"linux/Ubuntu/a.iso": {"at": 1, "kind": "stopped"}}
+        fails = {"linux/Ubuntu/a.iso": {"at": _NOW, "kind": "stopped"}}
         st, _ = app._entry_status(self.KEY, "a.iso", None, fails)
         self.assertEqual(st, "stopped")
 
@@ -180,7 +186,7 @@ class TestEntryStatus(BaselineTestBase):
 
     def test_rel_key_must_match_type_and_name(self):
         """失败记录的 key 是 type/name/文件名, 不匹配则不生效。"""
-        fails = {"linux/Other/a.iso": {"at": 1, "kind": "hard"}}
+        fails = {"linux/Other/a.iso": {"at": _NOW, "kind": "hard"}}
         st, _ = app._entry_status(self.KEY, "a.iso", None, fails)
         self.assertEqual(st, "none")
 
@@ -219,12 +225,12 @@ class TestBuildDistrosStatus(BaselineTestBase):
 
     def test_failed_entry(self):
         self._manifest("bad.iso")
-        self.write_failures({"linux/Ubuntu/bad.iso": {"at": 1, "kind": "hard"}})
+        self.write_failures({"linux/Ubuntu/bad.iso": {"at": _NOW, "kind": "hard"}})
         self.assertEqual(self._statuses()["bad.iso"]["status"], "failed")
 
     def test_stopped_entry(self):
         self._manifest("stop.iso")
-        self.write_failures({"linux/Ubuntu/stop.iso": {"at": 1, "kind": "stopped"}})
+        self.write_failures({"linux/Ubuntu/stop.iso": {"at": _NOW, "kind": "stopped"}})
         self.assertEqual(self._statuses()["stop.iso"]["status"], "stopped")
 
     def test_never_downloaded_entry(self):
