@@ -311,7 +311,13 @@ class TestFailuresPersistence(BaselineTestBase):
 
 
 class TestVerifyLogin(BaselineTestBase):
-    """登录错误精确区分: 用户名不存在 vs 密码错误。"""
+    """登录校验: 内部保留精确原因(仅进日志), 对外必须统一话术。
+
+    v1.5.4: 过去 /api/user/login 区分返回 no_user / bad_pass, 等于把登录接口
+    变成一台账号枚举机 —— 拿字典挨个试就能列出本站所有账号。现在两种失败
+    返回**完全相同**的响应体; _verify_login 的三态只用于服务端日志排障。
+    同时"查无此人"分支也要跑满 KDF, 否则响应时间会泄露同一件事。
+    """
 
     def setUp(self):
         super().setUp()
@@ -341,6 +347,7 @@ class TestVerifyLogin(BaselineTestBase):
         self.assertEqual(app._verify_login("alice", "correct-pw"), "ok")
 
     def test_unknown_user_reports_no_user(self):
+        """精确原因仍要返回 —— 但只能进日志, 不得出现在 HTTP 响应里。"""
         self.assertEqual(app._verify_login("bob", "whatever"), "no_user")
 
     def test_wrong_password_reports_bad_pass(self):
@@ -355,17 +362,31 @@ class TestVerifyLogin(BaselineTestBase):
         self.assertFalse(app._check_login("alice", "wrong"))
         self.assertFalse(app._check_login("bob", "x"))
 
-    def test_login_api_unknown_user_message(self):
-        r = self.client.post("/api/user/login", json={"username": "bob", "password": "x"})
-        self.assertEqual(r.status_code, 401)
-        self.assertEqual(r.get_json()["code"], "no_user")
-        self.assertIn("用户名不存在", r.get_json()["error"])
+    def test_login_api_returns_identical_body_for_both_failures(self):
+        """核心回归: 两种失败原因对外必须一模一样, 否则仍在泄露账号是否存在。"""
+        r1 = self.client.post("/api/user/login", json={"username": "bob", "password": "x"})
+        r2 = self.client.post("/api/user/login", json={"username": "alice", "password": "x"})
+        self.assertEqual(r1.status_code, 401)
+        self.assertEqual(r2.status_code, 401)
+        self.assertEqual(r1.get_json(), r2.get_json(),
+                         "「用户不存在」与「密码错误」的响应体必须完全一致")
+        self.assertEqual(r2.get_json()["code"], "bad_credentials")
+        self.assertEqual(r2.get_json()["error"], "用户名或密码错误")
+        self.assertNotIn("用户名不存在", json.dumps(r2.get_json(), ensure_ascii=False))
 
-    def test_login_api_wrong_password_message(self):
-        r = self.client.post("/api/user/login", json={"username": "alice", "password": "x"})
-        self.assertEqual(r.status_code, 401)
-        self.assertEqual(r.get_json()["code"], "bad_pass")
-        self.assertIn("密码错误", r.get_json()["error"])
+    def test_unknown_user_costs_the_same_as_wrong_password(self):
+        """查无此人也要跑满 KDF: 否则"响应更快"本身就是一条枚举信道。"""
+        import time
+
+        def cost(fn):
+            t0 = time.perf_counter()
+            fn()
+            return time.perf_counter() - t0
+
+        miss = cost(lambda: app._verify_login("bob", "whatever"))
+        wrong = cost(lambda: app._verify_login("alice", "wrong"))
+        self.assertGreater(miss / wrong, 0.2,
+                           f"查无此人({miss:.3f}s) 不该远快于密码错误({wrong:.3f}s)")
 
     def test_login_api_success(self):
         r = self.client.post("/api/user/login",
@@ -400,10 +421,13 @@ class TestFrontendWiring(unittest.TestCase):
         self.assertIn("delLockedBlocked", self.html)
         self.assertIn("delLockedHint", self.html)
 
-    def test_login_error_mapping_exists(self):
+    def test_login_error_mapping_is_unified(self):
+        """前端不得再把失败原因区分成「用户名不存在」/「密码错误」。"""
         self.assertIn("function loginErrMsg", self.html)
-        self.assertIn("loginNoUser", self.html)
-        self.assertIn("loginBadPass", self.html)
+        self.assertNotIn("code==='no_user'", self.html)
+        self.assertNotIn("code==='bad_pass'", self.html)
+        self.assertNotIn("loginNoUser", self.html)
+        self.assertNotIn("loginBadPass", self.html)
 
     def test_jpost_passes_login_401_through(self):
         """回归: jpost 不得把 /api/user/login 的 401 替换成笼统的"请先登录后再操作"。
@@ -428,7 +452,7 @@ class TestFrontendWiring(unittest.TestCase):
                       "jget 的 401 分支缺少登录接口白名单判断")
 
     def test_version_bumped(self):
-        self.assertIn("APP_VERSION='1.5.3'", self.html)
+        self.assertIn("APP_VERSION='1.5.4'", self.html)
 
     def test_poll_refreshes_list_while_running(self):
         """回归: 任务运行期间也要刷新列表。
