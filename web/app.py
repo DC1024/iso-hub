@@ -72,6 +72,9 @@ CUSTOM_CACHE_JSON = DATA_DIR / "custom_repo_cache.json"  # 自定义发行版源
 SUBS_JSON = DATA_DIR / "subscriptions.json"          # 订阅配置: 自动拉最新+删旧
 SETTINGS_JSON = DATA_DIR / "settings.json"           # 网络共享开关+凭据(网页可改, 覆盖 compose env)
 FAILURES_JSON = DATA_DIR / "download_failures.json"  # 下载失败记录 {rel: {"at":ts,"kind":"hard"|"stopped"}}
+# 未验签落定记录 {rel: {"at":ts,"reason":str}} —— 校验源不可达但长度达标时落定的文件,
+# 必须与"真正校验通过"区分开(见 load_unverified 的说明)。
+UNVERIFIED_JSON = DATA_DIR / "download_unverified.json"
 # 下载中的半成品后缀: 下载器一律写 <最终名>.part, 校验通过后才原子改名为最终名。
 # 必须与 web/iso_runner.py 的 PART_SUFFIX、iso_download/download_linux.py 保持一致。
 PART_SUFFIX = ".part"
@@ -396,6 +399,24 @@ def load_failures() -> dict:
     return {}
 
 
+def load_unverified() -> dict:
+    """读取「未验签落定」记录 {rel: {"at": ts, "reason": str}}。
+
+    P2 修复(审查 2026-10): 校验源不可达但长度达标时, 文件会被落定并当作已下载
+    (这是为了避免"每周重下完整 ISO"死循环的刻意取舍)。但此前 UI 与正常校验通过的
+    文件长得一模一样 —— 用户以为"SHA256 自动校验"覆盖了它, 实际上**一次都没验过**。
+    现在落定时写一条记录, 前端对该条目显示「未验签」并在提示里说明原因; 真正校验
+    通过后由 runner 清除本条记录。
+    """
+    try:
+        if UNVERIFIED_JSON.exists():
+            data = json.loads(UNVERIFIED_JSON.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        log(f"[WARN] 解析未验签记录失败: {e}")
+    return {}
+
+
 def clear_failure(rel: str) -> None:
     """下载成功后清除该文件的失败记录。"""
     try:
@@ -687,7 +708,7 @@ def active_download_paths() -> set:
     本函数自身只持有锁读内存字段, 不做任何 stat()。
     """
     with _lock:
-        if not task.get("proc"):
+        if not task.get("proc") and not task.get("starting"):
             return set()
         paths = set()
         for p in (task.get("targets") or {}):
@@ -746,6 +767,9 @@ def build_distros() -> dict:
     data = load_json()
     inv = disk_inventory()
     failures = load_failures()
+    # P2 修复: 未验签落定的记录, 与失败记录分开读 —— 它不是失败(文件可用),
+    # 但也不能冒充"校验通过"(见 load_unverified)。
+    unverified = load_unverified()
     # v1.3.1: 活跃下载路径快照(锁外获取, 只读内存), 用于把"正在下载"从"下载停止"里分出来
     active_paths = frozenset(active_download_paths())
     groups = {}
@@ -768,12 +792,14 @@ def build_distros() -> dict:
         # 由后端下发这个布尔值(而不是让前端从 local_size/status 猜), 与 fold_key 的约
         # 定一致: 事实由后端算, 前端只渲染。
         downloadable = any(not f.get("partial") for f in candidates)
+        rel = f"{typ}/{name}/{fname}"
+        unv = unverified.get(rel) or {}
         groups[key]["entries"].append(
             {
                 "distribution": name,
                 "type": typ,
                 "filename": fname,
-                "rel": f"{typ}/{name}/{fname}",
+                "rel": rel,
                 "downloadable": downloadable,
                 "download_url": url,
                 "download_urls": e.get("download_urls", []),
@@ -785,6 +811,9 @@ def build_distros() -> dict:
                 "local_mtime": int(local["mtime"]) if local else 0,
                 "status": status,
                 "partial_size": partial_size,
+                # 只有"已下载"才谈得上未验签; 其余状态前端不看这两个字段
+                "unverified": status == "downloaded" and bool(unv),
+                "unverified_reason": str(unv.get("reason", ""))[:300],
             }
         )
 
@@ -1242,6 +1271,12 @@ def _sessions_persist() -> None:
             pass
 
 
+# 口令哈希迭代数: 新值取 OWASP 2023+ 对 PBKDF2-HMAC-SHA256 的建议(60 万)。
+# PBKDF2_ITERATIONS_LEGACY 是 v1.3.18 及以前写死的值, 仅用于验证存量哈希。
+PBKDF2_ITERATIONS = 600_000
+PBKDF2_ITERATIONS_LEGACY = 120_000
+
+
 def _sessions_load() -> None:
     """启动时从磁盘恢复会话(忽略已过期项), 并清理磁盘过期项。"""
     global _sessions
@@ -1255,10 +1290,17 @@ def _sessions_load() -> None:
         _sessions = {}
 
 
-def _hash_pw(password: str, salt: str) -> str:
-    """PBKDF2 派生口令哈希。"""
+def _hash_pw(password: str, salt: str, iterations: int = PBKDF2_ITERATIONS) -> str:
+    """PBKDF2 派生口令哈希。
+
+    P3 修复: 迭代数从写死的 12 万提到 OWASP 2023+ 建议的 60 万(sha256)。
+    但**存量哈希必须继续可验证** —— 迭代数不是算法参数以外的常量, 改了就验不过,
+    所有已登录用户会被锁在门外。因此:
+      * 用户记录里新增 iterations 字段; 老记录缺该字段时按 12 万(旧值)验证
+      * 验证成功后若发现用的是旧迭代数, 顺带用新参数重算并落盘(透明升级)
+    """
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
-                               salt.encode("utf-8"), 120_000).hex()
+                               salt.encode("utf-8"), iterations).hex()
 
 
 def load_users() -> dict:
@@ -1281,6 +1323,7 @@ def seed_admin():
         return
     salt = secrets.token_hex(16)
     users[u] = {"password_hash": _hash_pw(p, salt), "salt": salt,
+                "iterations": PBKDF2_ITERATIONS,
                 "created_at": int(time.time())}
     save_users(users)
     log(f"[用户] 已从环境变量播种管理员账号: {u}")
@@ -1300,8 +1343,22 @@ def _verify_login(username: str, password: str) -> str:
     u = load_users().get(username)
     if not u:
         return "no_user"
-    ok = secrets.compare_digest(_hash_pw(password, u.get("salt", "")),
+    iters = _as_int(u.get("iterations"), PBKDF2_ITERATIONS_LEGACY, 1)
+    ok = secrets.compare_digest(_hash_pw(password, u.get("salt", ""), iters),
                                 u.get("password_hash", ""))
+    if ok and iters < PBKDF2_ITERATIONS:
+        # 透明升级: 旧哈希验过了就顺手换成本轮参数, 下次登录直接用新迭代数。
+        # 失败不影响本次登录(已认证成功), 只记一条日志。
+        try:
+            users = load_users()
+            if username in users:
+                users[username].update({
+                    "password_hash": _hash_pw(password, u.get("salt", ""), PBKDF2_ITERATIONS),
+                    "iterations": PBKDF2_ITERATIONS,
+                })
+                save_users(users)
+        except Exception as e:  # noqa: BLE001
+            log(f"[WARN] 口令哈希升级失败(不影响本次登录): {e}")
     return "ok" if ok else "bad_pass"
 
 
@@ -1310,6 +1367,63 @@ def _issue_token(username: str) -> str:
     _sessions[tok] = (username, int(time.time()) + SESSION_TTL)
     _sessions_persist()
     return tok
+
+
+def _revoke_other_sessions(username: str, keep: str = "") -> int:
+    """吊销某用户除 keep 之外的全部会话, 返回吊销数量。
+
+    P3 修复: 改密码后旧会话必须失效 —— 否则「改密码」只挡住了不知道新密码的人,
+    已经窃取到 7 天有效期 token 的人照样能继续操作面板。keep 用于保留发起这次
+    改密请求的当前会话, 避免用户改完密码自己被踢下线。
+    """
+    drop = [t for t, v in list(_sessions.items())
+            if isinstance(v, (list, tuple)) and len(v) == 2 and v[0] == username and t != keep]
+    for t in drop:
+        _sessions.pop(t, None)
+    if drop:
+        _sessions_persist()
+    return len(drop)
+
+
+# 登录失败限速(P3): ip -> {"n": 连续失败次数, "until": 锁定截止时间戳}。
+# 只存内存、重启归零 —— 目的是挡住无限撞库的脚本, 不是持久化的账户锁定策略。
+_login_fails: dict = {}
+_LOGIN_MAX_FAILS = 5
+_LOGIN_LOCK_SECS = 300
+
+
+def _login_lock_remaining(ip: str) -> int:
+    """返回该 IP 还需等待的秒数; 0 表示可以尝试登录。"""
+    rec = _login_fails.get(ip)
+    if not rec:
+        return 0
+    left = int(float(rec.get("until", 0)) - time.time())
+    return left if left > 0 else 0
+
+
+def _login_note_fail(ip: str) -> None:
+    """记一次登录失败; 达到阈值则锁定该 IP 一段时间。"""
+    now = time.time()
+    rec = _login_fails.get(ip) or {"n": 0, "until": 0}
+    rec["n"] = int(rec.get("n", 0)) + 1
+    if rec["n"] >= _LOGIN_MAX_FAILS:
+        rec["until"] = now + _LOGIN_LOCK_SECS
+        rec["n"] = 0
+        try:
+            log(f"[auth] {ip} 连续登录失败 {_LOGIN_MAX_FAILS} 次, 锁定 {_LOGIN_LOCK_SECS} 秒")
+        except Exception:  # noqa: BLE001
+            pass
+    _login_fails[ip] = rec
+    # 防止大量来源 IP 把内存撑大: 超过 2000 条时清掉一小时前的过期项
+    if len(_login_fails) > 2000:
+        stale = [k for k, v in _login_fails.items() if float(v.get("until", 0)) < now - 3600]
+        for k in stale:
+            _login_fails.pop(k, None)
+
+
+def _login_note_ok(ip: str) -> None:
+    """登录成功 → 清零该 IP 的失败计数(手误不累积)。"""
+    _login_fails.pop(ip, None)
 
 
 def _valid_session() -> str | None:
@@ -1997,12 +2111,14 @@ def _spawn_worker() -> None:
     except Exception as e:  # L7 修复: Popen 失败(命令不存在等)不再静默死亡
         with _lock:
             cur["proc"] = None
+            cur["starting"] = False
             cur["exit_code"] = 127
             cur["finished"] = time.time()
         log(f"[任务启动失败] {e!r}")
         return
     with _lock:
         cur["proc"] = proc
+        cur["starting"] = False   # 进程已接管"运行中"语义, 哨兵功成身退
     for raw in proc.stdout:
         line = raw.rstrip("\n").rstrip("\r")
         if not line:
@@ -2010,7 +2126,11 @@ def _spawn_worker() -> None:
         # 捕获 iso_runner 打印的目标文件大小标记: #TARGET <path> <bytes>
         if line.startswith("#TARGET "):
             try:
-                _, _p, _s = line.split(" ", 2)
+                # P3 修复: 从**右侧**分割 —— 路径本身可能含空格(发行版名/文件名带空格时
+                # "Proxmox VE"/"Ubuntu Server"), split(" ", 2) 会把路径截断、把剩余部分
+                # 塞给 int(), 解析失败后该文件永久没有进度条。
+                _rest = line[len("#TARGET "):]
+                _p, _s = _rest.rsplit(" ", 1)
                 _targets = {}
                 with _lock:
                     _targets.update(cur["targets"])
@@ -2042,10 +2162,16 @@ def _spawn_worker() -> None:
 
 
 def start_task(kind: str, title: str, cmd: list, downloads=None) -> bool:
-    """启动一个任务,同一时间只允许一个。cmd 为 list。"""
+    """启动一个任务,同一时间只允许一个。cmd 为 list。
+
+    P2 修复(TOCTOU): 旧实现只检查 task["proc"], 而 proc 要等工作线程 Popen 完成后
+    才赋值 —— 两个几乎同时到达的 /api/download 可以都通过检查, 各自拉起一个子进程
+    写同一个 .part。现在 task 在锁内**同步**带上 starting=True 哨兵, 检查与占位在
+    同一次持锁内完成, 窗口关闭; _spawn_worker 无论成败都会清掉哨兵。
+    """
     global task
     with _lock:
-        if task.get("proc") and task["proc"].poll() is None:
+        if task.get("starting") or (task.get("proc") and task["proc"].poll() is None):
             return False
         task = {
             "kind": kind,
@@ -2059,6 +2185,7 @@ def start_task(kind: str, title: str, cmd: list, downloads=None) -> bool:
             "downloads": downloads or [],
             "targets": {},   # path -> 目标字节数(由 iso_runner 打印 #TARGET 收集)
             "proc": None,
+            "starting": True,
         }
     log(f"[任务开始] {title}")
     threading.Thread(target=_spawn_worker, daemon=True).start()
@@ -2188,7 +2315,9 @@ def running_task() -> dict | None:
     # 会把 /api/logs、/api/stop 和 _spawn_worker 的 log() 全卡在同一把锁上,
     # 叠加锁内死锁即造成 waitress 线程耗尽、队列飙升、应用日志一条打不出来。
     with _lock:
-        if not task.get("proc"):
+        # starting 窗口(Popen 未返回)也视为"运行中", 否则前端状态接口会闪断、
+        # 各端点按 running_task() 的互斥检查也会放进第二个任务
+        if not task.get("proc") and not task.get("starting"):
             return None
         dl = list(task.get("downloads", []))
         targets = dict(task.get("targets", {}))
@@ -2284,7 +2413,9 @@ def require_auth():
         # 强制登录: 页面壳子/静态/健康检查放行(前端靠 /api/user/me 判断是否弹登录遮罩), 其余 API 一律需登录
         if request.method == "GET" and (request.path == "/" or request.path.startswith("/static/") or request.path == "/api/health" or request.path == "/api/files/get"):
             return None
-        if request.headers.get("X-Auth-Token") == AUTH_TOKEN:
+        # P0 修复: AUTH_TOKEN 未设置(空串)时不得参与比较 —— 否则携带空 X-Auth-Token 头的
+        # 请求会命中 "" == "" 直接放行, 整体绕过强制登录(公网默认部署即裸奔)。
+        if AUTH_TOKEN and secrets.compare_digest(request.headers.get("X-Auth-Token", ""), AUTH_TOKEN):
             return None
         if _valid_session():
             return None
@@ -2294,7 +2425,8 @@ def require_auth():
         return None
     if request.method == "GET" and (request.path == "/" or request.path.startswith("/static/") or request.path == "/api/health" or request.path == "/api/files/get"):
         return None
-    if request.headers.get("X-Auth-Token") == AUTH_TOKEN:
+    # P0 修复: 此分支 AUTH_TOKEN 必非空(not AUTH_TOKEN 已 return), 用恒定时间比较
+    if secrets.compare_digest(request.headers.get("X-Auth-Token", ""), AUTH_TOKEN):
         return None
     # 兼容用户登录会话
     if _valid_session():
@@ -2307,11 +2439,30 @@ def no_cache_api(resp):
     """所有 API 响应禁用缓存, 避免前端「刷新列表」拿到浏览器缓存的旧数据而无反应。
 
     例外: /api/files/get —— 下载大文件必须允许浏览器缓存分片, 否则 Range 续传失效。
+
+    P3 修复: 同时补齐基础安全响应头。此前响应里一个都没有 ——
+    缺少 nosniff 时浏览器可能把上传内容当 HTML 执行, 缺 frame-ancestors 时可被
+    任意站点 iframe 套壳点击劫持。CSP 刻意保留 'unsafe-inline': 本项目是单文件
+    页面 + 行内事件(onclick)架构, 收紧到 nonce 需要整体重构前端; 现有策略的价值
+    在于**禁止外部脚本/样式域、禁止 object/base 注入、禁止被 iframe 嵌入**。
     """
     if request.path.startswith("/api/") and request.path != "/api/files/get":
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob: https:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    )
     return resp
 
 
@@ -3103,7 +3254,11 @@ def api_files_get():
     fp = _resolve_dl_target(typ, name, fname)
     if fp is None:
         return jsonify({"error": f"文件不存在: {fname}"}), 404
-    resp = send_file(fp, as_attachment=True, download_name=fname, conditional=True)
+    # P3 修复: download_name 必须是**文件名**, 不能直接用票据里的 fname ——
+    # _abs 寻址时 fname 是容器内绝对路径(/downloads/xxx.iso), 直接塞进
+    # Content-Disposition 会变成 "/downloads/xxx.iso" 这种带路径的怪名字,
+    # 部分浏览器/下载器还会拒绝。用解析后真实文件的 .name。
+    resp = send_file(fp, as_attachment=True, download_name=fp.name, conditional=True)
     # 大文件必须允许浏览器缓存分片, 否则续传会从头开始(no-store 是续传杀手)。
     # 该路径同时被 after_request 的 no-cache 规则排除, 见 no_cache_api。
     resp.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
@@ -3133,6 +3288,23 @@ def _sched_id() -> str:
     return secrets.token_hex(4)
 
 
+def _as_int(value, default: int, lo: int | None = None, hi: int | None = None) -> int:
+    """把外部输入安全转成整数并夹到合法区间。
+
+    P3 修复: 旧实现直接 int(body.get(...)) —— 前端传 "abc"/[]/{} 时抛 ValueError
+    直接 500。调度参数属于用户输入, 非法值应回退默认值而不是把接口打崩。
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    if lo is not None and n < lo:
+        return lo
+    if hi is not None and n > hi:
+        return hi
+    return n
+
+
 @app.get("/api/schedules")
 def api_schedules():
     return jsonify({"schedules": load_schedules()})
@@ -3148,10 +3320,10 @@ def api_schedules_add():
         "name": name,
         "type": typ,
         "time": body.get("time") or "00:00",
-        "day_of_week": int(body.get("day_of_week", 0) or 0),
-        "day_of_month": int(body.get("day_of_month", 1) or 1),
-        "month_of_year": int(body.get("month_of_year", 1) or 1),
-        "scheduled_at": int(body.get("scheduled_at") or 0),  # 一次性调度用的时间戳
+        "day_of_week": _as_int(body.get("day_of_week", 0) or 0, 0, 0, 6),
+        "day_of_month": _as_int(body.get("day_of_month", 1) or 1, 1, 1, 31),
+        "month_of_year": _as_int(body.get("month_of_year", 1) or 1, 1, 1, 12),
+        "scheduled_at": _as_int(body.get("scheduled_at") or 0, 0, 0),  # 一次性调度用的时间戳
         "enabled": bool(body.get("enabled", True)),
         "last_run": 0,
     }
@@ -3204,6 +3376,14 @@ def api_user_login():
     body = request.get_json(force=True, silent=True) or {}
     u = (body.get("username") or "").strip()
     p = body.get("password") or ""
+    # P3 修复: 登录失败限速 —— 此前 /api/user/login 完全没有节流, 公网实例可被
+    # 无限次撞库。策略刻意温和(连续 5 次失败锁 5 分钟, 成功即清零), 只挡暴力枚举,
+    # 不惩罚手误; 计数只在内存, 容器重启归零。
+    ip = (request.remote_addr or "-").strip()
+    wait = _login_lock_remaining(ip)
+    if wait > 0:
+        return jsonify({"error": f"登录尝试过于频繁，请 {wait} 秒后再试",
+                        "code": "rate_limited", "retry_after": wait}), 429
     # 首次登录且尚未播种: 允许用 ISO_HUB_ADMIN_USER/PASS 播种
     if not load_users() and not (os.environ.get("ISO_HUB_ADMIN_USER", "").strip() or ""):
         # 无可播种账号, 允许首个登录者创建管理员(设置页用相同用户名/密码建账号)
@@ -3215,15 +3395,20 @@ def api_user_login():
         salt = secrets.token_hex(16)
         users = load_users()
         users[u] = {"password_hash": _hash_pw(p, salt), "salt": salt,
+                    "iterations": PBKDF2_ITERATIONS,
                     "created_at": int(time.time())}
         save_users(users)
         log(f"[用户] 首次创建管理员账号: {u}")
+        _login_note_ok(ip)
         return jsonify({"ok": True, "token": _issue_token(u), "username": u})
     v = _verify_login(u, p)
     if v == "no_user":
+        _login_note_fail(ip)
         return jsonify({"error": "用户名不存在", "code": "no_user"}), 401
     if v == "bad_pass":
+        _login_note_fail(ip)
         return jsonify({"error": "密码错误", "code": "bad_pass"}), 401
+    _login_note_ok(ip)
     return jsonify({"ok": True, "token": _issue_token(u), "username": u})
 
 
@@ -3253,9 +3438,15 @@ def api_user_password():
     salt = secrets.token_hex(16)
     users = load_users()
     users[username] = {"password_hash": _hash_pw(nw, salt), "salt": salt,
+                       "iterations": PBKDF2_ITERATIONS,
                        "created_at": users.get(username, {}).get("created_at", int(time.time()))}
     save_users(users)
-    return jsonify({"ok": True})
+    # P3 修复: 改密码 = 把其他设备/已泄露的 token 踢下线; 当前会话保留,
+    # 否则用户改完密码会立刻被自己的请求踢出去(前端只看到一次莫名的 401)。
+    keep = (request.headers.get("X-Auth-Token") or "").strip()
+    revoked = _revoke_other_sessions(username, keep=keep)
+    log(f"[用户] {username} 修改了密码, 已吊销其他会话 {revoked} 个")
+    return jsonify({"ok": True, "revoked_sessions": revoked})
 
 
 @app.post("/api/stop")
@@ -3590,8 +3781,10 @@ def api_torrent_info():
         ver = qb.version()
         if not ver:
             cfg = qb_config()
+            # P2 修复: 密码绝不回传 —— 旧实现截取前 12 位, 12 位以内的密码(含默认
+            # adminadmin)等于全量泄露。与 _redact_password 的约定保持一致。
             return jsonify({"ok": False, "error": f"无法连接 qBittorrent ({cfg['QB_URL']}), 请确认已部署 sidecar 且凭据正确",
-                            "config": {k: (cfg[k][:12] + "..." if k == "QB_PASS" else cfg[k]) for k in cfg}}), 200
+                            "config": {k: ("***" if k == "QB_PASS" else cfg[k]) for k in cfg}}), 200
         transfer = qb.transfer_info()
         toks = qb.list_torrents()
         # 标记本地是否已存在同名文件

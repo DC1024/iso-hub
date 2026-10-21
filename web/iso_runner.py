@@ -291,6 +291,49 @@ def _clear_failure(data_dir, typ: str, name: str, fname: str) -> None:
         pass
 
 
+def _record_unverified(data_dir, typ: str, name: str, fname: str, reason: str) -> None:
+    """记录"未验签落定"的文件(校验源不可达但长度达标, 文件被接受)。
+
+    P2 修复(审查 2026-10): 这类文件与"校验通过"在 UI 上无法区分, 会让用户误以为
+    SHA256 校验覆盖了它。写入独立记录文件, 由 build_distros() 下发给前端显示
+    「未验签」。**这不是失败** —— 文件可用, 只是没有密码学证据。
+    """
+    try:
+        jf = Path(data_dir) / "download_unverified.json"
+        data = {}
+        if jf.exists():
+            try:
+                data = json.loads(jf.read_text(encoding="utf-8")) or {}
+            except Exception:  # noqa: BLE001
+                data = {}
+        data[f"{typ}/{name}/{fname}"] = {
+            "at": int(time.time()),
+            "reason": (reason or "")[:300],
+        }
+        tmp = jf.with_name(jf.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(jf)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clear_unverified(data_dir, typ: str, name: str, fname: str) -> None:
+    """真正校验通过后清除「未验签」标记。"""
+    try:
+        jf = Path(data_dir) / "download_unverified.json"
+        if not jf.exists():
+            return
+        data = json.loads(jf.read_text(encoding="utf-8")) or {}
+        rel = f"{typ}/{name}/{fname}"
+        if rel in data:
+            data.pop(rel, None)
+            tmp = jf.with_name(jf.name + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(jf)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _drop_stale_part(part_path) -> None:
     """删掉与"已校验通过的完整文件"同名的残留半成品(.part)。
 
@@ -350,7 +393,8 @@ def _resolve_total(resp, have: int, head_total: int) -> int:
 
 def _download_file_with_failover(downloader, target_dist: dict, candidates, filename: str,
                                  dist_dir, filepath, head_total: int = 0,
-                                 err_out: list | None = None) -> tuple:
+                                 err_out: list | None = None,
+                                 data_dir=None) -> tuple:
     """逐个候选源下载同一文件, 失败/校验失败自动切换下一候选源。
 
     返回 (成功与否, 实际使用的下载URL)。全部候选失败返回 (False, None)。
@@ -462,12 +506,17 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                 part, checksum_url, target_dist.get("checksum"), dist=target_dist
             )
             gpg_ledger.record_from_msg(target_dist, success, msg)
+            _typ = target_dist.get("type", "linux")
+            _name = target_dist.get("distribution", "")
             if success:
                 print(f"  ✓ {msg}")
                 # 全部校验通过 → 原子改名为最终文件名(此刻才"看起来"下载完成)
                 if filepath.exists():
                     filepath.unlink()
                 os.replace(part, filepath)
+                # P2: 曾经"未验签落定"的文件这次真验过了 —— 撤掉警告标记
+                if data_dir is not None:
+                    _clear_unverified(data_dir, _typ, _name, filename)
                 return True, url
 
             if success is None:
@@ -484,6 +533,9 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                     if filepath.exists():
                         filepath.unlink()
                     os.replace(part, filepath)
+                    # P2 修复: 记下"这个文件一次都没验过" —— UI 需要区别于校验通过的条目
+                    if data_dir is not None:
+                        _record_unverified(data_dir, _typ, _name, filename, msg)
                     return True, url
                 print("    长度未知, 保留半成品供下次续传(不删除、不重下)")
                 raise TruncatedTransfer("校验源不可用且长度未知, 保留半成品")
@@ -625,11 +677,14 @@ def main() -> None:
                     print(f"⚠ {msg}")
                     print("  完整性无法判定(校验源不可用), 保留现有文件, 不重新下载")
                     _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)
+                    # P2: 现有文件没验过 —— UI 必须能看出这一点, 否则用户以为它校验通过
+                    _record_unverified(args.download_dir, entry.get("type", "linux"), name, fname, msg)
                     _drop_stale_part(part_path)
                     continue
                 if ok:
                     print(f"✓ {msg}")
                     _clear_failure(args.download_dir, entry.get("type", "linux"), name, fname)
+                    _clear_unverified(args.download_dir, entry.get("type", "linux"), name, fname)
                     # 完整文件已校验通过 -> 同名的 .part 是上一轮中断留下的冗余字节。
                     # 不清理会让 UI 长期误报「下载停止(已下载部分)」, 见 _drop_stale_part。
                     _drop_stale_part(part_path)
@@ -642,7 +697,7 @@ def main() -> None:
             err_out: list = []
             ok, used_url = _download_file_with_failover(
                 downloader, entry, candidates, fname, dist_dir, filepath,
-                head_total=total, err_out=err_out,
+                head_total=total, err_out=err_out, data_dir=args.download_dir,
             )
             if not ok:
                 failed = True
