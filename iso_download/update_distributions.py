@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -433,7 +434,12 @@ def main() -> None:
     if args.dry_run:
         print(output_data)
     else:
-        output_path.write_text(output_data + ("\n" if args.pretty else ""), encoding="utf-8")
+        # P3 修复: 原子写 —— 裸 write_text 写到一半被杀(容器重启/超时终止)会留下
+        # 截断的 JSON, 应用启动时解析失败只能回退内置清单, 已抓取的版本信息全丢。
+        # 与项目其余 JSON 通道统一: 先写同目录 .tmp, 再 os.replace 原子改名。
+        tmp_path = output_path.with_name(output_path.name + ".tmp")
+        tmp_path.write_text(output_data + ("\n" if args.pretty else ""), encoding="utf-8")
+        os.replace(tmp_path, output_path)
         print(f"Wrote {len(all_entries)} entries to {output_path}")
 
     if failures:

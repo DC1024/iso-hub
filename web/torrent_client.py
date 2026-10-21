@@ -38,9 +38,13 @@ def qb_config() -> Dict[str, str]:
     try:
         if sj.exists():
             data = json.loads(sj.read_text(encoding="utf-8")) or {}
-            t = data.get("qbittorrent") or {}
+            # P3 修复: 应用保存用的键是 "qb"(见 app.load_qb_settings / DEFAULT_QB),
+            # 这里旧实现只读 "qbittorrent" —— 是条永远读不到的死路径, 导致
+            # /api/torrent/info 的诊断信息永远显示环境变量默认值而非用户已保存的配置。
+            # 兼容两种键, 且键名统一小写(下面按 k.lower() 取值)。
+            t = data.get("qb") or data.get("qbittorrent") or {}
             if isinstance(t, dict):
-                cfg.update({k: str(v) for k, v in t.items() if v})
+                cfg.update({str(k).lower(): str(v) for k, v in t.items() if v})
     except Exception:  # noqa: BLE001
         pass
     env_defaults = {

@@ -722,6 +722,37 @@ const VERSION_TAG='beta 2.5';
 const $=s=>document.querySelector(s);
 const fmt=n=>{if(n==null)return'–';n=+n||0;const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return i?n.toFixed(1)+' '+u[i]:n+' B'};
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ---------- 行内事件安全化(P1 修复) ----------
+   旧写法把动态数据拼进行内 onclick 属性里的**单引号 JS 字符串**(形如 函数名 + 引号包裹的 esc 值)。
+   esc() 的 &#39; 在浏览器编译行内 JS 前会被实体解码回 ', 单引号字符串照样被截断
+   → RSS 标题/抓取到的文件名里藏一个引号就是任意 JS 执行(会话 token 在 localStorage)。
+   现在动态值一律走 data-* 属性(esc() 在"双引号 HTML 属性"上下文是安全的),
+   由下面两个委托监听器统一分发。新增带参按钮请照此模式, 不要再拼 onclick 字符串。 */
+document.addEventListener('click',e=>{
+  const b=e.target.closest('button[data-act]');if(!b)return;
+  const d=b.dataset;
+  switch(d.act){
+    case 'protect':toggleProtect(d.type,d.name,d.file,b);break;
+    case 'dlfile':dlFile(d.type,d.name,d.file,b);break;
+    case 'delone':deleteOne(d.type,d.name,d.file,b);break;
+    case 'prune':prune(d.name,d.type);break;
+    case 'subscribe':toggleSubscribe(d.name,d.type);break;
+    case 'unprotect':unprotectFromList(d.path);break;
+    case 'rssrm':torrRssRemove(d.url);break;
+    case 'linkrm':torrLinkRemove(d.url);break;
+    case 'torradd':torrAdd(d.url,d.title);break;
+    case 'torrdel':torrDel(d.hash,d.files==='1');break;
+    case 'delSched':delSchedule(d.id);break;
+    case 'srcEdit':applySrcEdit(d.name,d.strategy);break;
+    case 'srcRepoDel':delSrcRepo(d.name,d.strategy);break;
+    case 'srcDel':delCustomSource(d.url);break;
+  }
+});
+document.addEventListener('change',e=>{
+  const c=e.target.closest('input[data-change-act]');if(!c)return;
+  if(c.dataset.changeAct==='schedToggle')setScheduleEnabled(c.dataset.id,c.checked);
+});
 const time2str=t=>{if(!t)return'–';const d=new Date(t*1000);return d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})};
 function toast(msg,err){const t=$('#toast');t.textContent=msg;t.className='toast show'+(err?' err':'');clearTimeout(t._h);t._h=setTimeout(()=>t.className='toast',3200)}
 
@@ -750,6 +781,8 @@ const I18N={
   'versions':{zh:'个版本',en:'versions'},
   'local':{zh:'本地',en:'Local'},
   'downloaded':{zh:'已下载',en:'Downloaded'},
+  'unverified':{zh:'未验签',en:'Not verified'},
+  'unverifiedTip':{zh:'文件长度与服务器声明一致，但校验源不可达或清单里没有该文件名 —— 这次落定没有任何 SHA256/GPG 证据。请检查该发行版的 checksum 配置后重新下载以完成校验。',en:'File length matches the server, but the checksum source was unreachable or the filename was missing from its manifest — this file was accepted without any SHA256/GPG evidence. Check the checksum config and re-download to verify.'},
   'oldVer':{zh:'旧版本',en:'Old'},
   'notDownloaded':{zh:'未下载',en:'Not Downloaded'},
   'dlFailed':{zh:'下载失败',en:'Download Failed'},
@@ -1263,6 +1296,12 @@ function render(d){
       const isFail=S==='failed', isStop=(S==='partial'||S==='stopped');
       let dot, cls, label, tip;
       if(isRun){dot='▼';cls='run';label=t('downloading');tip=t('downloadingTip');}
+      // P2 修复: 已下载但没有任何校验证据 —— 不能显示成普通的 ✓, 否则用户
+      // 以为「SHA256 自动校验」覆盖了它(校验源 404 时文件照样会落定)。
+      else if(isOk&&e.unverified){
+        dot='⚠';cls='warn';label='⚠ '+t('unverified');
+        tip=t('unverifiedTip')+(e.unverified_reason?('\n'+e.unverified_reason):'');
+      }
       else if(isOk){dot='●';cls='ok';label='✓ '+t('downloaded');tip='';}
       else if(isFail){dot='✕';cls='bad';label=t('dlFailed');tip=t('dlFailedTip');}
       else if(isStop){dot='⏸';cls='warn';label=t('dlStopped');tip=t('dlStoppedTip');}
@@ -1278,8 +1317,8 @@ function render(d){
         <td class="size">${sizeCell}</td>
         <td class="src-cell">${srcSelHtml(e)}</td>
         <td class="td-r"><span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${label}</span></td>
-        <td class="td-r"><button class="btn-lock ${isProtected(e.filename)?'on':''}" onclick="toggleProtect('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${isProtected(e.filename)?t('unlock'):t('lock')}">${isProtected(e.filename)?'🔒':'🔓'}</button></td>
-        <td class="td-r">${e.downloadable?`<button class="btn-s btn-rowdel" onclick="dlFile('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('dlToLocal')}">⬇</button> `:''}${(isOk||isStop||isFail||isRun)?`<button class="btn-d btn-rowdel" onclick="deleteOne('${esc(g.type)}','${esc(g.name)}','${esc(e.filename)}',this)" title="${t('deleteOne')}">🗑</button>`:''}</td>
+        <td class="td-r"><button class="btn-lock ${isProtected(e.filename)?'on':''}" data-act="protect" data-type="${esc(g.type)}" data-name="${esc(g.name)}" data-file="${esc(e.filename)}" title="${isProtected(e.filename)?t('unlock'):t('lock')}">${isProtected(e.filename)?'🔒':'🔓'}</button></td>
+        <td class="td-r">${e.downloadable?`<button class="btn-s btn-rowdel" data-act="dlfile" data-type="${esc(g.type)}" data-name="${esc(g.name)}" data-file="${esc(e.filename)}" title="${t('dlToLocal')}">⬇</button> `:''}${(isOk||isStop||isFail||isRun)?`<button class="btn-d btn-rowdel" data-act="delone" data-type="${esc(g.type)}" data-name="${esc(g.name)}" data-file="${esc(e.filename)}" title="${t('deleteOne')}">🗑</button>`:''}</td>
       </tr>`;
     });
     let strayHtml='';
@@ -1287,10 +1326,10 @@ function render(d){
       strayHtml=stray.map(f=>`<tr class="stray"><td></td><td>!</td>
         <td><div class="fname" title="${esc(t('notDownloaded'))}">${esc(f.name)}</div></td>
         <td class="size">${fmt(f.size)}</td>
-        <td class="td-r"><span class="badge old">${t('stale')}</span> <button class="btn-s btn-rowdel" onclick="dlFile('${esc(g.type)}','${esc(g.name)}','${esc(f.name)}',this)" title="${t('dlToLocal')}">⬇</button></td></tr>`).join('');
+        <td class="td-r"><span class="badge old">${t('stale')}</span> <button class="btn-s btn-rowdel" data-act="dlfile" data-type="${esc(g.type)}" data-name="${esc(g.name)}" data-file="${esc(f.name)}" title="${t('dlToLocal')}">⬇</button></td></tr>`).join('');
       strayHtml+=`<tr class="stray"><td></td><td></td>
         <td colspan="3"><div class="foot-hint">⚠ ${stray.length} ${t('dirtyHint')}
-        <button class="btn-d" onclick="prune('${esc(g.name)}','${esc(g.type)}')">🗑 ${t('cleanStale')} (${stray.length})</button></div></td></tr>`;
+        <button class="btn-d" data-act="prune" data-name="${esc(g.name)}" data-type="${esc(g.type)}">🗑 ${t('cleanStale')} (${stray.length})</button></div></td></tr>`;
     }
     card.innerHTML=`<div class="card-head">
         <button class="btn-fold" onclick="toggleGroupFold(this)" title="${t('foldExpand')}">${isFolded(g.type,g.name)?'▸':'▾'}</button>
@@ -1298,7 +1337,7 @@ function render(d){
         <span class="g-name">${esc(g.name)}</span><span class="chip">${esc(g.type)}</span>
         <div class="g-meta"><span>${g.file_count} ${t('versions')}</span><span>${t('local')} ${fmt(g.local_total)}</span></div>
         <button class="btn-fav ${isFav(g.type,g.name)?'on':''}" onclick="toggleFav(this)" title="${isFav(g.type,g.name)?t('unfavGroup'):t('favGroup')}">${isFav(g.type,g.name)?'★':'☆'}</button>
-        <button class="btn-sub ${isSubscribed(g.type,g.name)?'on':''}" onclick="toggleSubscribe('${esc(g.name)}','${esc(g.type)}')" title="${isSubscribed(g.type,g.name)?t('subTipOn'):t('subTipOff')}">${isSubscribed(g.type,g.name)?('★ '+t('subscribed')):('☆ '+t('subscribe'))}</button>
+        <button class="btn-sub ${isSubscribed(g.type,g.name)?'on':''}" data-act="subscribe" data-name="${esc(g.name)}" data-type="${esc(g.type)}" title="${isSubscribed(g.type,g.name)?t('subTipOn'):t('subTipOff')}">${isSubscribed(g.type,g.name)?('★ '+t('subscribed')):('☆ '+t('subscribe'))}</button>
       </div>
       <table class="tbl" id="tbl-${esc(g.type)}-${esc(g.name)}" style="${isFolded(g.type,g.name)?'display:none':''}">${rows}${strayHtml}</table>`;
     box.appendChild(card);
@@ -1753,7 +1792,7 @@ function renderProtectedList(){
     box.innerHTML=arr.length
       ? arr.map(p=>`<div class="prot-row" data-p="${esc(p)}">
           <span class="pn">${esc(p)}</span>
-          <button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="unprotectFromList('${esc(p)}')">🔓 ${t('unlock')}</button>
+          <button class="btn-s" style="padding:3px 10px;font-size:11px" data-act="unprotect" data-path="${esc(p)}">🔓 ${t('unlock')}</button>
         </div>`).join('')
       : '<div class="empty" style="padding:12px 0">'+t('protectEmpty')+'</div>';
   });
@@ -1808,14 +1847,14 @@ function renderTorrRss(list){
   const box=document.getElementById('torr-rss-list'); if(!box)return;
   box.innerHTML=!list.length?('<div class="empty" style="padding:10px 0">'+t('torrRssEmpty')+'</div>')
     : list.map(u=>'<div class="prot-row" data-p="'+esc(u)+'"><span class="pn" style="font-size:12px;word-break:break-all">'+esc(u)+'</span>'
-      +'<button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="torrRssRemove(\''+esc(u)+'\')">✖</button></div>').join('');
+      +'<button class="btn-s" style="padding:3px 10px;font-size:11px" data-act="rssrm" data-url="'+esc(u)+'">✖</button></div>').join('');
 }
 function renderTorrLinks(list){
   const box=document.getElementById('torr-links');
   const cnt=document.getElementById('torr-link-count'); if(cnt)cnt.textContent=list.length;
   if(box)box.innerHTML=!list.length?('<div class="empty" style="padding:10px 0">'+t('torrLinkEmpty')+'</div>')
     :list.map(x=>'<div class="prot-row" style="padding:6px 0"><span class="pn" style="font-size:12px;word-break:break-all;flex:1;min-width:0">'+esc(x.url)+'</span>'
-      +'<button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="torrLinkRemove(\''+esc(x.url)+'\')">✖</button></div>').join('');
+      +'<button class="btn-s" style="padding:3px 10px;font-size:11px" data-act="linkrm" data-url="'+esc(x.url)+'">✖</button></div>').join('');
 }
 /* ---------- 种子分类(后端算, 前端只渲染) ----------
    要点: 折叠 key 一律用后端下发的 fold_key, 前端不拼任何字符串。
@@ -1872,7 +1911,7 @@ function torrItemRow(it){
     +'<div class="pn" style="font-size:13px;word-break:break-all">'+esc(title)+'</div>'
     +(it.pubDate?'<div class="muted" style="font-size:11px">'+esc(it.pubDate)+' · '+esc(it.source||'')+'</div>':'')
     +'</div></div>'
-    +'<button class="btn-s" style="padding:4px 12px;font-size:12px" onclick="torrAdd(\''+esc(it.url)+'\',\''+esc((it.title||'').replace(/\.torrent.*$/i,''))+'\')">'+t('torrDownload')+'</button>'
+    +'<button class="btn-s" style="padding:4px 12px;font-size:12px" data-act="torradd" data-url="'+esc(u)+'" data-title="'+esc((it.title||'').replace(/\.torrent.*$/i,''))+'">'+t('torrDownload')+'</button>'
     +'</div>';
 }
 function renderTorrItems(items){
@@ -2089,8 +2128,8 @@ function renderTorrList(){
         +'<div style="height:6px;background:#16253d;border-radius:4px;margin-top:4px;max-width:320px"><div style="height:6px;width:'+prog+'%;background:var(--brand2);border-radius:4px"></div></div>'
         +'</div></label>'
         +'<div style="display:flex;flex-direction:column;gap:4px">'
-        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="torrDel(\''+esc(h)+'\',false)">'+t('torrDel')+'</button>'
-        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="torrDel(\''+esc(h)+'\',true)">'+t('torrDelFiles')+'</button>'
+        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" data-act="torrdel" data-hash="'+esc(h)+'" data-files="0">'+t('torrDel')+'</button>'
+        +'<button class="btn-s" style="padding:4px 10px;font-size:11px" data-act="torrdel" data-hash="'+esc(h)+'" data-files="1">'+t('torrDelFiles')+'</button>'
         +'</div></div>';
     }).join('');
 }
@@ -2181,13 +2220,13 @@ async function renderSchedules(){
     const en=s.enabled?'btn-p':'btn-s';
     const enTxt=s.enabled?t('enabledMsg'):t('disabledMsg');
     return `<div class="sub-row" style="display:flex;align-items:center;gap:8px;padding:8px 2px">
-      <input type="checkbox" class="sch-en" data-id="${esc(s.id)}" ${s.enabled?'checked':''} onchange="setScheduleEnabled('${esc(s.id)}',this.checked)">
+      <input type="checkbox" class="sch-en" data-id="${esc(s.id)}" ${s.enabled?'checked':''} data-change-act="schedToggle">
       <span style="flex:1;min-width:0">
         <span class="pn" style="font-weight:600">${esc(s.name||s.type)}</span>
         <span class="muted" style="font-size:11.5px">${esc(when)}</span>
       </span>
       <button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="runScheduleNow()">${t('syncRunNow')}</button>
-      <button class="btn-s" style="padding:3px 10px;font-size:11px" onclick="delSchedule('${esc(s.id)}')">🗑</button>
+      <button class="btn-s" style="padding:3px 10px;font-size:11px" data-act="delSched" data-id="${esc(s.id)}">🗑</button>
     </div>`;
   }).join('');
 }
@@ -2334,12 +2373,12 @@ async function loadCustomSources(){
     if(c.strategy){
       d.innerHTML=`<span class="cn">${esc(c.distribution)}</span><span class="chip" style="font-size:10.5px" title="${t('repoTab')}">📈 ${esc(c.strategy)}</span>
         <span class="cu">${esc(c.listing_url)}</span>
-        <button class="btn-s" style="padding:4px 10px;font-size:11px" onclick="applySrcEdit('${esc(c.distribution)}','${esc(c.strategy)}')">${t('edit')}</button>
-        <button class="btn-d" style="padding:4px 10px;font-size:11.5px" onclick="delSrcRepo('${esc(c.distribution)}','${esc(c.strategy)}')">🗑</button>`;
+        <button class="btn-s" style="padding:4px 10px;font-size:11px" data-act="srcEdit" data-name="${esc(c.distribution)}" data-strategy="${esc(c.strategy)}">${t('edit')}</button>
+        <button class="btn-d" style="padding:4px 10px;font-size:11.5px" data-act="srcRepoDel" data-name="${esc(c.distribution)}" data-strategy="${esc(c.strategy)}">🗑</button>`;
     }else{
       d.innerHTML=`<span class="cn">${esc(c.distribution)}</span><span class="chip" style="font-size:10.5px">${esc(c.type||'linux')}</span>
         <span class="cu">${esc(c.download_url)}</span>
-        <button class="btn-d" onclick="delCustomSource('${esc(c.download_url)}')" style="padding:4px 10px;font-size:11.5px">🗑</button>`;
+        <button class="btn-d" data-act="srcDel" data-url="${esc(c.download_url)}" style="padding:4px 10px;font-size:11.5px">🗑</button>`;
     }
     box.appendChild(d);
   });

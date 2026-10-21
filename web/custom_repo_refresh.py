@@ -16,6 +16,7 @@ ISO Hub - 自定义发行版源展开 runner(后台子进程, 不占 waitress �
 """
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -121,7 +122,12 @@ def main() -> None:
         print(f">>> 展开 {len(entries)} 个条目: {[e.get('download_url', '').rsplit('/', 1)[-1] for e in entries]}")
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    # P3 修复: 原子写 —— 与 settings/失败记录等通道保持一致。裸 write_text 若在
+    # 写入中途被终止(刷新超时被 kill / 容器重启), 会留下半截 JSON, 下次启动
+    # 解析失败即丢弃全部已展开的缓存, 用户看到的是"自定义源凭空消失"。
+    tmp_cache = cache_path.with_name(cache_path.name + ".tmp")
+    tmp_cache.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_cache, cache_path)
     print(f">>> 自定义源展开完成: {ok_count}/{len(sources)} 个源成功, 缓存写入 {cache_path}")
     if ok_count < len(sources):
         sys.exit(1)

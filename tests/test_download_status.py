@@ -318,6 +318,9 @@ class TestVerifyLogin(BaselineTestBase):
         import secrets as _secrets
         salt = _secrets.token_hex(8)
         users = {"alice": {"salt": salt, "password_hash": app._hash_pw("correct-pw", salt),
+                           # P3 起迭代数可升级(默认 60 万); 记录里必须写明, 否则会按
+                           # 旧版 12 万去验证 —— 这正是老部署的兼容路径(见 test_password_iterations)。
+                           "iterations": app.PBKDF2_ITERATIONS,
                            "created_at": 0}}
         (self.data / "settings.json").write_text(
             json.dumps({"users": users}), encoding="utf-8")

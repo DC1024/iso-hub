@@ -26,6 +26,11 @@ from pathlib import Path
 import requests
 
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
+# 与 download_linux.LinuxDistributionDownloader.headers 的 UA 保持一致。
+# P3 修复: 这里只做 HEAD 探测文件大小, 旧实现没带任何头 —— requests 会发
+# python-requests/x.y 的默认 UA, 部分镜像站(ustc 等)对未知 UA 直接 403,
+# 于是 Content-Length 拿不到、#TARGET 报 0, 前端该条目进度条恒为 0%。
+HEAD_UA_HEADERS = {"User-Agent": "iso-hub/1.0 (Linux distribution ISO auto-updater)"}
 # ISO 存放模式(与 web/app.py 的 STORAGE_MODES / FLAT_ISO_DIRNAME 一致)。
 # 由 --storage-mode 传入(主进程 app.py 决定), 本文件不读 settings.json。
 STORAGE_MODES = ("classified", "flat")
@@ -284,7 +289,8 @@ def main() -> None:
             _part_fp = target / (_fn + PART_SUFFIX)
             _sz = 0
             try:
-                _r = requests.head(_e["download_url"], timeout=(10, 30), allow_redirects=True)
+                _r = requests.head(_e["download_url"], timeout=(10, 30),
+                                   allow_redirects=True, headers=HEAD_UA_HEADERS)
                 _r.raise_for_status()
                 _sz = int(_r.headers.get("Content-Length", 0) or 0)
             except Exception:  # noqa: BLE001
