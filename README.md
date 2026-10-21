@@ -92,7 +92,7 @@ docker compose up -d   # 改 .env 后重启生效
 
 **多镜像源策略**：设置页可选「A 固定优先级」或「B 实测选最快」；镜像下载策略默认跟随设置优先级，也可通过列表每行的下拉框单独为某个版本指定镜像源。
 
-**共享给 PVE / Windows**：启用 `--profile share` 后自动创建 SMB + WebDAV 只读共享（账号 `iso` / `iso123`）：
+**共享给 PVE / Windows**：启用 `--profile share` 后自动创建 SMB + WebDAV 只读共享（账号 `iso`，**密码需先在面板「设置 → 共享设置」里设置**——从 1.3.21 起不再内置 `iso123` 这类默认口令，没有密码会拒绝启用）：
 
 | 协议 | 访问地址 | 说明 |
 |---|---|---|
@@ -113,9 +113,9 @@ docker compose up -d   # 改 .env 后重启生效
 | `ISO_HUB_TOKEN` | 空 | 附加访问令牌（所有写操作需携带）；建议公网环境开启或置于反代之后 |
 | `ISO_HUB_SYNC_INTERVAL` | `86400` | 订阅自动同步间隔（秒）；`0`=关闭内置调度器 |
 | `SAMBA_PORT` | `1445` | SMB 映射端口（原 445） |
-| `SAMBA_USER` / `SAMBA_PASS` | `iso` / `iso123` | SMB 账号/密码 |
+| `SAMBA_USER` / `SAMBA_PASS` | `iso` / 空 | SMB 账号/密码（**密码必填**，为空时拒绝启用共享） |
 | `WEBDAV_PORT` | `8081` | WebDAV 端口 |
-| `WEBDAV_USER` / `WEBDAV_PASS` | `iso` / `iso123` | WebDAV 账号/密码 |
+| `WEBDAV_USER` / `WEBDAV_PASS` | `iso` / 空 | WebDAV 账号/密码（**密码必填**，为空时拒绝启用共享） |
 | `QB_PORT` | `8090` | qBittorrent WebUI 端口 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 

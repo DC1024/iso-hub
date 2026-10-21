@@ -368,7 +368,7 @@ class TestAllWritersShareTheChannel(SettingsDirCase):
 class TestContainerOpsAreOutsideTheLock(SettingsDirCase):
 
     def test_applying_share_credentials_can_still_take_the_lock(self):
-        """改共享密码要 stop→rm→create→start samba(最长约 50 秒)。
+        """改共享密码要写凭据文件并重启 sidecar(含容器重建前最长约 50 秒的历史路径)。
 
         这段一旦被包进 json 锁: 一个人保存共享, 其余 7 个 waitress 线程全被堵住,
         历史上那次"线程耗尽 / 队列飙升 / 日志一条打不出来"就是这么来的。

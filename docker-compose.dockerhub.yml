@@ -24,6 +24,14 @@ services:
     image: dcchendockeruser/iso-hub:latest
     container_name: iso-hub
     restart: unless-stopped
+    # 安全: 进程不需要任何特权操作(不绑低端口、不改文件属主、不加载内核模块), 因此
+    # 丢弃全部 capabilities; 再叠加 no-new-privileges, 杜绝 setuid 提权。
+    # 注意: 容器内仍是 root(见 README「已知取舍」), 但失去 DAC_OVERRIDE/CHOWN/SETUID 后,
+    # 即使应用被攻破也只能在挂载点内按属主权限操作, 无法越界改写系统文件。
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     ports:
       # 左侧可改: 例如 "8099:8080" 或 "127.0.0.1:8080:8080"(仅本机访问)
       - "${ISO_HUB_PORT:-8899}:8080"
@@ -34,6 +42,9 @@ services:
       - ./qb-config:/qb-config:rw
       # webdav 凭据配置目录: 与 webdav 容器共享(网页改密码后主容器改写此文件)
       - ./webdav-config:/webdav-config
+      # samba 凭据目录: 主容器写入 samba-users.conf, samba 容器启动时只读解析
+      # (凭据不再进容器的 Cmd, 因此 docker inspect / ps 里看不到明文)
+      - ./samba-config:/samba-config
       # 安全: 主容器不再直连裸 docker.sock, 改经 socket-proxy(TCP) 受限访问 Docker API。
       # 详见 socket-proxy 服务定义。原有 /var/run/docker.sock 挂载已移除。
     environment:
@@ -61,10 +72,11 @@ services:
       - QB_USER=${QB_USER:-admin}
       - QB_PASS=${QB_PASS:-adminadmin}
       # 网络共享默认凭据(可在网页「设置→共享设置」修改, 改后写入 ./data/settings.json 覆盖此处)
+      # 密码必须显式设置: 1.3.21 起不再内置 iso123, 为空时拒绝启用共享
       - SAMBA_USER=${SAMBA_USER:-iso}
-      - SAMBA_PASS=${SAMBA_PASS:-iso123}
+      - SAMBA_PASS=${SAMBA_PASS:-}
       - WEBDAV_USER=${WEBDAV_USER:-iso}
-      - WEBDAV_PASS=${WEBDAV_PASS:-iso123}
+      - WEBDAV_PASS=${WEBDAV_PASS:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u;u.urlopen('http://127.0.0.1:8080/api/health',timeout=4)"]
       interval: 60s
@@ -77,25 +89,24 @@ services:
 
   # ---------- Docker socket 代理: 收窄主容器对 Docker API 的访问权限 ----------
   # 主容器不再持有裸 /var/run/docker.sock(等价宿主机 root), 而是经此代理按白名单调用。
-  # 白名单: 仅放行 /containers/* 端点(CONTAINERS=1) 与写操作(POST=1, start/stop 需要);
-  #         禁掉镜像、卷、网络、exec、系统五类端点。
+  # 白名单写在 docker/socket-proxy/haproxy.cfg, 只有四类:
+  #   GET /_ping|/version, GET /containers/*, POST .../(start|stop|restart|update), 其余 403
+  # 为什么不用 tecnativa/docker-socket-proxy 的 env 开关: 它的 ACL 是"方法 + 路径前缀"两档,
+  # POST=1 会把 /containers 前缀整体放行 —— 连带 open 了 POST /containers/create(足以创建
+  # 挂载宿主根目录的特权容器)与 DELETE /containers/<id>; 而 POST=0 会在第一条规则
+  # (`deny unless METH_GET || POST`) 里把 start/stop 一起拒掉。两个需求无法同时表达。
   # 注意: 本服务是核心依赖, 不设 profiles(主容器需持续用它查 sidecar 状态)。
   socket-proxy:
-    # 锁定 digest 而非 :latest — 上游 ACL 行为变更会直接改变放行范围, 内容寻址可防篡改/防漂移。
-    # 升级方式: docker pull tecnativa/docker-socket-proxy:latest && docker inspect --format='{{index .RepoDigests 0}}' tecnativa/docker-socket-proxy:latest
-    image: tecnativa/docker-socket-proxy@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    # 锁定 digest 而非 :latest —— 镜像行为变更会直接影响放行范围, 内容寻址可防篡改/防漂移。
+    # 升级方式: docker pull haproxy:2.8-alpine && docker inspect --format='{{index .RepoDigests 0}}' haproxy:2.8-alpine
+    image: haproxy:2.8-alpine@sha256:094401c230b9bf01a6a4dc96e455795e261483f3bd2f42f19d0e6f259bd43837
     container_name: iso-hub-socket-proxy
     restart: unless-stopped
     environment:
-      - CONTAINERS=1     # 允许 /containers/* 端点(查状态/启停/更新/重建)
-      - POST=1           # 允许写操作(start/stop 是 POST; 注: 该粒度较粗, 会连带放行 /containers/create)
-      - IMAGES=0         # 禁止镜像操作
-      - VOLUMES=0        # 禁止卷操作
-      - NETWORKS=0       # 禁止网络操作
-      - EXEC=0           # 禁止 exec
-      - SYSTEM=0         # 禁止系统级操作
       - TZ=Asia/Shanghai
     volumes:
+      # ACL 配置: 显式 allowlist, 见文件头注释
+      - ./docker/socket-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
       # 只有该代理容器持有裸 sock, 且以只读方式挂载
       - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
@@ -116,6 +127,11 @@ services:
     container_name: iso-hub-samba
     restart: no
     profiles: ["share"]
+    # 凭据不再走 command —— 明文会长期留在容器的 .Config.Cmd 里(`docker inspect`、
+    # `docker ps --no-trunc`、容器内 `ps`、`docker compose config` 都能看到),
+    # 而改口令只能删容器重建, 又正好需要 socket-proxy 放行 create/delete。
+    # 改为启动时读取 ./samba-config/samba-users.conf(由主容器写入, 0600)生成 -u/-s 参数。
+    entrypoint: ["/sbin/tini", "--", "/bin/sh", "/etc/iso-hub/samba-entrypoint.sh"]
     ports:
       - "${SAMBA_PORT:-1445}:445"
       - "${SAMBA_NETBIOS:-1137}:137/udp"
@@ -123,14 +139,13 @@ services:
       - "${SAMBA_139:-1139}:139"
     volumes:
       - ./data:/srv/iso:ro          # 只读共享,ISO 不会被误改
+      - ./samba-config:/samba-config:ro
+      - ./docker/samba-entrypoint.sh:/etc/iso-hub/samba-entrypoint.sh:ro
     environment:
       - TZ=Asia/Shanghai
       - USERID=${SAMBA_UID:-0}
       - GROUPID=${SAMBA_GID:-0}
-    command: >-
-      -p
-      -u "${SAMBA_USER:-iso};${SAMBA_PASS:-iso123}"
-      -s "iso;/srv/iso;no;no;no;${SAMBA_USER:-iso},${SAMBA_PASS:-iso123}"
+      - SAMBA_USERS_FILE=/samba-config/samba-users.conf
 
   # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav
   # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d

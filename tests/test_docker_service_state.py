@@ -188,8 +188,6 @@ class TestComposeConfig(unittest.TestCase):
     """N2/N3: compose 文件结构校验(本机无 docker, 用 YAML 解析替代 docker compose config)。"""
 
     COMPOSE_FILES = ("docker-compose.yml", "docker-compose.dockerhub.yml", "docker-compose.acr.yml")
-    WHITELIST_ON = {"CONTAINERS": "1", "POST": "1"}
-    WHITELIST_OFF = {"IMAGES": "0", "VOLUMES": "0", "NETWORKS": "0", "EXEC": "0", "SYSTEM": "0"}
 
     @classmethod
     def setUpClass(cls):
@@ -236,15 +234,73 @@ class TestComposeConfig(unittest.TestCase):
                 digest = image.split("@sha256:", 1)[1]
                 self.assertEqual(len(digest), 64, f"{name}: digest 长度应为 64 位十六进制")
 
-    def test_socket_proxy_whitelist(self):
-        """socket-proxy 白名单: CONTAINERS/POST=1, 镜像/卷/网络/exec/系统=0。"""
+    def test_socket_proxy_acl_is_explicit_allowlist(self):
+        """白名单必须是显式 allowlist: create/delete 一律不可达。
+
+        为什么不用上游的 env 开关: 它的 ACL 是"方法 + 路径前缀"两档,
+        `POST=0` 会在第一条规则里把 start/stop 一起拒掉(deny unless METH_GET || POST),
+        `POST=1` 又会把 /containers 前缀整体放行 —— 连带 open 了 POST /containers/create,
+        而该端点足以创建挂载宿主根目录的特权容器。
+        """
+        cfg_path = REPO_ROOT / "docker" / "socket-proxy" / "haproxy.cfg"
+        self.assertTrue(cfg_path.exists(), "缺少 docker/socket-proxy/haproxy.cfg")
+        body = cfg_path.read_text(encoding="utf-8")
+        allow_lines = [ln.strip() for ln in body.splitlines() if ln.strip().startswith("http-request allow")]
+        self.assertTrue(allow_lines, "白名单配置里没有任何 allow 规则")
+        for ln in allow_lines:
+            self.assertNotIn("create", ln, f"allow 规则不应放行 create: {ln}")
+            self.assertNotIn("DELETE", ln.upper(), f"allow 规则不应放行删除: {ln}")
+        self.assertIn("http-request deny", body, "白名单配置必须有兜底 deny")
+        writes = [ln for ln in allow_lines if "METH_POST" in ln]
+        self.assertEqual(len(writes), 1, "应只有一条写操作 allow 规则")
+        for act in ("start", "stop", "restart", "update"):
+            self.assertIn(act, writes[0], f"写操作白名单缺少 {act}")
+
+    def test_socket_proxy_mounts_acl_config(self):
+        """socket-proxy 挂载静态 ACL 配置, 且不再使用上游 docker-socket-proxy 镜像。"""
         for name, doc in self._docs.items():
             with self.subTest(compose=name):
-                env = self._env_dict(doc["services"]["socket-proxy"])
-                for k, v in self.WHITELIST_ON.items():
-                    self.assertEqual(env.get(k), v, f"{name}: socket-proxy {k} 应为 {v}")
-                for k, v in self.WHITELIST_OFF.items():
-                    self.assertEqual(env.get(k), v, f"{name}: socket-proxy {k} 应为 {v}")
+                svc = doc["services"]["socket-proxy"]
+                vols = [str(v) for v in svc.get("volumes", [])]
+                self.assertTrue(any("haproxy.cfg" in v for v in vols), f"{name}: 未挂载 haproxy.cfg")
+                image = str(svc.get("image", ""))
+                self.assertNotIn("docker-socket-proxy", image,
+                                 f"{name}: 仍在使用上游 socket-proxy 镜像(其 ACL 表达不了本需求)")
+
+    def test_main_container_drops_capabilities(self):
+        """主容器丢弃全部 capabilities 并禁止提权(仍以 root 运行, 但失去 DAC_OVERRIDE 等能力)。"""
+        for name, doc in self._docs.items():
+            with self.subTest(compose=name):
+                ih = doc["services"]["iso-hub"]
+                caps = [str(c).upper() for c in (ih.get("cap_drop") or [])]
+                self.assertIn("ALL", caps, f"{name}: 主容器未 cap_drop ALL")
+                opts = [str(o) for o in (ih.get("security_opt") or [])]
+                self.assertTrue(any("no-new-privileges" in o for o in opts),
+                                f"{name}: 未设置 no-new-privileges")
+
+    def test_samba_credentials_not_in_argv(self):
+        """samba 凭据不得出现在 compose 的 command 里(会长期留在 docker inspect .Config.Cmd)。"""
+        for name, doc in self._docs.items():
+            with self.subTest(compose=name):
+                svc = doc["services"]["samba"]
+                cmd = " ".join(str(x) for x in (svc.get("command") or []))
+                self.assertNotIn("SAMBA_PASS", cmd, f"{name}: command 里仍有 SAMBA_PASS")
+                self.assertNotIn("-u", cmd.split(), f"{name}: command 里仍有 -u 凭据参数")
+                vols = [str(v) for v in svc.get("volumes", [])]
+                self.assertTrue(any("samba-entrypoint.sh" in v for v in vols),
+                                f"{name}: 未挂载 samba-entrypoint.sh")
+                self.assertIn("SAMBA_USERS_FILE", self._env_dict(svc),
+                              f"{name}: 未指定账号文件路径")
+                ep = " ".join(str(x) for x in (svc.get("entrypoint") or []))
+                self.assertIn("samba-entrypoint.sh", ep, f"{name}: 未覆盖 entrypoint")
+
+    def test_samba_config_dir_shared_with_main_container(self):
+        """主容器需要写 samba 账号文件, 因此必须挂载同一目录。"""
+        for name, doc in self._docs.items():
+            with self.subTest(compose=name):
+                vols = [str(v) for v in doc["services"]["iso-hub"].get("volumes", [])]
+                self.assertTrue(any("samba-config:/samba-config" in v for v in vols),
+                                f"{name}: 主容器未挂载 samba-config")
 
     def test_socket_proxy_sock_mounted_readonly(self):
         """socket-proxy 以只读(:ro)挂载裸 sock。"""
