@@ -16,7 +16,13 @@
 #      经 socket-proxy 按静态白名单访问 /containers/* 端点。仍请仅在可信内网使用。
 #   3. 生产部署务必设置 ISO_HUB_TOKEN / ISO_HUB_REQUIRE_LOGIN=1, 并修改默认共享/种子凭据。
 #   4. 旧版部署(DOCKER_HOST 未设置)会回退到 Unix socket /var/run/docker.sock, 保持向后兼容。
-FROM python:3.12-slim
+# 基础镜像钉 digest(v1.5.3): `python:3.12-slim` 是浮动 tag, 上游每发一次补丁
+# 重建出来的镜像就变一次 —— 同一个 commit 两次构建产物不同, 无法复现也无法对比 CVE。
+# tag 保留 3.12.15 是为了可读(人一眼看出 Python 版本), digest 才是真正生效的那半。
+# 升级: 改 tag 后执行
+#   docker pull python:3.12.15-slim && docker inspect --format='{{index .RepoDigests 0}}' python:3.12.15-slim
+# 把新 digest 粘回来, 再跑一遍 Container Smoke。
+FROM python:3.12.15-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
 
 # 国内构建可传 --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG PIP_INDEX_URL=https://pypi.org/simple
@@ -39,16 +45,26 @@ RUN sed -i "s@//.*archive.ubuntu.com@//${APT_MIRROR}@; s@//security.ubuntu.com@/
     && apt-get install -y --no-install-recommends gnupg gpgv \
     && rm -rf /var/lib/apt/lists/*
 
+# 依赖锁定: constraints.txt 把版本钉到生产实测值, 否则 `>=` 会让同一 commit 的
+# 两次构建装到不同的包(详见文件头注释)。必须 COPY 在两条 pip install 之前。
+COPY constraints.txt /app/constraints.txt
+
 # 上游 CLI 依赖
 COPY iso_download/requirements.txt /app/iso_download/requirements.txt
-RUN pip install --no-cache-dir -r /app/iso_download/requirements.txt
+RUN pip install --no-cache-dir -c /app/constraints.txt -r /app/iso_download/requirements.txt
 
 # 上游脚本本体
 COPY iso_download/ /app/iso_download/
 
 # Web 层
 COPY web/ /app/web/
-RUN pip install --no-cache-dir -r /app/web/requirements.txt
+RUN pip install --no-cache-dir -c /app/constraints.txt -r /app/web/requirements.txt
+
+# 运维脚本(备份/恢复)。
+# 随镜像分发是为了让 `docker exec iso-hub python /app/scripts/backup.py` 直接可用 ——
+# 宿主上不必装 Python, 也不必去猜 /data 在宿主机的真实绑定路径(极空间是
+# /tmp/zfsv3/... 这种, `docker inspect` 才能查到)。
+COPY scripts/ /app/scripts/
 
 # 运行期瘦身: 卸载构建期才用得到的 pip(依赖已在上面装好, 运行时不再需要)。
 # 目的:

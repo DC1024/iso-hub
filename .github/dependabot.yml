@@ -9,6 +9,11 @@
 #   * monthly 频率: 维护节奏本来就是 1-2 个月一轮, weekly 会攒一堆并发 PR。
 #   * minor+patch 打包成组: 一次 PR 升一批, 避免每个小版本一个 PR。
 #   * major 留单独 PR: 大版本升级有破坏性, 需要单独评估, 不混进组里。
+# 一个容易误解的点: pip 生态的 PR 改的是 requirements.txt 的**下限**(`>=`),
+# 真正决定装哪个版本的是 constraints.txt, 而 Dependabot 不认这个文件。
+# 所以合并这类 PR 后重建镜像, 装到的还是旧版本 —— 这不是 bug, 是刻意的两段式:
+# 下限声明"至少要这么多", constraints 声明"现在就装这么多"。要真正升级必须
+# 按 constraints.txt 头部的三步手改锁定值。PR 的价值是**告诉你有新版本**。
 version: 2
 updates:
   - package-ecosystem: pip
@@ -35,6 +40,25 @@ updates:
       interval: monthly
     groups:
       actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+  # v1.5.3: 镜像也纳入监控。
+  # 为什么之前没有: 以为"镜像升级只是换 tag", 实际基础镜像的 OS 包(gnupg/gpgv)与
+  # sidecar 的 CVE 修复只体现在新 digest 上, 靠每周的 cve-baseline 事后告警太晚。
+  # 注意: 基础镜像写的是 tag@digest, Dependabot 只改 digest 那一半, 所以 Python
+  # 大版本不会被动升级 —— 想跨小版本要手改 tag(见 Dockerfile 注释)。
+  # 项目自己的镜像必须 ignore: 它们不在 Docker Hub 上, 交给 Dependabot 只会报错。
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: "iso-hub"
+      - dependency-name: "dcchendockeruser/iso-hub"
+      - dependency-name: "registry.cn-hangzhou.aliyuncs.com/dcchen/isohub"
+    groups:
+      docker-minor-and-patch:
         update-types:
           - minor
           - patch

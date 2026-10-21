@@ -1,0 +1,47 @@
+# 依赖锁定（constraints）
+#
+# 为什么需要这个文件:
+#   web/requirements.txt 与 iso_download/requirements.txt 里全是 `>=` —— 这是**下限**
+#   而不是锁定。同一个 commit 隔一个月重建, pip 会装到不同的 Flask / cryptography,
+#   于是"同一个镜像 tag 两次构建产出不同内容", CVE 基线随之漂移, 出了问题也无法复现。
+#   这里把**生产实测版本**钉死, 构建结果才可复现。
+#
+# 版本来源: 2026-10-22 在 Z4Pro 生产容器 `isohub:1.5.2` 内用 importlib.metadata 实测。
+#   直接依赖(web/requirements.txt 与 iso_download/requirements.txt 声明的那几个)
+#   加上它们的关键传递依赖 —— 只钉直接依赖不够, werkzeug/urllib3 这类同样会漂。
+#
+# 升级方式(不要手改单个数字):
+#   1. docker run --rm isohub:<新版本> python -c "import importlib.metadata as m; ..."
+#      导出全部版本, 与本文档逐行比对
+#   2. 改这里 → 重建 → 全量测试 + Container Smoke 全绿
+#   3. 合并后在 :beta 上实测一轮再发版
+#   Dependabot 会按月提 PR, 但合并前必须走上面三步 —— 它只负责发现, 不负责验证。
+#
+# 注意: 不锁 pathlib2 —— 它只在 python_version < "3.4" 时安装, 本项目永远不满足。
+# 注意: 本文件用于 `pip install -c`, 不会主动安装任何包, 只是给解析器加约束。
+
+# ---- 直接依赖 ----
+flask==3.1.3
+waitress==3.0.2
+defusedxml==0.7.1
+cryptography==50.0.2
+requests==2.34.2
+tqdm==4.70.1
+
+# ---- 传递依赖(Flask 栈) ----
+werkzeug==3.1.9
+jinja2==3.1.6
+markupsafe==3.0.4
+click==8.5.0
+itsdangerous==2.2.0
+blinker==1.9.0
+
+# ---- 传递依赖(requests 栈) ----
+urllib3==2.8.0
+charset-normalizer==3.5.2
+idna==3.20
+certifi==2026.10.19
+
+# ---- 传递依赖(cryptography / cffi) ----
+cffi==2.1.1
+pycparser==3.11

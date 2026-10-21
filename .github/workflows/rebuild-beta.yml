@@ -1,9 +1,11 @@
 # ISO Hub - 月度基础镜像 rebuild(:beta)
 #
-# 为什么需要: Dockerfile 基础镜像是浮动 tag(python:3.12-slim), 远端 digest
-# 会随 Debian 安全更新漂移, 但没有新 commit 时现有 workflow 不会重跑,
-# 镜像里的基础层就一直停在旧 digest。每月 3 日强制重建一次 :beta,
-# 让「基础镜像吃到了安全更新」这件事至少每月发生一次。
+# 为什么需要: v1.5.3 起 Dockerfile 基础镜像已锁 digest(python:3.12.15-slim@sha256:…),
+# 镜像**层**不再随上游漂移; 但 Dockerfile 里还有 `apt-get upgrade -y`, 它每次构建
+# 都会拉当时最新的 Debian 安全补丁。没有新 commit 时现有 workflow 不会重跑,
+# 于是 :beta 里的 gnupg / libc 等系统包会一直停在旧版本。每月 3 日强制重建一次,
+# 让「OS 包吃到了安全更新」这件事至少每月发生一次。
+# 基础镜像本身的升级不靠这里 —— 那是 Dependabot 提 PR + 人工验证的路径。
 #
 # 实现方式: 不重复写构建逻辑, 直接用 workflow_dispatch 触发现有的
 # docker-push.yml / aliyun-acr.yml(ref=beta, 只推 :beta 不碰 :latest)。

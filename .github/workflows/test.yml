@@ -7,7 +7,7 @@
 #
 # 触发: pull_request / push master / 手动。失败即阻塞(与 Lint & Security 同级门禁)。
 #
-# Python 版本与 Dockerfile 基础镜像(python:3.12-slim)一致。
+# Python 版本与 Dockerfile 基础镜像(python:3.12.15-slim)一致。
 # 依赖: web/requirements.txt(flask 等, tests 会 import web.app)
 #      iso_download/requirements.txt(requests/tqdm, tests 会 import download_linux)
 
