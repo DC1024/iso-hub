@@ -24,10 +24,31 @@ services:
     image: registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:latest
     container_name: iso-hub
     restart: unless-stopped
+    # ---- 非 root + 只读根文件系统(v1.5.0) ----
+    # 镜像内已 USER 10001:10001, 这里再显式写一遍是给 `docker compose config` 一份
+    # 可见的声明(也防止有人拉了旧 tag 却以为降权已生效)。
+    # ⚠️ 升级到 1.5.0 前先在宿主机执行:
+    #      chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+    #    否则启动自检会立即退出并打印这条命令。
+    user: "10001:10001"
+    # 根文件系统只读: 运行期唯一可写的是下面显式挂载的卷 + 内存盘 /tmp。
+    # 这条是"应用被攻破"时的兜底 —— 攻击者无法往 /app 写 webshell、无法改 site-packages
+    # 注入代码, 重启即恢复。前提条件(已在 v1.5.0 逐一确认):
+    #   · PYTHONDONTWRITEBYTECODE=1 → 不写 __pycache__
+    #   · gpg 全部走 tempfile.TemporaryDirectory()(在 /tmp) + 显式 GNUPGHOME
+    #   · 全部业务写盘都落在 /data、/qb-config、/webdav-config、/samba-config
+    read_only: true
+    tmpfs:
+      # gpg 验签中间文件、各 runner 的临时文件都在这; 64m 对单个 checksum 文件足够
+      - /tmp:mode=1777,size=64m
+      # gpg 的 homedir 也挂成内存盘。代码里每次调用 gpg 都已显式把 GNUPGHOME 指到
+      # tempfile 临时目录, 这条是兜底: `gpg --show-keys` 这类"看起来只读"的调用
+      # 也会在 homedir 里创建 pubring.kbx, 只读根文件系统下会 Fatal 且不输出指纹。
+      - /home/isohub:mode=700,uid=10001,gid=10001,size=8m
     # 安全: 进程不需要任何特权操作(不绑低端口、不改文件属主、不加载内核模块), 因此
     # 丢弃全部 capabilities; 再叠加 no-new-privileges, 杜绝 setuid 提权。
-    # 注意: 容器内仍是 root(见 README「已知取舍」), 但失去 DAC_OVERRIDE/CHOWN/SETUID 后,
-    # 即使应用被攻破也只能在挂载点内按属主权限操作, 无法越界改写系统文件。
+    # 注意: 已是 uid 10001 非 root, cap_drop 是第二层 —— 即使有残留 capability 也拿不到
+    # DAC_OVERRIDE/CHOWN/SETUID, 无法越界改写挂载点之外的文件。
     cap_drop:
       - ALL
     security_opt:
@@ -147,6 +168,8 @@ services:
       - ./docker/samba-entrypoint.sh:/etc/iso-hub/samba-entrypoint.sh:ro
     environment:
       - TZ=Asia/Shanghai
+      # 这里保持 root(0): dperson/samba 的启动流程要 usermod/chpasswd, 降权会起不来。
+      # 它只读挂载 ./data(ro)且只解析主容器写的 0600 账号文件, 权限面已经很小。
       - USERID=${SAMBA_UID:-0}
       - GROUPID=${SAMBA_GID:-0}
       - SAMBA_USERS_FILE=/samba-config/samba-users.conf
@@ -183,8 +206,10 @@ services:
       - ./qb-config:/config      # qBittorrent 配置/日志
       - ./qb-downloads:/downloads # 默认下载目录(iso-hub 会按发行版设 savepath 到 /data/...)
     environment:
-      - PUID=${QB_PUID:-0}
-      - PGID=${QB_PGID:-0}
+      # 必须与主容器同 uid/gid: qBittorrent 往 /data 写 ISO, 若它以 root 写, 主容器
+      # (uid 10001 且无 DAC_OVERRIDE)既校验不了也删不掉那些文件。
+      - PUID=${QB_PUID:-10001}
+      - PGID=${QB_PGID:-10001}
       - TZ=Asia/Shanghai
       - WEBUI_PORT=8080
       - TORRENTING_PORT=6881

@@ -347,16 +347,25 @@ class LinuxDistributionDownloader:
     def _keyring_fingerprints(self, keyring: Path) -> List[str]:
         """读取已缓存 keyring(或任意公钥文件)内主密钥的指纹。
 
-        用 gpg --show-keys 直接读文件: 不依赖 GNUPGHOME, 也不会改动用户 keyring。
+        用 gpg --show-keys 直接读文件: 不依赖 GNUPGHOME 里的密钥库, 也不会改动它。
+
+        v1.5.0: GNUPGHOME 必须显式指到临时目录。`--show-keys` 看起来是"纯读文件",
+        实际仍会在 homedir 里创建 pubring.kbx / trustdb.gpg —— read_only 根文件系统
+        的容器里直接 `Fatal: ... directory does not exist!`, 且**一行指纹都不输出**。
+        后果不是报错, 而是: 缓存 keyring 被判"指纹不匹配" → 每轮下载都删掉重建、
+        重新拉公钥; 公钥源恰好不可达时还会降级成只校验 SHA256。全部静默。
         """
         try:
             if not keyring.exists() or keyring.stat().st_size == 0:
                 return []
         except OSError:
             return []
-        r = subprocess.run(
-            ["gpg", "--batch", "--no-tty", "--with-colons", "--show-keys", str(keyring)],
-            capture_output=True, text=True, errors="replace")
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(os.environ, GNUPGHOME=home)
+            r = subprocess.run(
+                ["gpg", "--batch", "--no-tty", "--with-colons", "--show-keys", str(keyring)],
+                capture_output=True, text=True, errors="replace", env=env)
         if r.returncode != 0:
             return []
         return self._parse_colon_fingerprints(r.stdout)

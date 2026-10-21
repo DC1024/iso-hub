@@ -38,6 +38,10 @@ ISO Hub 是一个带网页界面的 Docker 化 Linux 发行版 ISO 自动更新�
 ```bash
 mkdir iso-hub && cd iso-hub
 curl -O https://raw.githubusercontent.com/DC1024/iso-hub/master/docker-compose.acr.yml
+# 容器以 uid 10001 非 root 运行, 先把挂载目录交给它(见下方「非 root 运行」)
+mkdir -p data qb-config webdav-config samba-config
+sudo chown -R 10001:10001 data qb-config webdav-config samba-config
+
 docker compose -f docker-compose.acr.yml up -d                    # 核心（必启）
 docker compose -f docker-compose.acr.yml --profile share up -d    # + SMB/WebDAV 共享（可选）
 docker compose -f docker-compose.acr.yml --profile bt up -d       # + 种子下载（可选）
@@ -49,6 +53,8 @@ docker compose -f docker-compose.acr.yml --profile bt up -d       # + 种子下�
 
 ```bash
 git clone https://github.com/DC1024/iso-hub.git && cd iso-hub
+mkdir -p data qb-config webdav-config samba-config
+sudo chown -R 10001:10001 data qb-config webdav-config samba-config
 docker compose up -d --build
 ```
 
@@ -133,6 +139,34 @@ data/
     └── Arch/archlinux-2026.09.01-x86_64.iso
 ```
 
+### 非 root 运行与升级迁移（v1.5.0 起）
+
+容器**不再以 root 运行**，而是固定 `uid/gid = 10001`，并且根文件系统**只读**（`read_only: true`，只额外挂一个 64MB 的内存盘 `/tmp`）。
+
+| 项 | v1.4.x 及以前 | v1.5.0 起 |
+|---|---|---|
+| 进程身份 | root（`cap_drop: ALL`） | **uid/gid 10001**（+ `cap_drop: ALL` + `no-new-privileges`） |
+| 根文件系统 | 可写 | **只读**（写不了 `/app`、site-packages） |
+| 可写位置 | 任意 | 仅 `./data` `./qb-config` `./webdav-config` `./samba-config`，外加两块内存盘 `/tmp`、`/home/isohub` |
+
+**从 v1.4.x 升级（breaking change）：** 绑定挂载的属主由**宿主机**决定，容器内改不了。升级前必须先在 compose 所在目录执行：
+
+```bash
+docker compose down
+sudo chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+docker compose pull && docker compose up -d
+```
+
+漏了会怎样：容器启动时自检发现数据目录不可写，**立即退出**并在日志里打印上面那条 `chown` 命令（不会出现"服务起来了但每次下载都在写盘处炸"的半死状态）。`docker compose logs iso-hub` 即可看到。
+
+**几个容易踩的点：**
+
+- **qBittorrent 必须同 uid**：`qbittorrent` 服务的 `QB_PUID` / `QB_PGID` 默认已改为 `10001`。若仍让它在 root 下写 `/data`，主容器（uid 10001 且无 `DAC_OVERRIDE`）既校验不了也删不掉那些 ISO。老部署在 `.env` 里显式写死了 `QB_PUID=0` 的，请一并改掉。
+- **`read_only` 依赖的路径**：gpg 验签全部走 `tempfile.TemporaryDirectory()`（落在 `/tmp` 内存盘）并显式指定 `GNUPGHOME`，不碰 `$HOME/.gnupg`；业务写盘全部落在上面四个挂载卷。日志在 `./data/logs/`。`/home/isohub` 也挂了一块 8MB 内存盘兜底 —— `gpg --show-keys` 这类"看起来只读"的调用仍会在 homedir 里建 `pubring.kbx`，不可写时它会 `Fatal` 且不输出指纹（表现为"缓存 keyring 指纹不匹配、每轮重建"）。
+- **NFS / SMB 挂载的 data 目录**：需在服务端把 uid 映射成 10001（或 `all_squash` + `anonuid=10001`），否则本机 `chown` 无效。
+- **Podman / rootless Docker**：没有真正的 uid 0，用 `userns_mode: keep-id`，或把宿主目录直接交给容器内的映射用户。
+- **临时回退**：实在来不及迁移，可在 compose 里给 `iso-hub` 加 `user: "0:0"` 并删掉 `read_only: true`，即可回到 v1.4.x 的行为——但这会同时失去本次的全部收益，仅作应急。
+
 ### 常用命令
 
 ```bash
@@ -161,13 +195,20 @@ docker compose pull && docker compose up -d   # 升级到最新镜像
 **删除文件被拒绝？**<br>
 该文件被 🔒 锁定保护，先在列表里解锁；保护列表也可在「设置」里批量管理。
 
+**启动就退出，日志里写着「启动中止: 数据目录不可写」？**<br>
+v1.5.0 起容器以 uid 10001 运行，宿主挂载目录的属主对不上。按日志提示执行 `sudo chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config` 后重启即可，详见「[非 root 运行与升级迁移](#非-root-运行与升级迁移v150-起)」。
+
+**面板能打开，但下载/删除都报 Permission denied？**<br>
+同上，属主没迁移。也可能是 qBittorrent 仍以 root 写盘（`.env` 里 `QB_PUID=0`），改成 `10001`。`curl http://127.0.0.1:8899/api/health` 的 `writable` 字段会直接标出哪个挂载点写不了。
+
 ## 开发
 
 ```bash
 # 本地运行（Python 3.12+）
 pip install -r web/requirements.txt -r iso_download/requirements.txt
-python web/app.py                  # 开发模式
-python -m waitress web.app:app     # 或 waitress 生产模式
+# 默认 DATA_DIR=/data（容器内路径），本机跑要显式指到仓库内，否则启动自检会拒绝启动
+ISO_DATA_DIR=./data python web/app.py          # 开发模式
+ISO_DATA_DIR=./data python -m waitress web.app:app   # 或 waitress 生产模式
 
 # 测试与静态检查（提交前必跑）
 python -m unittest discover -s tests -p "test_*.py"
