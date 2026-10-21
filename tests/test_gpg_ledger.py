@@ -246,6 +246,97 @@ class TestNeverInvokedDiskAware(unittest.TestCase):
         self.assertEqual(gpg_ledger.ALLOWED_TYPES, download_linux.ALLOWED_TYPES)
 
 
+class TestStaleRecords(unittest.TestCase):
+    """v1.5.4: 账本说 pass、盘上却没这个文件 -> stale, 不该再算进"当前通过"。
+
+    生产实测 states.pass=6 而盘上只有 4 个文件通过校验: 两条 26.04.1 的 pass
+    记录指向的文件早被删/替换了。删文件不会回头改账本, 于是 pass 计数永久虚高,
+    而且越积越多 —— 看到的"通过 6 个"里有两个根本不存在。
+    """
+
+    ISO_NAME = "Fedora-Workstation-Live-43-1.6.x86_64.iso"
+    W_ENTRY = {"type": "linux", "distribution": "Fedora", "gpg_verify": "checksum",
+               "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/"
+                               "Workstation/x86_64/iso/" + ISO_NAME}
+    KEY = "linux/Fedora#" + ISO_NAME
+
+    def _config(self, d) -> Path:
+        jp = Path(d) / "distributions.json"
+        jp.write_text(json.dumps({"distributions": [self.W_ENTRY]}, ensure_ascii=False),
+                      encoding="utf-8")
+        return jp
+
+    def _summary(self, d, ok=True, msg=PASS_MSG, entry=None):
+        lp = Path(d) / "gpg_ledger.json"
+        gpg_ledger.record_from_msg(entry or self.W_ENTRY, ok, msg, path=lp)
+        return gpg_ledger.build_summary(json_path=self._config(d), path=lp, download_dir=d)
+
+    def test_deleted_file_makes_record_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "iso").mkdir()          # 目录在, 文件已被删
+            s = self._summary(d)
+            self.assertEqual(s["states"]["pass"], 1, "账本口径不变: 记录确实存在过")
+            self.assertEqual(s["stale"], [self.KEY], "文件没了必须点名, 否则 pass 虚高")
+            self.assertEqual(s["stale_by_state"]["pass"], 1)
+            self.assertEqual(s["on_disk"], 0)
+            self.assertEqual(
+                s["states"]["pass"] - s["stale_by_state"]["pass"], 0,
+                "监控口径: 当前真正在盘上的通过数应为 0")
+
+    def test_present_file_is_not_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "iso" / self.ISO_NAME
+            p.parent.mkdir(parents=True)
+            p.write_bytes(b"ISO")
+            s = self._summary(d)
+            self.assertEqual(s["stale"], [], "文件还在就不该标 stale")
+            self.assertEqual(s["on_disk"], 1)
+
+    def test_fail_record_can_also_be_stale(self):
+        """fail 一样会陈旧: 验签拒绝过的文件被删, 记录同样不该继续计数。"""
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "iso").mkdir()
+            s = self._summary(d, ok=False, msg=FAIL_MSG)
+            self.assertEqual(s["stale"], [self.KEY])
+            self.assertEqual(s["stale_by_state"]["fail"], 1)
+            self.assertEqual(s["stale_by_state"]["pass"], 0)
+
+    def test_disk_unavailable_is_not_stale(self):
+        """盘都没扫到 -> 不能断言"文件丢了"。"""
+        with tempfile.TemporaryDirectory() as d:
+            lp = Path(d) / "gpg_ledger.json"
+            gpg_ledger.record_from_msg(self.W_ENTRY, True, PASS_MSG, path=lp)
+            s = gpg_ledger.build_summary(json_path=self._config(d), path=lp,
+                                         download_dir=Path(d) / "not-mounted")
+            self.assertFalse(s["disk_available"])
+            self.assertEqual(s["stale"], [], "没扫到盘不等于文件没了")
+
+    def test_undecidable_entry_is_not_stale(self):
+        """缺 filename/download_url -> 拼不出候选路径, 无法判定, 不进 stale。"""
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "iso").mkdir()
+            s = self._summary(d, entry=ENTRY)   # ENTRY 无 download_url
+            self.assertEqual(s["stale"], [])
+            self.assertEqual(s["stale_by_state"]["pass"], 0)
+
+    def test_no_record_no_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "iso").mkdir()
+            s = gpg_ledger.build_summary(json_path=self._config(d), download_dir=d)
+            self.assertEqual(s["stale"], [])
+            self.assertEqual(s["not_downloaded"], [self.KEY],
+                             "没记录又没文件 -> 仍然只是 not_downloaded")
+
+    def test_stale_and_never_invoked_are_exclusive(self):
+        """两者互斥: 账本里有记录就不可能 never_invoked。"""
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "iso").mkdir()
+            s = self._summary(d)
+            self.assertEqual(s["never_invoked"], [])
+            self.assertEqual(s["not_downloaded"], [])
+            self.assertEqual(s["stale"], [self.KEY])
+
+
 class TestHealthExposesLedger(unittest.TestCase):
     """/api/health 必须携带 gpg_ledger 摘要(运维/巡检的单一入口)。"""
 

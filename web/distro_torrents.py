@@ -40,12 +40,13 @@ SETTINGS_JSON = Path(os.environ.get("ISO_DATA_DIR", "/data")) / "settings.json"
 
 
 def _is_http_url(url: str) -> bool:
-    """仅允许 http/https 协议, 阻断 file://、ftp:// 等 SSRF 向量。"""
-    try:
-        parsed = urllib.parse.urlparse(url)
-        return parsed.scheme in ("http", "https") and parsed.netloc != ""
-    except Exception:  # noqa: BLE001
-        return False
+    """仅允许 http/https 协议, 阻断 file://、ftp:// 等 SSRF 向量。
+
+    实现在 url_guard(与 app.py、后台 runner 共用), 这里只做转发 ——
+    本项目里曾经出现过三份各自复制的实现, 改一侧忘另一侧就会漂移。
+    """
+    import url_guard
+    return url_guard.is_http_url(url)
 
 
 def _load_settings() -> dict:
