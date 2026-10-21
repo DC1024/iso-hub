@@ -18,6 +18,9 @@
          (连 `--show-keys` 这种看起来只读的调用也算: 实测它仍会创建 pubring.kbx)
   4. 升级迁移必须能被发现: 数据目录不可写时启动**必须中止**并打印 chown 命令,
      不能"服务起来了但每次下载都在写盘处炸"。
+  5. 资源上限(v1.5.3) **必须**完整: mem_limit / cpus / pids_limit 三项齐全。
+     少任何一项都能让容器在校验大文件时挤占整台 NAS —— 同样不会报错, 只会让邻居
+     服务变慢, 属于必须靠断言锁住的那一类。
 """
 
 import contextlib
@@ -113,6 +116,25 @@ class ComposeHardeningTest(unittest.TestCase):
                 svc = self._service(name)
                 self.assertEqual(svc.get("cap_drop"), ["ALL"])
                 self.assertIn("no-new-privileges:true", svc.get("security_opt") or [])
+
+    def test_resource_limits_set_on_every_compose(self):
+        """v1.5.3: 主容器必须有资源上限。
+
+        为什么归在"加固"里: 它和 cap_drop 一样属于「删掉也不会报错, 出事才发现」的项。
+        实测这台 NAS 15GB 内存常态只剩 4GB 可用, 而校验一个 30GB ISO 是长时间的
+        CPU + IO 密集操作; 没有上限时容器能吃到整机内存, 连带同机的 PVE 备份卡死。
+        生产用 `docker run` 部署, compose 只是同构参考 —— 所以部署脚本也必须透传
+        --memory / --cpus / --pids-limit, 见 wiki/部署-快速开始.md。
+        """
+        for name in COMPOSE_FILES:
+            with self.subTest(compose=name):
+                svc = self._service(name)
+                self.assertEqual(str(svc.get("mem_limit")), "1g",
+                                 f"{name}: 缺 mem_limit, 容器可吃满宿主内存")
+                self.assertEqual(float(svc.get("cpus") or 0), 2.0,
+                                 f"{name}: 缺 cpus, 校验/下载会占满所有核心")
+                self.assertEqual(int(svc.get("pids_limit") or 0), 256,
+                                 f"{name}: 缺 pids_limit, 进程数失控时没有兜底")
 
     def test_qbittorrent_writes_as_the_same_uid(self):
         """qB 必须以 10001 落盘。
@@ -271,6 +293,60 @@ class HealthWritableTest(unittest.TestCase):
         with patch.object(app, "writable_snapshot", lambda *a, **k: {"data": False}):
             body = app.app.test_client().get("/api/health").get_json()
         self.assertTrue(body.get("ok"))
+
+
+class ContainerSmokeWorkflowTest(unittest.TestCase):
+    """CI 必须真的把容器跑起来一次。
+
+    上面所有断言看的都是**文本**: Dockerfile 里写着 USER 10001、compose 里写着
+    read_only, 断言就过。可 v1.5.0 那次事故恰恰是"声明全在、运行时没有" ——
+    `docker run` 不继承旧容器 HostConfig, CapDrop 悄悄变成空数组, 服务依然 200,
+    加固却没了。文本断言对这类问题零防御力。
+
+    所以 container-smoke.yml 不是可选项: 它是唯一一个"镜像真的能起来、且是带着
+    加固起来的"证据。这里锁的是它**不会退化** —— 要么 flag 被删, 要么换了个
+    不带加固的启动方式, 要么 python 命令在 runner 上根本不存在。
+    """
+
+    WORKFLOW = REPO_ROOT / ".github" / "workflows" / "container-smoke.yml"
+
+    def setUp(self):
+        self.assertTrue(self.WORKFLOW.is_file(),
+                        "缺 .github/workflows/container-smoke.yml —— "
+                        "没有它, 加固只剩下文本断言, 运行时退化无人发现")
+        self.text = self.WORKFLOW.read_text(encoding="utf-8")
+
+    def test_starts_a_real_container(self):
+        self.assertIn("docker build", self.text)
+        self.assertIn("docker run", self.text)
+
+    def test_uses_the_same_flags_as_production(self):
+        for flag in ("--user 10001:10001", "--read-only", "--cap-drop=ALL",
+                     "no-new-privileges"):
+            self.assertIn(flag, self.text, f"冒烟缺 {flag}, 测的就不是生产配置")
+
+    def test_applies_resource_limits(self):
+        for flag in ("--memory", "--cpus", "--pids-limit"):
+            self.assertIn(flag, self.text, f"冒烟缺 {flag}")
+
+    def test_probes_health_not_docker_healthcheck(self):
+        """轮询 HTTP 而不是 docker healthcheck。
+
+        healthcheck interval=60s, 靠它判断就绪会把 3 秒的验证拖到一分多钟,
+        而且那是**容器自己**报的健康, 不是外部观测。
+        """
+        self.assertIn("/api/health", self.text)
+
+    def test_inline_python_uses_python3_or_setup_python(self):
+        """`python - <<'PY'` 在没装 setup-python 的 job 里会 command not found。
+
+        ubuntu-latest 只有 python3。这是一类很典型的"本地能跑、CI 挂"的差异,
+        而且失败信息完全指不到根因。
+        """
+        if "setup-python" in self.text:
+            return
+        self.assertNotIn("python - <<", self.text,
+                         "内联脚本用了 python, 但 job 没有 setup-python")
 
 
 if __name__ == "__main__":

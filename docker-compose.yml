@@ -37,6 +37,20 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    # ---- 资源上限(v1.5.3) ----
+    # 为什么需要: 主容器同时承担 下载 / SHA256 校验 / GPG 验签 / qB 客户端操作,
+    # 全是 CPU 或 IO 密集型; 校验一个 30GB ISO 或 qB 做种异常时会长时间占满资源。
+    # 不设上限时, 它能吃到整台 NAS 的内存(实测宿主机 15GB, 常态仅剩 4GB 可用),
+    # 而同一台机器上还跑着 PVE 备份与监控。
+    # 取值依据(实测): 空载常驻 67MB / 0.01% CPU; 8 核 15GB 宿主。
+    #   mem_limit 1g   —— 约 15 倍余量, 同时给 PHP/Node 类邻居留出空间
+    #   cpus 2.0       —— SHA256/GPG 是单线程, 2 核足够, 且不会饿死其他服务
+    #   pids_limit 256 —— waitress 线程 + iso_runner 子进程, 正常不超过 20
+    # 这三个参数用顶层键(而非 deploy.resources), 因为本项目生产用 `docker run` 部署,
+    # compose 只是同构参考; 部署脚本必须同步透传 --memory/--cpus/--pids-limit。
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 256
     ports:
       # 左侧可改: 例如 "8099:8080" 或 "127.0.0.1:8080:8080"(仅本机访问)
       - "${ISO_HUB_PORT:-8899}:8080"
@@ -131,8 +145,14 @@ services:
   # SMB 共享 (PVE 挂载用它):  smb://<服务器IP>:1445/iso
   # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
+  #
+  # v1.5.3: 三个 sidecar 的 :latest 全部补上 digest。原因和 socket-proxy 那条一样 ——
+  # `:latest` 会在你不知情的时候换成新镜像(实测 qBittorrent 的 latest 就是当天更新),
+  # 而 sidecar 行为变更会直接影响挂载/共享结果。tag 留作可读性, digest 才是生效的那半。
+  # 升级方式: docker pull <镜像> && docker inspect --format='{{index .RepoDigests 0}}' <镜像>
+  # dperson/samba 上游自 2021-03 起就没再发版, 只有 latest 与架构 tag, 因此只能靠 digest 锁。
   samba:
-    image: dperson/samba:latest
+    image: dperson/samba:latest@sha256:66088b78a19810dd1457a8f39340e95e663c728083efa5fe7dc0d40b2478e869
     container_name: iso-hub-samba
     restart: no
     profiles: ["share"]
@@ -161,7 +181,7 @@ services:
   # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav
   # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   webdav:
-    image: hacdias/webdav:latest
+    image: hacdias/webdav:v5.17.1@sha256:c8d8c436816e51e5773525f901d829afe748d3516995a31a80de1f67fb0a02ca
     container_name: iso-hub-webdav
     restart: no
     profiles: ["share"]
@@ -180,7 +200,7 @@ services:
   # WebUI: http://<服务器IP>:8090
   # 默认不部署, 需启用 compose profile "bt":  docker compose --profile bt up -d
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
+    image: lscr.io/linuxserver/qbittorrent:latest@sha256:e887804fa9de4c60f5f0fb1f3a7e4febe40a8f69fe736f70c4e8589b1f868dab
     container_name: iso-hub-qbittorrent
     restart: no
     profiles: ["bt"]

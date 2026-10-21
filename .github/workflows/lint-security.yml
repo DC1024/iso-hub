@@ -9,7 +9,7 @@
 #   2. ruff       : ruff check . --select=F       引用类错误（F401/F821 等）
 #   3. bandit     : bandit -r ... -ll             安全扫描（Medium 及以上才失败）
 #
-# Python 版本: 3.12, 与 Dockerfile 的基础镜像 python:3.12-slim 保持一致,
+# Python 版本: 3.12, 与 Dockerfile 的基础镜像 python:3.12.15-slim 保持一致,
 #              避免因版本差异导致 CI 与运行时结果不一致。
 #
 # 工具版本固定(ruff 0.16.6 / bandit 1.9.4)以保证 CI 结果可复现。

@@ -53,6 +53,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    # 资源上限(v1.5.3): 取值依据见 docker-compose.yml 同名注释。
+    # 下载/校验/验签都是 CPU 或 IO 密集型, 不设上限会挤占同机的 PVE 备份与监控。
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 256
     ports:
       # 左侧可改: 例如 "8099:8080" 或 "127.0.0.1:8080:8080"(仅本机访问)
       - "${ISO_HUB_PORT:-8899}:8080"
@@ -148,7 +153,7 @@ services:
   # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   # 注意: 宿主机原生 Samba 已占 445/139/137/138, 这里映射到高位空闲端口避免冲突
   samba:
-    image: dperson/samba:latest
+    image: dperson/samba:latest@sha256:66088b78a19810dd1457a8f39340e95e663c728083efa5fe7dc0d40b2478e869
     container_name: iso-hub-samba
     restart: no
     profiles: ["share"]
@@ -177,7 +182,7 @@ services:
   # WebDAV (Windows/其他挂载用它):  http://<服务器IP>:8081/dav
   # 默认不部署, 需启用 compose profile "share":  docker compose --profile share up -d
   webdav:
-    image: hacdias/webdav:latest
+    image: hacdias/webdav:v5.17.1@sha256:c8d8c436816e51e5773525f901d829afe748d3516995a31a80de1f67fb0a02ca
     container_name: iso-hub-webdav
     restart: no
     profiles: ["share"]
@@ -195,7 +200,7 @@ services:
   # WebUI: http://<服务器IP>:8090
   # 默认不部署, 需启用 compose profile "bt":  docker compose --profile bt up -d
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
+    image: lscr.io/linuxserver/qbittorrent:latest@sha256:e887804fa9de4c60f5f0fb1f3a7e4febe40a8f69fe736f70c4e8589b1f868dab
     container_name: iso-hub-qbittorrent
     restart: no
     profiles: ["bt"]

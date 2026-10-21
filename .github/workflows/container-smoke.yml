@@ -1,0 +1,165 @@
+# ISO Hub - 容器运行时冒烟
+#
+# 为什么需要这个 job:
+#   test_nonroot_150.py 只对 Dockerfile / compose 的**文本**做断言(assertIn),
+#   它保证"加固声明还在", 不保证"镜像真的能起来"。v1.5.0 踩过一次: `docker run`
+#   不继承旧容器的 HostConfig, CapDrop 静默变成空数组 —— 容器起来了、服务也正常,
+#   加固没了, 直到人工 inspect 才发现。CI 全绿同样可能交付一个启动即崩的镜像。
+#
+# 这个 workflow 用生产同款参数起容器, 断言三件事:
+#   1. 服务真的能起来并返回 /api/health(同时带着非 root + 只读根 + 零能力)
+#   2. 运行时身份与资源上限真的生效, 不只是写在 compose 里
+#   3. /data 可写、/app 不可写 —— 只读根不是摆设
+#
+# 失败信息要能直接定位: 每条断言打印期望值与实际值, 失败时附容器日志。
+# 注意: 这里直接轮询 HTTP, **不**等 Docker healthcheck —— 后者 interval=60s,
+#       会把本来 3 秒的验证拖到一分多钟。
+
+name: Container Smoke
+
+on:
+  pull_request:
+  push:
+    branches: [master, beta]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Run as uid 10001 (read-only rootfs, capped resources)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IMAGE: isohub-smoke:ci
+      CONTAINER: isohub-smoke
+      DATA_DIR: /tmp/isohub-smoke-data
+      HOST_PORT: 18080
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build -t "$IMAGE" .
+
+      - name: Prepare data dir owned by 10001
+        # 绑定挂载的属主由宿主机决定, 容器内 chown 不了 —— 这正是 v1.5.0 升级
+        # 最容易漏的一步, 必须在这里如实复现, 否则测的就不是真实升级路径。
+        run: |
+          rm -rf "$DATA_DIR"
+          mkdir -p "$DATA_DIR"
+          sudo chown -R 10001:10001 "$DATA_DIR"
+
+      - name: Run container with production flags
+        run: |
+          docker run -d --name "$CONTAINER" \
+            -p "$HOST_PORT:8080" \
+            -v "$DATA_DIR:/data" \
+            --user 10001:10001 \
+            --read-only \
+            --cap-drop=ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
+            --tmpfs /home/isohub:rw,nosuid,size=8m,uid=10001,gid=10001,mode=700 \
+            --memory 1g --cpus 2 --pids-limit 256 \
+            -e ISO_HUB_REQUIRE_LOGIN=1 \
+            -e ISO_HUB_SOURCE_STRATEGY=A \
+            "$IMAGE"
+
+      - name: Wait for /api/health
+        run: |
+          for i in $(seq 1 60); do
+            if body=$(curl -fsS "http://127.0.0.1:${HOST_PORT}/api/health" 2>/dev/null); then
+              printf '%s' "$body" > /tmp/health.json
+              echo "/api/health 就绪, 耗时 ${i}s"
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" != "true" ]; then
+              echo "容器已退出, 停止等待"
+              docker logs "$CONTAINER" 2>&1 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "60 秒内 /api/health 未就绪"
+          docker logs "$CONTAINER" 2>&1 || true
+          exit 1
+
+      - name: Assert health payload
+        # 全程用 python3: 本 job 不装 setup-python, ubuntu-latest 上只有 python3。
+        run: |
+          python3 - <<'PY'
+          import json
+          h = json.load(open("/tmp/health.json"))
+          assert h.get("ok") is True, f"ok 字段不是 true: {h}"
+          st = h.get("writable_states") or {}
+          assert st.get("data") == "ok", f"/data 不可写(属主或挂载有问题): {st}"
+          # 可选卷没挂 = missing; 若变成 denied, 说明容器把"没挂"误判成"写不了",
+          # 两者处置方式完全不同(改 compose vs 改属主), 不能混。
+          assert st.get("qb_config") == "missing", f"qb_config 预期 missing: {st}"
+          print("health ok, writable_states:", json.dumps(st, ensure_ascii=False))
+          PY
+
+      - name: Assert runtime identity and writable data
+        run: |
+          uid=$(docker exec "$CONTAINER" id -u)
+          if [ "$uid" != "10001" ]; then
+            echo "运行时 uid=$uid, 期望 10001"
+            exit 1
+          fi
+          echo "运行时 uid=10001 ok"
+
+          docker exec "$CONTAINER" sh -c 'echo ok > /data/.smoke'
+          docker exec "$CONTAINER" sh -c 'test "$(cat /data/.smoke)" = ok'
+          echo "/data 可写 ok"
+
+          # 只读根必须真的挡住写入: 能写 /app 就等于攻击者可以落 webshell
+          if docker exec "$CONTAINER" sh -c 'echo x > /app/.smoke' 2>/dev/null; then
+            echo "只读根失效: /app 可写"
+            exit 1
+          fi
+          echo "/app 只读 ok"
+
+      - name: Assert hardening and resource limits
+        run: |
+          python3 - <<'PY'
+          import json, subprocess
+
+          raw = subprocess.check_output(["docker", "inspect", "isohub-smoke"], text=True)
+          c = json.loads(raw)[0]
+          cfg, hc = c["Config"], c["HostConfig"]
+
+          def check(name, actual, expected):
+              if actual != expected:
+                  raise SystemExit(f"{name}: 实际={actual!r} 期望={expected!r}")
+              print(f"  ok {name} = {actual!r}")
+
+          check("Config.User", cfg.get("User"), "10001:10001")
+          check("ReadonlyRootfs", hc.get("ReadonlyRootfs"), True)
+          check("CapDrop", hc.get("CapDrop"), ["ALL"])
+          check("Memory", hc.get("Memory"), 1024 * 1024 * 1024)
+          check("NanoCpus", hc.get("NanoCpus"), 2_000_000_000)
+          check("PidsLimit", hc.get("PidsLimit"), 256)
+
+          opts = hc.get("SecurityOpt") or []
+          if not any("no-new-privileges" in o for o in opts):
+              raise SystemExit(f"SecurityOpt 缺 no-new-privileges: {opts}")
+          print("  ok SecurityOpt 含 no-new-privileges")
+
+          tmpfs = hc.get("Tmpfs") or {}
+          for mount in ("/tmp", "/home/isohub"):
+              if mount not in tmpfs:
+                  raise SystemExit(f"缺 tmpfs {mount}: {list(tmpfs)}")
+          print("  ok tmpfs:", ", ".join(sorted(tmpfs)))
+          PY
+
+      - name: Dump container logs
+        if: failure()
+        run: docker logs "$CONTAINER" 2>&1 | tail -60 || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f "$CONTAINER" 2>/dev/null || true
+          sudo rm -rf "$DATA_DIR"
