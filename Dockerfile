@@ -6,11 +6,16 @@
 #   /data               [VOLUME] 发行版清单 distributions.json + 下载的 ISO
 #
 # ⚠️ 安全提示:
-#   1. 本镜像默认以 root 运行。新版 compose 中主容器不再挂载宿主机 /var/run/docker.sock,
-#      而是设 DOCKER_HOST=tcp://socket-proxy:2375 经 socket-proxy(tecnativa/docker-socket-proxy)
-#      按白名单访问 /containers/* 端点, 权限已收窄。仍请仅在可信内网使用。
-#   2. 生产部署务必设置 ISO_HUB_TOKEN / ISO_HUB_REQUIRE_LOGIN=1, 并修改默认共享/种子凭据。
-#   3. 旧版部署(DOCKER_HOST 未设置)会回退到 Unix socket /var/run/docker.sock, 保持向后兼容。
+#   1. v1.5.0 起本镜像以 **非 root(uid/gid 10001)** 运行, 且 compose 里配合
+#      read_only: true + tmpfs /tmp。运行期唯一可写的位置是显式挂载的卷:
+#      /data、/qb-config、/webdav-config、/samba-config 与内存盘 /tmp。
+#      ⇒ 从 1.4.x 升级必须先在宿主机把挂载目录交给 10001:
+#           chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+#      否则启动自检会立即退出并打印这条命令(不会静默半死不活)。
+#   2. 主容器不挂载宿主机 /var/run/docker.sock, 而是设 DOCKER_HOST=tcp://socket-proxy:2375
+#      经 socket-proxy 按静态白名单访问 /containers/* 端点。仍请仅在可信内网使用。
+#   3. 生产部署务必设置 ISO_HUB_TOKEN / ISO_HUB_REQUIRE_LOGIN=1, 并修改默认共享/种子凭据。
+#   4. 旧版部署(DOCKER_HOST 未设置)会回退到 Unix socket /var/run/docker.sock, 保持向后兼容。
 FROM python:3.12-slim
 
 # 国内构建可传 --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
@@ -61,13 +66,37 @@ RUN python -m pip uninstall -y pip \
               /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 \
               /root/.cache/pip
 
+# ---- 非 root 运行(v1.5.0) ----
+# 为什么是固定 uid/gid 10001 而不是 "user: nobody": 绑定挂载(bind mount)的属主由宿主机
+# 决定, 容器内看不到 /etc/passwd 也不会改变它。固定一个数值 UID 才能让「宿主机上
+# chown -R 10001:10001 ./data」与容器内进程对上号(见 README「非 root 运行与升级迁移」)。
+# 家目录只用于 HOME/GNUPGHOME: 代码里每次调 gpg 都已显式把 GNUPGHOME 指到 tempfile
+# 临时目录, 但 `gpg --show-keys` 这类"看起来只读"的调用也会在 homedir 里创建
+# pubring.kbx —— 所以 compose 里把 /home/isohub 额外挂成了内存盘(tmpfs)。
+# 镜像里先建好并 chown, 是为了 `docker run` 不带 tmpfs 时也能正常写。
+RUN groupadd -g 10001 isohub \
+    && useradd -u 10001 -g 10001 -d /home/isohub -m -s /usr/sbin/nologin isohub \
+    && mkdir -p /data /home/isohub/.gnupg \
+    && chmod 700 /home/isohub/.gnupg \
+    && chown -R 10001:10001 /data /home/isohub
+
+# HOME 必须显式设置: python:3.12-slim 里 uid 10001 没有 passwd 之外的线索,
+# 而 gpg 在 GNUPGHOME 缺失时会往 $HOME/.gnupg 写 —— 根文件系统只读时那就是硬失败。
+ENV HOME=/home/isohub \
+    GNUPGHOME=/home/isohub/.gnupg
+
 # 数据卷：distributions.json + 下载目录(linux/<发行版>/) 持久化
+# 注意: 匿名卷会继承镜像里的 /data 属主(10001); 但 compose 用的是**绑定挂载**,
+# 属主以宿主机目录为准 —— 所以升级时要 chown。
 VOLUME ["/data"]
 
 EXPOSE 8080
 
 HEALTHCHECK --interval=60s --timeout=5s --start-period=15s --retries=3 \
   CMD python -c "import urllib.request as u;u.urlopen('http://127.0.0.1:8080/api/health',timeout=4)" || exit 1
+
+# 降权放在最后: 上面所有 apt/pip/文件复制都需要 root。
+USER 10001:10001
 
 WORKDIR /app/web
 CMD ["python", "app.py"]

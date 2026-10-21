@@ -2484,7 +2484,12 @@ def index():
 @app.get("/api/health")
 def api_health():
     # P1-⑤b: 暴露 GPG 状态账本 —— never_invoked 非空 = 有发行版从未获得验签机会
-    return jsonify({"ok": True, "gpg_ledger": gpg_ledger.build_summary(JSON_FILE)})
+    # v1.5.0: 暴露各挂载点的可写性 —— 非 root 运行后, "属主配错"的典型症状就是
+    # writable.data=false。字段是诊断用, 不影响 ok(写不了盘时服务本身确实是活的,
+    # 让容器被判 unhealthy 后重启并不能解决属主问题, 只会掩盖日志)。
+    return jsonify({"ok": True,
+                    "gpg_ledger": gpg_ledger.build_summary(JSON_FILE),
+                    "writable": writable_snapshot()})
 
 
 @app.get("/api/distros")
@@ -4036,7 +4041,140 @@ def api_torrent_link_remove():
     return jsonify({"ok": True, "user_links": lst})
 
 
+# ---------------- v1.5.0: 运行期可写性自检 ----------------
+# 背景: 镜像改为非 root(uid 10001) + compose 里 read_only: true 之后, 「挂载卷属主不对」
+# 不再表现为某次写入静默失败, 而是启动就崩 —— 必须给出能照着做的诊断, 而不是让用户在
+# 一堆 PermissionError 堆栈里猜。典型场景: 从 1.4.x 升级, 宿主 ./data 仍属 root,
+# 容器内 10001 一个字节都写不了。
+#
+# 为什么不放在 import 期: CI runner 的 / 不可写、Windows 会在盘根建 C:\data, import 期
+# 致命会让所有测试模块连 import 都过不去(见上方 P0 环境守卫的注释)。
+# 因此只在 __main__ 里调用, 测试直接调函数。
+
+def _writable_targets():
+    """运行期需要可写的路径: [(key, 标签, Path, 是否必需)]。
+
+    只有数据目录是必需的 —— 其余三项对应可选 sidecar(qB/WebDAV/Samba), 老部署或
+    只用核心功能时根本没挂载, 目录不存在属于正常, 只提示不拦启动。
+    """
+    return (
+        ("data", "数据目录", DATA_DIR, True),
+        ("logs", "日志目录", LOG_DIR, False),
+        # qBittorrent.conf 落在 /qb-config/qBittorrent/ 下, 探测其上一层更稳定
+        # (子目录由 qB 自己创建, 首次启动前不存在)。
+        ("qb_config", "qBittorrent 配置", QB_CONF_PATH.parent.parent, False),
+        ("webdav_config", "WebDAV 配置", _webdav_conf_path().parent, False),
+        ("samba_config", "Samba 凭据", SHARE_CONF_DIR, False),
+    )
+
+
+def _writable_probe(d: Path) -> str:
+    """真实写一个探测文件再删掉。返回 "" 表示可写, 否则返回原因。
+
+    刻意不用 os.access(W_OK): 它只看权限位, 对「只读挂载」会给出乐观答案, 我们要回答的
+    是「这个进程此刻真的能写吗」。探测文件名带 pid, 多进程不会互相踩。
+    """
+    probe = d / f".iso-hub-write-probe-{os.getpid()}"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        return ""
+    except OSError as e:
+        return str(e.strerror or e)
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+
+
+def _check_writable_targets() -> list:
+    """探测全部目标的状态: [(key, 标签, Path, 是否必需, state, 说明)]。
+
+    state 取 ok / missing(未挂载) / denied(存在但写不了)。
+    """
+    rows = []
+    for key, label, path, required in _writable_targets():
+        if not path.exists():
+            rows.append((key, label, path, required, "missing", "目录不存在(未挂载)"))
+            continue
+        err = _writable_probe(path)
+        rows.append((key, label, path, required,
+                     "ok" if not err else "denied", err))
+    return rows
+
+
+_WRITABLE_CACHE: dict = {}
+
+
+def writable_snapshot(force: bool = False) -> dict:
+    """{key: 是否可写}, 供 /api/health 暴露。启动时算一次即缓存。
+
+    语义是"这个位置此刻能不能写", 所以**未挂载也算 False** —— 它确实写不进去。
+    区分"未挂载"和"挂了但写不了"要看启动日志, 或直接 `docker compose config` 对一下
+    挂载列表。
+
+    缓存理由: Docker HEALTHCHECK 每 60s 探一次, 没必要每次真实写盘。force=True 重探
+    (测试、或排查「运行中突然写不了」时用)。
+    """
+    if force or not _WRITABLE_CACHE:
+        _WRITABLE_CACHE.clear()
+        for key, _label, _p, _req, state, _detail in _check_writable_targets():
+            _WRITABLE_CACHE[key] = state == "ok"
+    return dict(_WRITABLE_CACHE)
+
+
+_PREFLIGHT_HINT = """
+✖ 启动中止: 数据目录不可用(未挂载, 或挂载了但写不进去)。
+
+  v1.5.0 起容器以非 root(uid/gid 10001)运行, 绑定挂载的属主由**宿主机**决定,
+  容器内改不了。首次部署/升级时请在 docker-compose.yml 所在目录执行:
+
+      chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+
+  · Podman / rootless Docker: 没有真正的 uid 0, 请改用 `userns_mode: keep-id`
+    或把宿主目录交给该用户 (见 wiki/部署-快速开始.md「非 root 运行与目录属主」)。
+  · 若目录在 NFS/SMB 挂载上: 需在服务端映射 uid 10001, 或给容器加
+    `user: "0:0"` 临时回退(会同时失去 read_only 之外的降权收益)。
+  · 若是 `docker run` 部署: 确认带上了 `-v <宿主目录>:/data`。
+"""
+
+
+def preflight_writable() -> bool:
+    """启动自检。返回 False 表示必需目录不可写, 调用方应 exit 1。
+
+    这是 v1.5.0 的 breaking change 兜底: 宁可启动失败并打印 chown 命令, 也不要
+    「服务起来了、面板能开、但每次下载都在写盘处炸」的半死不活状态。
+    """
+    rows = _check_writable_targets()
+    _WRITABLE_CACHE.clear()
+    for key, _label, _p, _req, state, _detail in rows:
+        _WRITABLE_CACHE[key] = state == "ok"
+
+    for _key, label, path, required, state, detail in rows:
+        if state == "denied":
+            mark = "✖" if required else "⚠"
+            print(f"{mark} 不可写: {label} ({path}) —— {detail}", flush=True)
+        elif state == "missing":
+            if required:
+                # 必需目录"不存在"同样是致命的: 后面每次写盘都会失败, 而且比权限问题
+                # 更难懂(典型是 docker run 忘了 -v /data)
+                print(f"✖ 缺失: {label} ({path}) —— 必需目录不存在(卷没挂上?)", flush=True)
+            else:
+                print(f"· 未挂载, 跳过: {label} ({path})", flush=True)
+
+    if any(r[3] and r[4] in ("denied", "missing") for r in rows):
+        print(_PREFLIGHT_HINT, flush=True)
+        return False
+    return True
+
+
 if __name__ == "__main__":
+    # v1.5.0: 先确认挂载卷真的写得进去, 再往下初始化。
+    # 这一步会写盘(seed_admin / 日志 / 会话落盘), 失败得早比失败得晚好诊断。
+    if not preflight_writable():
+        sys.exit(1)
     log(f"ISO Hub 启动  |  清单: {JSON_FILE}  数据目录: {DATA_DIR}")
     _sessions_load()  # 从磁盘恢复持久化会话(容器重建后 token 仍有效)
     seed_admin()  # 若设置 ISO_HUB_ADMIN_USER/PASS 则播种管理员
