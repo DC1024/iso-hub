@@ -85,6 +85,10 @@ def make_archive(data_dir: Path, out_dir: Path, files) -> Path:
         with tarfile.open(tmp, "w:gz") as tar:
             for p in files:
                 tar.add(str(p), arcname=p.name, recursive=False)
+        # 归档本身也锁 0600: 备份目录虽然已经 0700, 但 /data 整块会通过 SMB /
+        # WebDAV 共享出去, 而 settings.json 里有会话 token 与 SMTP 授权码。
+        # 目录权限挡不住"共享配置改了"这种变化, 文件权限能。
+        os.chmod(tmp, 0o600)
         os.replace(str(tmp), str(final))
     except OSError as e:
         try:
