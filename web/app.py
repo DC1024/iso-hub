@@ -850,11 +850,14 @@ def build_distros() -> dict:
 
 
 # --------------------------------------------------------------------------- network shares (SMB / WebDAV)
+# v1.3.21: 不再内置 "iso123" 这类默认口令。共享默认就是关闭的, 但默认口令的问题在
+# 于"用户直接启用、忘了改" —— 局域网里任何设备都能挂载整库 ISO。现在密码必须显式设置
+# (面板里填, 或用 SAMBA_PASS / WEBDAV_PASS 环境变量播种), 为空时拒绝启用共享。
 DEFAULT_SHARES = {
     "samba": {"enabled": False, "username": os.environ.get("SAMBA_USER", "iso"),
-              "password": os.environ.get("SAMBA_PASS", "iso123"), "port": os.environ.get("SAMBA_PORT", "1445")},
+              "password": os.environ.get("SAMBA_PASS", ""), "port": os.environ.get("SAMBA_PORT", "1445")},
     "webdav": {"enabled": False, "username": os.environ.get("WEBDAV_USER", "iso"),
-               "password": os.environ.get("WEBDAV_PASS", "iso123"), "port": os.environ.get("WEBDAV_PORT", "8081")},
+               "password": os.environ.get("WEBDAV_PASS", ""), "port": os.environ.get("WEBDAV_PORT", "8081")},
 }
 
 
@@ -1900,66 +1903,64 @@ def start_sidecar_convergence() -> threading.Thread:
     return t
 
 
-# 每个 sidecar 容器内用于凭据的环境变量名 (samba 用; webdav 已改用挂载的 webdav.yml 明文)
-CRED_ENVS = {
-    "samba": ("SAMBA_USER", "SAMBA_PASS"),
-    "webdav": ("WEBDAV_USER", "WEBDAV_PASS"),
-}
+# samba 凭据以**文件**形式下发, 不再进容器的 Cmd(argv)。
+# 目录与 samba sidecar 共享(compose 里两侧都挂 ./samba-config), 由本进程写、sidecar 只读启动时解析。
+SHARE_CONF_DIR = Path(os.environ.get("SHARE_CONF_DIR", "/samba-config"))
 
 
-def _recreate_samba(username: str, password: str) -> bool:
-    """重建 samba sidecar 以应用新凭据(凭据在 cmd 的 -u/-s 参数里, 只能重建)。
-    以旧容器配置为基准: stop->rm->create(新 cmd)->start, 保留挂载/端口/网络/标签。"""
-    # L3 修复: 凭据字符白名单校验, 拒绝会破坏 samba command 语义的字符
+def _samba_users_path() -> Path:
+    """samba 账号文件路径: 每行 `用户名;密码`。"""
+    return SHARE_CONF_DIR / "samba-users.conf"
+
+
+def _apply_samba_creds(username: str, password: str) -> bool:
+    """写 samba 账号文件并重启 sidecar, 让新凭据生效。
+
+    为什么不再 recreate 容器: 凭据以前以 `-u "user;pass"` 进 Cmd, 于是
+    `docker inspect` / `docker ps --no-trunc` / 容器内 `ps` / `docker compose config`
+    都能看到明文; 而改 Cmd 只能 create + rm, 这正好要求 socket-proxy 放行
+    `POST /containers/create` —— 该权限足以创建挂载宿主根目录的特权容器, 等于把
+    "应用被攻破"升级成"宿主机 root"。改成文件 + restart 后, proxy 只需放行
+    start/stop/restart, create/delete 可以被永久拒绝(见 docker/socket-proxy/haproxy.cfg)。
+
+    返回 False 仅表示"凭据不可用/写盘失败"; 容器未部署不算失败 —— 文件已经就位,
+    下次 `docker compose --profile share up -d` 启动 sidecar 时会自然读到。
+    """
     if not username or not password:
         return False
-    if any(ch in (username + password) for ch in (" ", ";", "\n", "\r", '"', "'", "\\", ",")):
-        log("[共享] 拒绝含特殊字符的共享凭据(用户名/密码不能含空格、分号、逗号、引号、反斜杠)")
+    # 账号文件是 `用户名;密码` 的分号分隔格式: 分号/换行会破坏字段切分, 必须拒绝
+    if any(ch in (username + password) for ch in (";", "\n", "\r")):
+        log("[共享] 拒绝含分号/换行的共享凭据(会破坏账号文件格式)")
         return False
+    path = _samba_users_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        # 先以 0600 建临时文件再原子替换: 避免"写到一半被 sidecar 读到半行密码"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("# iso-hub 自动生成: 每行 `用户名;密码`, 由 samba sidecar 启动时读取\n")
+            f.write(f"{username};{password}\n")
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except Exception as e:  # noqa: BLE001
+        log(f"[共享] 写入 samba 账号文件失败: {e!r}")
+        return False
+
     cname = SHARE_CONTAINERS["samba"]
     try:
-        r = _docker_request("GET", f"/containers/{cname}/json", None, 20)
-        if r.status != 200:
-            return False
-        spec = json.loads(r.text)
-        cfg = spec.get("Config", {})
-        host = spec.get("HostConfig", {}) or {}
-        nw = spec.get("NetworkSettings", {}) or {}
-        nets = nw.get("Networks", {}) or {}
-
-        # 安全重建 cmd: 不使用正则/字符串拆分, 直接构造已知安全的参数列表,
-        # 避免用户名/密码中的 shell/regex 元字符被二次解析。
-        samba_cmd = [
-            "-p",
-            "-u", f"{username};{password}",
-            "-s", f"iso;/srv/iso;no;no;no;{username},{password}",
-        ]
-
-        body = {
-            "Image": cfg.get("Image", "dperson/samba:latest"),
-            "Cmd": samba_cmd,
-            "Env": cfg.get("Env", []),
-            "Labels": cfg.get("Labels", {}),
-            "HostConfig": {
-                "Binds": [f"{m['Source']}:{m['Destination']}" + (":ro" if m.get("Mode") == "ro" else "")
-                          for m in spec.get("Mounts", [])],
-                "RestartPolicy": {"Name": "unless-stopped"},
-                "PortBindings": host.get("PortBindings") or {},
-            },
-            "NetworkingConfig": {"EndpointsConfig": nets},
-        }
-        _docker_request("POST", f"/containers/{cname}/stop", None, 30)
-        _docker_request("DELETE", f"/containers/{cname}?force=1", None, 20)
-        # 注意: 容器名必须在 URL query 里, 不是 body; 否则创建随机名孤儿容器
-        cr = _docker_request("POST", f"/containers/create?name={cname}", body, 30)
-        if cr.status not in (200, 201, 409):
-            log(f"[共享] samba 重建失败 HTTP {cr.status}: {cr.text[:200]}")
-            return False
-        _docker_request("POST", f"/containers/{cname}/start", None, 20)
-        return True
+        r = _docker_request("POST", f"/containers/{cname}/restart", None, 30)
+        if r.status == 404:
+            log(f"[共享] samba 侧车未部署, 凭据已写入 {path}(部署 sidecar 后生效)")
+        elif r.status not in (200, 204):
+            log(f"[共享] samba 重启失败 HTTP {r.status}, 凭据已写入 {path}(下次启动生效)")
     except Exception as e:  # noqa: BLE001
-        log(f"[共享] samba 凭据同步异常: {e!r}")
-        return False
+        # Docker 不可达不影响凭据落盘: 下次 sidecar 启动自然会用新文件
+        log(f"[共享] samba 重启异常(凭据已写入 {path}): {e!r}")
+    return True
 
 
 def _webdav_conf_path() -> Path:
@@ -2081,10 +2082,10 @@ def _apply_webdav_creds(username: str, password: str) -> bool:
 
 
 def apply_share_creds(proto: str, username: str, password: str) -> bool:
-    """把网页设置的账号/密码同步到 sidecar 容器。"""
+    """把网页设置的账号/密码同步到 sidecar 容器(两条路都是"写文件 + 重启", 不重建容器)。"""
     if proto == "webdav":
         return _apply_webdav_creds(username, password)
-    return _recreate_samba(username, password)
+    return _apply_samba_creds(username, password)
 
 
 # --------------------------------------------------------------------------- task runner (共享工作线程)
@@ -3496,6 +3497,10 @@ def api_shares_save():
         if "enabled" in p:
             # 启停 sidecar 容器; 未部署时给出命令提示(应用读不到宿主 compose 文件, 无法自动创建)
             want = bool(p["enabled"])
+            # v1.3.21: 没有密码不允许启用 —— 旧版内置 iso123, 用户常直接开共享忘了改,
+            # 等于把整库 ISO 匿名暴露给局域网。这里改成硬性前置条件。
+            if want and not str(cur.get("password") or ""):
+                return jsonify({"error": f"{proto} 尚未设置密码: 请先在上方填写密码并保存凭据, 再启用共享"}), 400
             cur["enabled"] = want
             ok = set_share(proto, want)
             if not ok:

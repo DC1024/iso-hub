@@ -7,6 +7,10 @@ data/
 data-test/
 *.iso
 *.iso.*
+# sidecar 凭据目录(明文口令/配置): 运行时由容器生成, 绝不能入库
+samba-config/
+webdav-config/
+qb-config/
 
 # ===== Python =====
 __pycache__/

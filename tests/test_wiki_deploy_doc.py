@@ -23,9 +23,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC = REPO_ROOT / "wiki" / "部署-快速开始.md"
 
-WHITELIST_ON = {"CONTAINERS": "1", "POST": "1"}
-WHITELIST_OFF = {"IMAGES": "0", "VOLUMES": "0", "NETWORKS": "0",
-                 "EXEC": "0", "SYSTEM": "0"}
+# 1.3.21 起 proxy 改用静态 allowlist(见 docker/socket-proxy/haproxy.cfg):
+# 上游 env 开关表达不了"读容器状态 + 只放行 start/stop/restart"这个组合,
+# 只能整体放行 /containers 前缀(连带 create/delete)。文档示例必须同步。
+PROXY_CONFIG = "docker/socket-proxy/haproxy.cfg"
+
+
+def _proxy_cfg_text():
+    p = REPO_ROOT / PROXY_CONFIG
+    return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
 def _env_dict(service):
@@ -86,7 +92,7 @@ class TestWikiDeployDocCompose(unittest.TestCase):
                               "文档示例 %d: 主容器缺 depends_on: socket-proxy" % i)
 
     def test_socket_proxy_service_hardened(self):
-        """socket-proxy: 存在、镜像锁 digest、白名单收窄、裸 sock 只读挂载。"""
+        """socket-proxy: 存在、镜像锁 digest、挂载静态白名单、裸 sock 只读挂载。"""
         for i, doc in enumerate(self._docs):
             with self.subTest(block=i):
                 svc = (doc.get("services") or {}).get("socket-proxy")
@@ -98,16 +104,25 @@ class TestWikiDeployDocCompose(unittest.TestCase):
                 self.assertEqual(len(image.split("@sha256:", 1)[1]), 64,
                                  "文档示例 %d: digest 长度应为 64" % i)
 
-                env = _env_dict(svc)
-                for k, v in WHITELIST_ON.items():
-                    self.assertEqual(env.get(k), v, "文档示例 %d: %s 应为 %s" % (i, k, v))
-                for k, v in WHITELIST_OFF.items():
-                    self.assertEqual(env.get(k), v, "文档示例 %d: %s 应为 %s" % (i, k, v))
+                vols = [str(v) for v in svc.get("volumes", [])]
+                self.assertTrue(any("haproxy.cfg" in v for v in vols),
+                                "文档示例 %d: 未挂载 %s" % (i, PROXY_CONFIG))
 
-                vols = [v for v in svc.get("volumes", []) if "docker.sock" in str(v)]
-                self.assertEqual(len(vols), 1, "文档示例 %d: 应恰好挂 1 个 docker.sock" % i)
-                self.assertTrue(str(vols[0]).endswith(":ro"),
+                sock = [v for v in vols if "docker.sock" in v]
+                self.assertEqual(len(sock), 1, "文档示例 %d: 应恰好挂 1 个 docker.sock" % i)
+                self.assertTrue(sock[0].endswith(":ro"),
                                 "文档示例 %d: docker.sock 须只读挂载" % i)
+
+    def test_doc_proxy_config_exists_and_denies_by_default(self):
+        """文档引用的白名单文件必须存在, 且兜底 deny、不放行 create/delete。"""
+        body = _proxy_cfg_text()
+        self.assertTrue(body, "缺少 %s" % PROXY_CONFIG)
+        self.assertIn("http-request deny", body)
+        allow = [ln.strip() for ln in body.splitlines() if ln.strip().startswith("http-request allow")]
+        self.assertTrue(allow)
+        for ln in allow:
+            self.assertNotIn("create", ln)
+            self.assertNotIn("DELETE", ln.upper())
 
     def test_doc_documents_no_socket_degradation(self):
         """文档必须说明「不挂 socket」时的降级行为(否则用户会以为面板坏了)。"""

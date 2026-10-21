@@ -4,12 +4,14 @@ ISO Hub 的 compose 里预置了**两个只读共享容器**（`samba` / `webdav
 
 ⚠️ **它们默认不启动** —— 两个服务都挂在 compose profile `share` 下，直接 `docker compose up -d` 只会起 iso-hub + socket-proxy，此时共享是「未部署」状态。**必须显式加 `--profile share` 才会部署**（见下方「怎么手动启用」）。
 
-| 协议 | 访问地址 | 默认账号/密码 |
+| 协议 | 访问地址 | 账号 / 密码 |
 |---|---|---|
-| **SMB**（PVE/Windows 挂载） | `smb://<服务器IP>:1445/iso` | `iso` / `iso123` |
-| **WebDAV** | `http://<服务器IP>:8081/dav` | `iso` / `iso123` |
+| **SMB**（PVE/Windows 挂载） | `smb://<服务器IP>:1445/iso` | `iso` / **需先在面板设置** |
+| **WebDAV** | `http://<服务器IP>:8081/dav` | `iso` / **需先在面板设置** |
 
 两个共享都**只读**，防止误改 ISO。
+
+> 1.3.21 起不再内置 `iso123` 这类默认口令：先在「设置 → 共享设置」里填写并保存密码，再打开启用开关；密码为空时会被拒绝启用。
 
 ## 怎么手动启用（必读）
 
@@ -53,7 +55,7 @@ sudo docker compose -f docker-compose.acr.yml --profile share up -d samba webdav
 | 服务器 | `<服务器IP>` |
 | 端口 | **1445** |
 | 共享名 | `iso` |
-| 用户名 / 密码 | `iso` / `iso123`（或你改过的） |
+| 用户名 / 密码 | `iso` / 你在面板里设置的那个 |
 
 挂好后即可在 PVE 里直接选该存储的 ISO 装系统。
 
@@ -61,7 +63,7 @@ sudo docker compose -f docker-compose.acr.yml --profile share up -d samba webdav
 
 - **SMB**：文件资源管理器地址栏输入 `\\<服务器IP>\iso`，或用 `net use`：
   ```bat
-  net use X: \\118.89.25.55\iso /user:iso iso123
+  net use X: \\118.89.25.55\iso /user:iso <你的密码>
   ```
   若端口不是 445 而是 1445，Windows 需用 `\\<IP>\iso` 走默认 445；高位端口 1445 更适合 PVE/支持自定义端口的客户端，或临时映射。也可在系统里添加网络位置时指定端口。
 - **WebDAV**：资源管理器「添加网络位置」，地址 `http://<IP>:8081/dav`。
@@ -71,7 +73,7 @@ sudo docker compose -f docker-compose.acr.yml --profile share up -d samba webdav
 samba / webdav 的完整定义已包含在 [快速部署](部署-快速开始) 的 docker compose 示例 和仓库根目录 `docker-compose.yml` 里，**无需单独编写**，但两者都带 `profiles: ["share"]`，按上面的命令手动启用后才会真正运行。这里仅列出关键点：
 
 - `samba`：`dperson/samba` 镜像，映射 `1445(445)/1139(139)/1137(137)/1138(138)` 端口，只读共享 `./data` 为 `/srv/iso`。
-  `command` 的 `-s "iso;/srv/iso;no;no;no;user,pass"` 意思是——共享名 `iso`、路径 `/srv/iso`、只读、仅列共享、不允许访客，可写用户为 `user`。
+  账号**不写在 compose 的 `command` 里**（否则明文会长期留在 `docker inspect` 的 `.Config.Cmd`）：主容器把凭据写到 `./samba-config/samba-users.conf`（0600），samba 容器启动时由 `docker/samba-entrypoint.sh` 读成 `-u/-s` 参数；改密码只需重启该容器，不再重建。
   环境变量 `SAMBA_UID/GROUPID`（默认 0=root，映射文件属主）。
 - `webdav`：`hacdias/webdav` 镜像，映射 `8081:6065`，只读共享 `./data` 为 `/data`。
   账号密码写在 `./webdav-config/webdav.yml`（初始来自 `.env` 的 `WEBDAV_USER/PASS`），网页端改密后主容器会重写该文件；新版 compose 把该目录同时挂给主容器（`/webdav-config`）与 webdav 容器（`/config`）。
@@ -85,12 +87,12 @@ address: 0.0.0.0
 port: 6065
 users:
   - username: iso
-    password: iso123
+    password: your-password
     scope: /data        # 共享宿主 ./data(即 ISO 目录)
     modify: false       # false=只读, 与 samba 一致; 改 true 才允许 webdav 写入
 ```
 
-- `username` / `password` 换成你自己的（也可沿用 `.env` 的 `WEBDAV_USER` / `WEBDAV_PASS` 默认值 `iso` / `iso123`）。
+- `username` / `password` 换成你自己的（也可以在 `.env` 里用 `WEBDAV_USER` / `WEBDAV_PASS` 播种；都没有时不会生成配置，webdav 容器会因缺配置文件启动失败）。
 - `scope` 是共享根目录，写 `/data` 即把宿主 `./data` 整个共享出去（与 samba 一致的只读 ISO 目录）。
 - 文件就绪后再 `docker compose -f docker-compose.acr.yml --profile share up -d webdav`；否则 webdav 容器会因找不到 `/config/webdav.yml` 而启动失败。
 

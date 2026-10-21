@@ -40,7 +40,7 @@ import download_linux  # noqa: E402
 HTML = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
 
 FLAT = "iso"           # 平铺目录名(DATA_DIR/iso)
-VERSION = "1.3.20"
+VERSION = "1.3.21"
 
 
 class StorageModeBase(unittest.TestCase):
