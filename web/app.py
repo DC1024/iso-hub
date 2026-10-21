@@ -794,6 +794,9 @@ def build_distros() -> dict:
         downloadable = any(not f.get("partial") for f in candidates)
         rel = f"{typ}/{name}/{fname}"
         unv = unverified.get(rel) or {}
+        # v1.4.0: 记录带 state —— unverified(没有证据) / mismatch(有证据但对不上)。
+        # 旧记录没有该字段, 一律按 unverified 处理(向后兼容)。
+        vstate = str(unv.get("state") or "unverified") if unv else ""
         groups[key]["entries"].append(
             {
                 "distribution": name,
@@ -813,6 +816,7 @@ def build_distros() -> dict:
                 "partial_size": partial_size,
                 # 只有"已下载"才谈得上未验签; 其余状态前端不看这两个字段
                 "unverified": status == "downloaded" and bool(unv),
+                "verify_state": vstate if status == "downloaded" else "",
                 "unverified_reason": str(unv.get("reason", ""))[:300],
             }
         )
@@ -3453,6 +3457,72 @@ def api_user_password():
 @app.post("/api/stop")
 def api_stop():
     return jsonify({"ok": stop_task()})
+
+
+@app.post("/api/verify")
+def api_verify():
+    """对已落定的文件补一次校验(不重新下载), v1.4.0。
+
+    背景: 校验源不可达但长度达标时文件会被落定(避免每周重下整包), 并在
+    download_unverified.json 留一条记录 → UI 显示「未验签」。旧版清除该标记的
+    **唯一**路径是整文件重下, 对 2~6GB 的 ISO 代价过高, 用户实际不会点。
+    这里复用 iso_runner 的 --verify-only 分支: 后台跑一次 verify_checksum_smart,
+    通过则清记录, 不符则记 state=mismatch, 仍不可达则更新原因。
+
+    为什么走 start_task 而不是同步请求: 校验要顺序读完整个文件, 机械盘上可能
+    几十秒到两分钟; 且与下载互斥能避免"读盘时文件正被 .part 改写"与 gpg keyring
+    并发写。复用同一把"单任务"锁, 语义与下载/元数据刷新一致。
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    rel = str(body.get("rel") or "").strip()
+    parts = rel.split("/")
+    if len(parts) != 3 or any(
+        (not p) or p != p.strip() or p in (".", "..") or "/" in p or "\\" in p
+        for p in parts
+    ):
+        return jsonify({"error": "非法的文件标识"}), 400
+    typ, name, fname = parts
+    if fname.lower().endswith(PART_SUFFIX):
+        return jsonify({"error": "半成品(.part)不在校验范围内, 请先完成下载"}), 409
+
+    entry = None
+    for e in load_json().get("distributions", []):
+        if e.get("type", "linux") != typ or e.get("distribution") != name:
+            continue
+        url = e.get("download_url") or ""
+        if url.rstrip("/").rsplit("/", 1)[-1] == fname:
+            entry = e
+            break
+    if entry is None:
+        return jsonify({"error": "发行版清单里找不到该文件, 请先刷新列表"}), 404
+    # 前置守卫: verify_checksum_smart 在 checksum_url 与 checksum 都为空时返回
+    # (True, "跳过校验和验证（无可用信息）") —— 那是下载路径"没信息就放行"的历史语义。
+    # 作为"重新校验"的结果会把"没配校验源"冒充成"校验通过", 必须在这里挡成 400。
+    if not (entry.get("checksum_url") or entry.get("checksum")):
+        return jsonify({
+            "error": "该发行版没有配置校验源(checksum_url / checksum), 无法校验; "
+                     "请先在自定义源里补充后再试"
+        }), 400
+
+    target = _safe_join(typ, name)
+    if target is None:
+        return jsonify({"error": f"非法的发行版类型/名称: {typ}/{name}"}), 400
+    if not (target / fname).is_file():
+        return jsonify({"error": "文件不存在或不完整, 无法校验"}), 409
+
+    cmd = [
+        PY, str(BASE_DIR / "iso_runner.py"),
+        "--json-file", str(JSON_FILE),
+        "--download-dir", str(DATA_DIR),
+        "--storage-mode", load_storage_mode(),
+        "--verify-only",
+        "--rel", rel,
+    ]
+    ok = start_task("verify", f"重新校验: {fname}", cmd)
+    if not ok:
+        return jsonify({"error": "已有任务在运行, 请稍后再试"}), 409
+    log(f"[校验] 开始重新校验: {rel}")
+    return jsonify({"ok": True, "rel": rel})
 
 
 @app.get("/api/shares")

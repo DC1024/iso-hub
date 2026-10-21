@@ -37,3 +37,11 @@ QA_REPORT_*.md
 # 本机跑测试时的 ISO_DATA_DIR 落地目录(测试会往里写 gpg_ledger.json 等),
 # 之前漏了这条 —— 跑一次测试就会多出一个待提交的空目录
 .tmp-data/
+
+# 运行期状态文件: 若有人把 ISO_DATA_DIR 指到仓库根目录(本地调试), 这些会落在根目录。
+# 它们描述的是"本机数据卷的状态", 不是源码。
+/download_unverified.json
+/download_failures.json
+/gpg_ledger.json
+/settings.json
+/distributions.json
