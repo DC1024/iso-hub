@@ -28,7 +28,6 @@ import time
 import shlex
 import base64
 import hashlib
-import urllib.parse
 import configparser
 from time import struct_time  # 供 _sched_matches 类型注解
 import threading
@@ -54,6 +53,10 @@ import torrent_categories as tcats  # noqa: E402
 # 放在独立模块而非本文件: distro_torrents.py 是同一个 settings.json 的第二个写方,
 # 它必须能 import 到同一把锁 —— 放在 app.py 会形成循环 import。
 import config_files  # noqa: E402
+
+# URL 协议白名单的唯一真源(SSRF 防线)。与后台 runner custom_repo_refresh.py
+# 共用同一份实现 —— 两边各写一份会漂移, 表现为"网页上加进去了、后台刷新被拒"。
+import url_guard  # noqa: E402
 
 # 下载完成后的邮件通知(纯模块: 不读盘不写盘, 配置由本文件读出来传进去)。
 # 单向依赖 —— notifier 绝不 import app, 否则循环。
@@ -98,12 +101,11 @@ _dl_tickets: dict = {}  # ticket -> (typ, name, fname, expire_ts)
 
 
 def _is_http_url(url: str) -> bool:
-    """仅允许 http/https 协议, 阻断 file://、ftp://、gopher:// 等 SSRF 向量。"""
-    try:
-        parsed = urllib.parse.urlparse(url)
-        return parsed.scheme in ("http", "https") and parsed.netloc != ""
-    except Exception:  # noqa: BLE001
-        return False
+    """仅允许 http/https 协议, 阻断 file://、ftp://、gopher:// 等 SSRF 向量。
+
+    实现在 url_guard 模块(与后台 runner 共用), 这里只做转发 —— 复制一份就会漂移。
+    """
+    return url_guard.is_http_url(url)
 
 
 def _flat_iso_dir() -> Path:

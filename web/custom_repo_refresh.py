@@ -31,13 +31,12 @@ def cache_key(item: dict) -> str:
 
 
 def _is_http_url(url: str) -> bool:
-    """仅允许 http/https 协议(与 app.py 保持一致的 SSRF 防线)。"""
-    from urllib.parse import urlparse
-    try:
-        parsed = urlparse(url)
-        return parsed.scheme in ("http", "https") and parsed.netloc != ""
-    except Exception:  # noqa: BLE001
-        return False
+    """仅允许 http/https 协议 —— 实现在 url_guard, 与 app.py 共用同一份。
+
+    曾经这里复制了 app.py 的实现, 改一侧忘另一侧就会漂移。现在只做转发。
+    """
+    import url_guard
+    return url_guard.is_http_url(url)
 
 
 def expand_source(item: dict) -> list:

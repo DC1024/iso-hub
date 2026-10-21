@@ -728,8 +728,8 @@ let TORR_SEL=new Set(); let PROTECTED=new Set();
 // 前端版本号: 与 git tag / 镜像 tag 同源(去掉前缀 v), 发版时两行同步递增。
 // v1.3.20 起统一为发布版本号 —— 此前前端走 "beta 2.x"、Release 走 v1.3.x, 两套编号
 // 长期并行(2.5 对 1.3.19), 徽标显示的版本和用户实际跑的镜像对不上。
-const APP_VERSION='1.5.4';
-const VERSION_TAG='1.5.4';
+const APP_VERSION='1.5.5';
+const VERSION_TAG='1.5.5';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -1338,7 +1338,7 @@ function render(d){
       const sizeCell=shownSize>0
         ?(t('local')+' '+fmt(shownSize)+((isStop||isRun)?' <span class="muted">('+t('dlPartialSize')+')</span>':''))
         :'<span class="muted">—</span>';
-      rows+=`<tr data-url="${esc(e.download_url)}" data-rel="${esc(e.rel||(g.type+'/'+g.name+'/'+e.filename))}" data-status="${S}">
+      rows+=`<tr data-url="${esc(e.download_url)}" data-rel="${esc(e.rel||(g.type+'/'+g.name+'/'+e.filename))}" data-status="${esc(S)}">
         <td><input type="checkbox" class="ck" data-url="${esc(e.download_url)}"></td>
         <td><span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${dot}</span></td>
         <td><div class="fname">${esc(e.filename)}<a target="_blank" rel="noopener" href="${esc(e.download_url)}" title="${t('openUrl')}">↗</a></div></td>
