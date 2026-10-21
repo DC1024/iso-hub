@@ -10,6 +10,7 @@ ISO Hub - 选择部分发行版/版本下载的辅助 runner。
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 import types
@@ -23,6 +24,49 @@ PART_SUFFIX = ".part"
 # 必须与 web/app.py 的 STORAGE_MODES / FLAT_ISO_DIRNAME 保持一致。
 STORAGE_MODES = ("classified", "flat")
 FLAT_DIRNAME = "iso"
+
+# v1.5.2: 下载前剩余空间预检。
+# 过去没有任何空间检查: 20GB 的 ISO 下到 95% 才 ENOSPC, 用户只得到一个坏掉的
+# .part 和一句"下载失败"。现在在写第一个字节前按 Content-Length(或 Content-Range/
+# HEAD 兜底)比一次可用空间, 不足直接拒单, 不产生半成品、不浪费带宽。
+# 预留 256 MiB: 校验和文件、日志、以及"刚好写满"导致的其他写盘失败都要留余地。
+DISK_SAFETY_MARGIN = 256 * 1024 * 1024
+
+
+class DiskSpaceShortage(Exception):
+    """目标盘剩余空间不足。区别于网络/校验失败: 换源重试毫无意义, 必须整个文件放弃。"""
+
+
+def _human_bytes(n: int) -> str:
+    """人类可读的字节数。低空间时 GiB 两位小数会显示成 0.00, 必须往下退一级。"""
+    if n >= 1024 ** 3:
+        return f"{n / 1024 ** 3:.2f} GiB"
+    if n >= 1024 ** 2:
+        return f"{n / 1024 ** 2:.0f} MiB"
+    return f"{n / 1024:.0f} KiB"
+
+
+def _check_disk_space(directory, need_bytes: int, margin: int = DISK_SAFETY_MARGIN) -> tuple:
+    """返回 (是否够用, 说明)。need_bytes<=0 表示大小未知 —— 无从判断, 放行。
+
+    刻意用 shutil.disk_usage 而不是 os.statvfs: 前者跨平台, 且拿的是**该目录所在
+    文件系统**的空闲量(目标目录与 .part 必定同盘, 这才是真正要保护的空间)。
+    """
+    if need_bytes <= 0:
+        return True, "文件大小未知, 跳过剩余空间预检"
+    try:
+        free = shutil.disk_usage(str(directory)).free
+    except OSError as e:
+        # 拿不到就不拦: 预检是"锦上添花", 不能因为某些不支持 stat 的文件系统
+        # (部分 FUSE/网络盘)把正常下载全挡死。
+        return True, f"无法获取剩余空间({e}), 跳过预检"
+    if free >= need_bytes + margin:
+        return True, ""
+    return False, (
+        f"磁盘空间不足: 还需 {_human_bytes(need_bytes)}, "
+        f"另需预留 {_human_bytes(margin)}, 当前可用 {_human_bytes(free)} "
+        f"({directory})"
+    )
 
 # P1-⑤b: GPG 验证状态账本(同目录模块; 每次验签后落账, 供 /api/health 汇总)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -605,6 +649,21 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                 resp.raise_for_status()
 
             if not already_complete:
+                # v1.5.2: 写第一个字节前确认盘放得下。total 是本次应达到的**全长**
+                # (Content-Range / Content-Length+have / HEAD 三级兜底), 已有 .part
+                # 的字节已经占着盘, 所以只需按剩余量判断。
+                _ok_space, _why_space = _check_disk_space(dist_dir, max(0, total - have))
+                if not _ok_space:
+                    try:
+                        resp.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    # 半成品保留(不删): 用户清出空间后还能续传
+                    raise DiskSpaceShortage(_why_space)
+                if _why_space:
+                    print(f"  ⚠ {_why_space}")
+
+            if not already_complete:
                 # 下载到 .part; 下载途中被 kill 也会留下 .part 供识别
                 with open(part, mode) as f:
                     for chunk in resp.iter_content(chunk_size=8192):
@@ -679,6 +738,12 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                 # 尺寸未知: 可能是截断(可续传)也可能是损坏, 无法区分 → 保守保留
                 print("  无法确认是否为传输截断, 保守保留半成品供下次续传")
                 raise TruncatedTransfer("校验失败且长度未知, 保守保留半成品")
+        except DiskSpaceShortage as e:
+            # 空间不足与源无关: 换下一个镜像照样写不下, 只会把同一份错误重试 N 遍。
+            # 直接跳出候选源循环, 让失败原因落到 download_failures.json 供 UI 展示。
+            last_err = e
+            print(f"  ✗ 磁盘空间不足, 放弃该文件(不换源): {e}")
+            break
         except TruncatedTransfer as e:
             # 传输截断: 半成品是有效前缀, **保留**供下次续传, 不当作损坏
             last_err = e
