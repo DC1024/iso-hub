@@ -133,6 +133,11 @@
   #progfill{height:8px;border-radius:6px;flex:1;background:#16253d;border:1px solid var(--tasklog-line);overflow:hidden;position:relative}
   #progfill::before{content:"";position:absolute;inset:0;width:var(--w,0%);background:linear-gradient(90deg,var(--brand),var(--brand2));border-radius:6px;transition:width .4s ease}
   #progtext{font-size:11px;color:var(--tasklog-cur);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
+  /* v1.4.0: 只校验模式没有"下载字节数"可算占比, 用不定式扫光表示"正在读盘", 避免进度条
+     长时间钉在 0% 让人以为卡死。prefers-reduced-motion 下退化为静止半透明条。 */
+  #progfill.indet::before{width:60%;background:linear-gradient(90deg,transparent,var(--brand),transparent);animation:sweep 1.3s linear infinite}
+  @keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(180%)}}
+  @media (prefers-reduced-motion: reduce){#progfill.indet::before{animation:none;width:100%;opacity:.45}}
   .muted{color:var(--ink3)}
   /* group cards */
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:14px;
@@ -717,8 +722,8 @@ let TORR_SEL=new Set(); let PROTECTED=new Set();
 // 前端版本号: 与 git tag / 镜像 tag 同源(去掉前缀 v), 发版时两行同步递增。
 // v1.3.20 起统一为发布版本号 —— 此前前端走 "beta 2.x"、Release 走 v1.3.x, 两套编号
 // 长期并行(2.5 对 1.3.19), 徽标显示的版本和用户实际跑的镜像对不上。
-const APP_VERSION='1.3.21';
-const VERSION_TAG='1.3.21';
+const APP_VERSION='1.4.0';
+const VERSION_TAG='1.4.0';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -737,6 +742,7 @@ document.addEventListener('click',e=>{
   const d=b.dataset;
   switch(d.act){
     case 'protect':toggleProtect(d.type,d.name,d.file,b);break;
+    case 'verify':verifyNow(d.rel,b);break;
     case 'dlfile':dlFile(d.type,d.name,d.file,b);break;
     case 'delone':deleteOne(d.type,d.name,d.file,b);break;
     case 'prune':prune(d.name,d.type);break;
@@ -785,7 +791,14 @@ const I18N={
   'local':{zh:'本地',en:'Local'},
   'downloaded':{zh:'已下载',en:'Downloaded'},
   'unverified':{zh:'未验签',en:'Not verified'},
-  'unverifiedTip':{zh:'文件长度与服务器声明一致，但校验源不可达或清单里没有该文件名 —— 这次落定没有任何 SHA256/GPG 证据。请检查该发行版的 checksum 配置后重新下载以完成校验。',en:'File length matches the server, but the checksum source was unreachable or the filename was missing from its manifest — this file was accepted without any SHA256/GPG evidence. Check the checksum config and re-download to verify.'},
+  'unverifiedTip':{zh:'文件长度与服务器声明一致，但校验源不可达或清单里没有该文件名 —— 这次落定没有任何 SHA256/GPG 证据。检查该发行版的 checksum 配置后，点本行 ⟳ 重新校验（只读盘，不会重新下载）。',en:'File length matches the server, but the checksum source was unreachable or the filename was missing from its manifest — this file was accepted without any SHA256/GPG evidence. Check the checksum config, then click ⟳ on this row to verify it (reads the file only, no re-download).'},
+  'verifyNow':{zh:'重新校验',en:'Verify now'},
+  'verifyRunning':{zh:'正在校验',en:'Verifying'},
+  'verifyTip':{zh:'用当前清单重新校验这份已下载的文件（只读盘，不会重新下载）',en:'Re-check this downloaded file against the current manifest (reads the file only, no re-download)'},
+  'verifyStarted':{zh:'已开始重新校验：',en:'Verification started: '},
+  'verifyMismatch':{zh:'校验不符',en:'Checksum mismatch'},
+  'verifyMismatchTip':{zh:'与当前官方清单不一致：文件可能已损坏，也可能上游用同名文件重新打包了新版本（点版本常见）。建议重新下载；校验过程不会自动删除文件。',en:'Does not match the current official manifest: the file may be corrupt, or upstream re-spun a new build under the same name (common for point releases). Re-download recommended; verification never deletes files.'},
+  'taskVerify':{zh:'校验',en:'Verify'},
   'oldVer':{zh:'旧版本',en:'Old'},
   'notDownloaded':{zh:'未下载',en:'Not Downloaded'},
   'dlFailed':{zh:'下载失败',en:'Download Failed'},
@@ -1302,8 +1315,11 @@ function render(d){
       // P2 修复: 已下载但没有任何校验证据 —— 不能显示成普通的 ✓, 否则用户
       // 以为「SHA256 自动校验」覆盖了它(校验源 404 时文件照样会落定)。
       else if(isOk&&e.unverified){
-        dot='⚠';cls='warn';label='⚠ '+t('unverified');
-        tip=t('unverifiedTip')+(e.unverified_reason?('\n'+e.unverified_reason):'');
+        // v1.4.0: 区分"没有证据"与"有证据但对不上" —— 后者更严重, 用红色而不是琥珀色
+        const mis=(e.verify_state==='mismatch');
+        dot=mis?'✕':'⚠';cls=mis?'bad':'warn';
+        label=(mis?'✕ '+t('verifyMismatch'):'⚠ '+t('unverified'));
+        tip=(mis?t('verifyMismatchTip'):t('unverifiedTip'))+(e.unverified_reason?('\n'+e.unverified_reason):'');
       }
       else if(isOk){dot='●';cls='ok';label='✓ '+t('downloaded');tip='';}
       else if(isFail){dot='✕';cls='bad';label=t('dlFailed');tip=t('dlFailedTip');}
@@ -1321,7 +1337,7 @@ function render(d){
         <td class="src-cell">${srcSelHtml(e)}</td>
         <td class="td-r"><span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${label}</span></td>
         <td class="td-r"><button class="btn-lock ${isProtected(e.filename)?'on':''}" data-act="protect" data-type="${esc(g.type)}" data-name="${esc(g.name)}" data-file="${esc(e.filename)}" title="${isProtected(e.filename)?t('unlock'):t('lock')}">${isProtected(e.filename)?'🔒':'🔓'}</button></td>
-        <td class="td-r">${e.downloadable?`<button class="btn-s btn-rowdel" data-act="dlfile" data-type="${esc(g.type)}" data-name="${esc(g.name)}" data-file="${esc(e.filename)}" title="${t('dlToLocal')}">⬇</button> `:''}${(isOk||isStop||isFail||isRun)?`<button class="btn-d btn-rowdel" data-act="delone" data-type="${esc(g.type)}" data-name="${esc(g.name)}" data-file="${esc(e.filename)}" title="${t('deleteOne')}">🗑</button>`:''}</td>
+        <td class="td-r">${(isOk&&e.unverified)?`<button class="btn-s btn-rowdel" data-act="verify" data-rel="${esc(e.rel||(g.type+'/'+g.name+'/'+e.filename))}" title="${t('verifyTip')}">⟳</button> `:''}${e.downloadable?`<button class="btn-s btn-rowdel" data-act="dlfile" data-type="${esc(g.type)}" data-name="${esc(g.name)}" data-file="${esc(e.filename)}" title="${t('dlToLocal')}">⬇</button> `:''}${(isOk||isStop||isFail||isRun)?`<button class="btn-d btn-rowdel" data-act="delone" data-type="${esc(g.type)}" data-name="${esc(g.name)}" data-file="${esc(e.filename)}" title="${t('deleteOne')}">🗑</button>`:''}</td>
       </tr>`;
     });
     let strayHtml='';
@@ -1466,6 +1482,20 @@ async function deleteOne(type,name,filename,btn){
 }
 async function stopTask(){await jpost('/api/stop')}
 
+/* ---------- 重新校验(只读盘, 不重下) ----------
+   v1.4.0: 未验签条目此前只能整文件重下才能清掉 ⚠ 标记。这里提交一个后台校验任务,
+   由 iso_runner --verify-only 对已在盘上的文件补一次 SHA256/GPG 校验。
+   结果不在这里判断: 任务结束时 poll() 会自动 loadDistros, 徽标随记录一起变。 */
+async function verifyNow(rel,btn){
+  if(!rel)return toast(t('verifyTip'),'err');
+  if(btn)btn.disabled=true;
+  const r=await jpost('/api/verify',{rel});
+  if(btn)btn.disabled=false;
+  if(r.s!==200)return toast((r.j&&r.j.error)||t('startFailed'),'err');
+  toast(t('verifyStarted')+rel.split('/').pop());
+  AFTER=0;startPoll(true);
+}
+
 /* ---------- 下载到本机(HTTP 直下) ----------
    为什么不直接把链接指到文件: 会话 token 走 X-Auth-Token **请求头**, 而浏览器点链接
    下载是顶层导航, 带不上自定义头 → 直接指过去会 401。把会话 token 塞进 URL 更糟(7 天
@@ -1532,8 +1562,14 @@ async function poll(){
   if(RUNNING&&s&&s.task){
     bar.classList.add('show');
     const tk=s.task;   // 注意: 不能叫 t, 否则遮蔽全局翻译函数 t()
-    const _tk=$('#taskkind');if(_tk)_tk.textContent='['+(tk.kind==='meta'?t('taskMeta'):tk.kind==='custom-refresh'?t('csRefresh'):t('taskDownload'))+'] '+tk.title;
-    if(tk.downloads&&tk.downloads.length){
+    const _tk=$('#taskkind');if(_tk)_tk.textContent='['+(tk.kind==='meta'?t('taskMeta'):tk.kind==='custom-refresh'?t('csRefresh'):tk.kind==='verify'?t('taskVerify'):t('taskDownload'))+'] '+tk.title;
+    if(tk.kind==='verify'){
+      // 只校验没有字节进度可算: 用不定式动画 + "…" 表达"正在读盘", 别让它看起来卡死
+      const cf=$('#curfile');if(cf)cf.textContent=t('verifyRunning')+' '+tk.title.replace(/^[^:]*:\s*/,'');
+      const pf=$('#progfill');if(pf){pf.classList.add('indet');pf.style.setProperty('--w','100%')}
+      const pt=$('#progtext');if(pt)pt.textContent='…';
+    } else if(tk.downloads&&tk.downloads.length){
+      const _pfc=$('#progfill');if(_pfc)_pfc.classList.remove('indet');
       const now=Date.now();
       // v1.3.2: 选"当前正在下载的文件"用于表头展示。
       // 旧实现取 size 最大者, 于是已下载完成的那个文件(比如 1.5GB)会永远霸占表头,
@@ -1569,7 +1605,10 @@ async function poll(){
       const pct=(total>0?Math.min(100,got/total*100):100);
       if(pf)pf.style.setProperty('--w',pct+'%');
       if(pt)pt.textContent=(total>0?Math.round(pct):100)+'%';
-    } else {const cf=$('#curfile');if(cf)cf.textContent='';}
+    } else {
+      const cf=$('#curfile');if(cf)cf.textContent='';
+      const _pfe=$('#progfill');if(_pfe)_pfe.classList.remove('indet');
+    }
     // 拉日志
     fetchLogs();
     // 任务运行期间也定期刷新镜像列表: 否则"下载停止/已下载"等状态要等任务
@@ -1584,7 +1623,7 @@ async function poll(){
   prev={};
   if(POLL){clearInterval(POLL);POLL=null}
   bar.classList.remove('show');
-  const _pf=$('#progfill');if(_pf)_pf.style.setProperty('--w','0%');
+  const _pf=$('#progfill');if(_pf){_pf.classList.remove('indet');_pf.style.setProperty('--w','0%');}
   const _pt=$('#progtext');if(_pt)_pt.textContent='0%';
   fetchLogs();
   if(wasRunning)loadDistros({silent:true});   // 任务结束,刷新本地磁盘状态

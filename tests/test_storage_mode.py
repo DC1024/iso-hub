@@ -40,7 +40,7 @@ import download_linux  # noqa: E402
 HTML = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
 
 FLAT = "iso"           # 平铺目录名(DATA_DIR/iso)
-VERSION = "1.3.21"
+VERSION = "1.4.0"
 
 
 class StorageModeBase(unittest.TestCase):
@@ -292,13 +292,15 @@ class TestFlatConstantsAgree(unittest.TestCase):
         self.assertEqual(src.count("flat=_flat_of(self)"), 2, src.count("flat=_flat_of(self)"))
 
     def test_app_passes_mode_to_both_runners(self):
-        """手动下载(iso_runner) 与 订阅同步(sync_subscriptions) 两条子进程都要带上。
+        """三处子进程都要带上模式: 手动下载(iso_runner)、订阅同步(sync_subscriptions)、
+        以及 v1.4.0 的重新校验(iso_runner --verify-only)。
 
         只按行断言(不跨行), 免得行尾 CRLF/LF 差异把测试弄红。
         """
         src = (REPO_ROOT / "web" / "app.py").read_text(encoding="utf-8")
-        self.assertEqual(src.count('"--storage-mode", load_storage_mode(),'), 2,
-                         "app.py 应同时为 iso_runner 与 sync_subscriptions 传 --storage-mode")
+        self.assertEqual(src.count('"--storage-mode", load_storage_mode(),'), 3,
+                         "app.py 应为 iso_runner / sync_subscriptions / 重新校验三条子进程"
+                         "都传 --storage-mode")
 
 
 # --------------------------------------------------------------------- F. 平铺清理安全性

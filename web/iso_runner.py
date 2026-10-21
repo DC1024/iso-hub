@@ -291,12 +291,19 @@ def _clear_failure(data_dir, typ: str, name: str, fname: str) -> None:
         pass
 
 
-def _record_unverified(data_dir, typ: str, name: str, fname: str, reason: str) -> None:
+def _record_unverified(data_dir, typ: str, name: str, fname: str, reason: str,
+                       state: str = "unverified") -> None:
     """记录"未验签落定"的文件(校验源不可达但长度达标, 文件被接受)。
 
     P2 修复(审查 2026-10): 这类文件与"校验通过"在 UI 上无法区分, 会让用户误以为
     SHA256 校验覆盖了它。写入独立记录文件, 由 build_distros() 下发给前端显示
     「未验签」。**这不是失败** —— 文件可用, 只是没有密码学证据。
+
+    state(v1.4.0):
+      * ``unverified`` —— 没有证据(下载时校验源不可达 / 本次重校验仍不可达)
+      * ``mismatch``   —— 有证据且**对不上**(重校验明确返回 False)。比 unverified 更严重:
+        文件内容与官方清单不一致, UI 用红色区分, 但同样**不自动删除**(6GB 的东西
+        交给用户决定)。旧记录没有该字段, 读取端一律按 unverified 处理。
     """
     try:
         jf = Path(data_dir) / "download_unverified.json"
@@ -309,6 +316,7 @@ def _record_unverified(data_dir, typ: str, name: str, fname: str, reason: str) -
         data[f"{typ}/{name}/{fname}"] = {
             "at": int(time.time()),
             "reason": (reason or "")[:300],
+            "state": state if state in ("unverified", "mismatch") else "unverified",
         }
         tmp = jf.with_name(jf.name + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -332,6 +340,123 @@ def _clear_unverified(data_dir, typ: str, name: str, fname: str) -> None:
             tmp.replace(jf)
     except Exception:  # noqa: BLE001
         pass
+
+
+# --------------------------------------------------------------------------- 只校验模式
+# v1.4.0: 「未验签」条目此前**只能靠整文件重下**来清标记 —— 对 2~6GB 的 ISO 代价过高,
+# 用户实际不会点,v1.3.21 加的 ⚠ 徽标于是变成永久警告。新增 --verify-only: 对**已经在盘上**
+# 的最终文件补一次校验(拉清单 + 算 SHA256 + 验 GPG 签名), 完全不下载。
+# 退出码供 app 侧与测试判定三态, 不要改成 0/1 二值:
+VERIFY_EXIT_OK = 0            # 校验通过(已清除未验签记录)
+VERIFY_EXIT_BADARG = 2        # 参数/条目/文件不合法 —— 调用方本应先挡掉
+VERIFY_EXIT_MISMATCH = 3      # 明确不符(文件损坏或上游重制), 已记 state=mismatch
+VERIFY_EXIT_UNDECIDABLE = 4   # 仍无法判定(源不可达/无校验源/校验期间文件被改)
+
+
+def _parse_rel(rel: str):
+    """把 ``<type>/<name>/<file>`` 拆成三段并拒绝一切非法形态。
+
+    与 app.py 的 rel 拼法、_safe_dist_dir 的校验规则保持一致: 只接受恰好三段、
+    每段非空且不含路径分隔符、文件名不得是 . / .. / 半成品。任何不合规返回 None。
+    """
+    parts = (rel or "").strip().split("/")
+    if len(parts) != 3:
+        return None
+    typ, name, fname = parts
+    for comp in parts:
+        if not comp or comp != comp.strip() or comp in (".", ".."):
+            return None
+        if "/" in comp or "\\" in comp:
+            return None
+    if fname.lower().endswith(PART_SUFFIX):
+        return None
+    return typ, name, fname
+
+
+def _find_entry(entries, typ: str, name: str, fname: str):
+    """按 (type, distribution, URL 里的文件名) 定位清单条目。"""
+    for e in entries:
+        if e.get("type", "linux") != typ or e.get("distribution") != name:
+            continue
+        url = e.get("download_url") or ""
+        if url.rstrip("/").rsplit("/", 1)[-1] == fname:
+            return e
+    return None
+
+
+def _run_verify_only(downloader, args) -> int:
+    """对已落定的文件补一次校验(不下载), 返回进程退出码。
+
+    三态落库与下载路径完全一致, 只是入口不同: 通过 → 清记录; 不符 → state=mismatch;
+    仍不可判定 → 更新原因与时间。**绝不删除文件** —— 判定不符时删掉 6GB 数据属于
+    不可逆操作, 是否重下由用户在 UI 上决定。
+    """
+    parsed = _parse_rel(args.rel)
+    if not parsed:
+        print(f"错误: 非法的 rel 参数: {args.rel!r}", file=sys.stderr)
+        return VERIFY_EXIT_BADARG
+    typ, name, fname = parsed
+    print(f">>> 只校验模式: {typ}/{name}/{fname}")
+
+    dist_dir = _safe_dist_dir(Path(downloader.download_dir), typ, name,
+                              flat=args.storage_mode == "flat")
+    if dist_dir is None:
+        print(f"错误: 非法的发行版类型/名称: {typ}/{name}", file=sys.stderr)
+        return VERIFY_EXIT_BADARG
+    filepath = dist_dir / fname
+    if not filepath.is_file():
+        print(f"错误: 文件不存在: {filepath}", file=sys.stderr)
+        return VERIFY_EXIT_BADARG
+
+    entry = _find_entry(downloader.distributions.get("distributions", []), typ, name, fname)
+    if entry is None:
+        print(f"错误: 清单里找不到 {typ}/{name}/{fname}", file=sys.stderr)
+        return VERIFY_EXIT_BADARG
+
+    # 关键守卫: 两个校验字段都为空时 verify_checksum_smart 会返回
+    # (True, "跳过校验和验证（无可用信息）")。那是下载路径的历史语义(没信息就放行),
+    # 但作为"重新校验"的结果, 会把"这个发行版压根没配校验源"冒充成"校验通过" ——
+    # 必须在这里拦成"无法判定", 并在记录里写明原因。
+    if not (entry.get("checksum_url") or entry.get("checksum")):
+        msg = "该发行版未配置任何校验源(checksum_url / checksum 均为空), 无从校验"
+        print(f"✗ {msg}", file=sys.stderr)
+        _record_unverified(args.download_dir, typ, name, fname, msg, "unverified")
+        return VERIFY_EXIT_UNDECIDABLE
+
+    def _sig() -> tuple[int, int]:
+        st = filepath.stat()
+        return st.st_size, st.st_mtime_ns
+
+    before = _sig()   # 校验要读完整文件(数十秒), 期间文件若被并发下载改写, 结果不可信
+    ok, msg = downloader.verify_checksum_smart(
+        filepath, entry.get("checksum_url"), entry.get("checksum"), dist=entry
+    )
+    if ok is not None:
+        # ok=None 表示"没验成", 记账会把它归到 fail; 那是"源不可达"而非"验签拒绝",
+        # 不该污染 /api/health 的账本, 故只在有明确结论时落账。
+        gpg_ledger.record_from_msg(entry, ok, msg)
+    if ok is True and "跳过校验和验证" in str(msg):
+        ok, msg = None, "该发行版未配置可用的校验源, 无从校验"
+    if _sig() != before:
+        print("✗ 校验期间文件大小/修改时间发生变化, 本次结果作废(可能有并发下载)", file=sys.stderr)
+        return VERIFY_EXIT_UNDECIDABLE
+
+    if ok is True:
+        print(f"✓ {msg}")
+        _clear_unverified(args.download_dir, typ, name, fname)
+        _clear_failure(args.download_dir, typ, name, fname)
+        print(">>> 校验通过, 已撤掉「未验签」标记")
+        return VERIFY_EXIT_OK
+    if ok is False:
+        print(f"✗ {msg}")
+        _record_unverified(args.download_dir, typ, name, fname, msg, "mismatch")
+        print(">>> 校验不符: 已标记为 mismatch(不自动删除, 请在界面上决定是否重下)")
+        return VERIFY_EXIT_MISMATCH
+
+    print(f"⚠ {msg}")
+    _record_unverified(args.download_dir, typ, name, fname, msg, "unverified")
+    print(">>> 仍无法判定: 保留「未验签」标记, 已更新原因与时间")
+    return VERIFY_EXIT_UNDECIDABLE
 
 
 def _drop_stale_part(part_path) -> None:
@@ -581,7 +706,15 @@ def main() -> None:
     parser.add_argument("--json-file", required=True, help="distributions.json path")
     parser.add_argument("--download-dir", required=True, help="ISO download dir")
     parser.add_argument(
-        "--select", required=True, help='JSON array of {"distribution","download_url"}'
+        "--select", default="", help='JSON array of {"distribution","download_url"}'
+    )
+    parser.add_argument(
+        "--verify-only", action="store_true",
+        help="只校验已落定文件(不下载), 需配合 --rel; 退出码 0/2/3/4 = 通过/参数错/不符/无法判定",
+    )
+    parser.add_argument(
+        "--rel", default="",
+        help="verify-only 的目标, 形如 linux/ubuntu/ubuntu-24.04.iso",
     )
     parser.add_argument(
         "--strategy", default="A", choices=["A", "B"],
@@ -593,7 +726,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    selected = json.loads(args.select)
     repo_dir = Path(__file__).resolve().parent.parent / "iso_download"
     sys.path.insert(0, str(repo_dir))
 
@@ -604,6 +736,15 @@ def main() -> None:
     downloader.storage_mode = args.storage_mode
     # 禁用整组清理：只做增量校验/下载，旧文件保留等用户手动清理
     downloader.cleanup_distribution_dir = lambda *a, **k: None
+
+    # v1.4.0: 只校验模式 —— 不进入下载流程, 打完一次校验就退出
+    if args.verify_only:
+        sys.exit(_run_verify_only(downloader, args))
+
+    if not args.select:
+        print("错误: 缺少 --select(下载模式)或 --verify-only(只校验模式)", file=sys.stderr)
+        sys.exit(VERIFY_EXIT_BADARG)
+    selected = json.loads(args.select)
 
     all_entries = downloader.distributions.get("distributions", [])
     pinmap = {e.get("distribution"): e.get("pin") or "" for e in selected}
