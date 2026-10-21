@@ -21,12 +21,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import requests
-except Exception:  # noqa: BLE001
+except ImportError:  # requests 缺失时退化为 urllib 实现
     requests = None  # type: ignore
 
 try:
     import http.cookiejar as _cj
-except Exception:  # noqa: BLE001
+except ImportError:  # 标准库, 理论上不会缺; 缺了则走无 cookie 的 opener
     _cj = None  # type: ignore
 
 
@@ -45,7 +45,7 @@ def qb_config() -> Dict[str, str]:
             t = data.get("qb") or data.get("qbittorrent") or {}
             if isinstance(t, dict):
                 cfg.update({str(k).lower(): str(v) for k, v in t.items() if v})
-    except Exception:  # noqa: BLE001
+    except (OSError, ValueError):  # 设置文件读不出就回退环境变量默认
         pass
     env_defaults = {
         "QB_URL": "http://qbittorrent:8080",
@@ -90,7 +90,7 @@ class QBClient:
                                           timeout=timeout, verify=self._verify)
                 try:
                     j = resp.json()
-                except Exception:  # noqa: BLE001
+                except ValueError:  # 非 JSON 响应 -> 按文本返回
                     j = resp.text
                 return resp.status_code, j
             body = urllib.parse.urlencode(data or {}).encode() if data else None
@@ -101,15 +101,15 @@ class QBClient:
                 raw = r.read()
                 try:
                     return r.status, json.loads(raw) if "json" in ct else raw.decode(errors="replace")
-                except Exception:  # noqa: BLE001
+                except ValueError:  # JSON 解析失败 -> 按文本返回
                     return r.status, raw.decode(errors="replace")
         except urllib.error.HTTPError as e:  # 4xx/5xx 也带 body, 尽量读出
             try:
                 raw = e.read().decode(errors="replace")
-            except Exception:  # noqa: BLE001
+            except OSError:  # 错误响应体读不出就算了
                 raw = ""
             return e.code, raw or f"HTTP {e.code}"
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - 边界: 契约是永不抛异常, 任何连接失败统一折成 (0, 说明)
             return 0, f"连接失败: {e}"
 
     def login(self) -> bool:

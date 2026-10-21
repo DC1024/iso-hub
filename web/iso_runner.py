@@ -71,6 +71,7 @@ def _check_disk_space(directory, need_bytes: int, margin: int = DISK_SAFETY_MARG
 # P1-⑤b: GPG 验证状态账本(同目录模块; 每次验签后落账, 供 /api/health 汇总)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpg_ledger  # noqa: E402
+import errs  # noqa: E402  # 可预期异常组合(JSON 读写/网络), 替代宽捕获
 
 
 class TruncatedTransfer(Exception):
@@ -183,7 +184,7 @@ def _http_get_with_retry(url: str, *, headers=None, stream: bool = False,
             _delay = RETRY_BACKOFF * (2 ** attempt)
             try:
                 resp.close()
-            except Exception:  # noqa: BLE001 - 关闭失败不影响重试
+            except OSError:  # 关闭失败不影响重试
                 pass
             print(f"  服务器返回 {code}, {_delay:.1f}s 后重试 ({attempt + 1}/{retries})")
             time.sleep(_delay)
@@ -200,7 +201,7 @@ def _head_target_size(url: str, headers: dict) -> int:
         r = requests.head(url, headers=headers, timeout=15, allow_redirects=True)
         if r.status_code < 400 and r.headers.get("content-length"):
             return int(r.headers["content-length"])
-    except Exception:  # noqa: BLE001
+    except errs.HTTP_REQ:  # 探测失败按 0(大小未知)处理, 不拦下载
         pass
     return 0
 
@@ -249,7 +250,7 @@ def _pick_candidates(strategy: str, entry: dict, headers: dict):
                 print(f"  [策略B] 可达 {dt*1000:.0f}ms  {u}")
             else:
                 print(f"  [策略B] HTTP {r.status_code} 跳过  {u}")
-        except Exception:  # noqa: BLE001
+        except errs.HTTP_REQ:
             print(f"  [策略B] 不可达 跳过  {u}")
     if pinned_ok:
         rest = [x for x in sorted(scored, key=lambda x: x[0])]
@@ -280,7 +281,7 @@ def _record_failure(data_dir, typ: str, name: str, fname: str, kind: str,
         if jf.exists():
             try:
                 data = json.loads(jf.read_text(encoding="utf-8")) or {}
-            except Exception:  # noqa: BLE001
+            except errs.JSON_READ:
                 data = {}
         data = _drop_expired_failures(data)
         data[f"{typ}/{name}/{fname}"] = {
@@ -293,7 +294,7 @@ def _record_failure(data_dir, typ: str, name: str, fname: str, kind: str,
         tmp = jf.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(jf)
-    except Exception:  # noqa: BLE001
+    except errs.JSON_WRITE:  # 失败记录写不进不影响下载结果本身
         pass
 
 
@@ -331,7 +332,7 @@ def _clear_failure(data_dir, typ: str, name: str, fname: str) -> None:
             tmp = jf.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(jf)
-    except Exception:  # noqa: BLE001
+    except errs.JSON_WRITE:  # 清除失败记录失败不影响下载结果本身
         pass
 
 
@@ -355,7 +356,7 @@ def _record_unverified(data_dir, typ: str, name: str, fname: str, reason: str,
         if jf.exists():
             try:
                 data = json.loads(jf.read_text(encoding="utf-8")) or {}
-            except Exception:  # noqa: BLE001
+            except errs.JSON_READ:
                 data = {}
         data[f"{typ}/{name}/{fname}"] = {
             "at": int(time.time()),
@@ -365,7 +366,7 @@ def _record_unverified(data_dir, typ: str, name: str, fname: str, reason: str,
         tmp = jf.with_name(jf.name + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(jf)
-    except Exception:  # noqa: BLE001
+    except errs.JSON_WRITE:  # 未验签记录写不进不影响落定结果本身
         pass
 
 
@@ -382,7 +383,7 @@ def _clear_unverified(data_dir, typ: str, name: str, fname: str) -> None:
             tmp = jf.with_name(jf.name + ".tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(jf)
-    except Exception:  # noqa: BLE001
+    except errs.JSON_WRITE:  # 清除未验签标记失败不影响校验结果本身
         pass
 
 
@@ -615,7 +616,7 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                       f"{part.name} 视为完整候选, 直接进入校验")
                 try:
                     resp.close()
-                except Exception:  # noqa: BLE001
+                except OSError:  # 关闭失败不影响后续校验流程
                     pass
                 # 416 保证了 have >= 远端全长, 因此以 have 为准最可靠(此时
                 # head_total 可能是上一轮的陈旧值, 反而会误判成"未下完")
@@ -656,7 +657,7 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                 if not _ok_space:
                     try:
                         resp.close()
-                    except Exception:  # noqa: BLE001
+                    except OSError:  # 关闭失败不影响空间不足的处理
                         pass
                     # 半成品保留(不删): 用户清出空间后还能续传
                     raise DiskSpaceShortage(_why_space)
@@ -756,7 +757,7 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                     part.unlink()
             except OSError:
                 pass
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - 边界: 换源重试兜底, 单源的未预期异常应 failover 到下一候选
             last_err = e
             print(f"  ✗ 候选源失败, 尝试下一源: {e}")
     if last_err is not None:

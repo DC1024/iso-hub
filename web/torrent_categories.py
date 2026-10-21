@@ -47,7 +47,7 @@ def _read_json(path: Path, default, report, label: str):
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return default
-    except Exception as e:  # noqa: BLE001  (权限/编码/JSON 语法都算配置损坏)
+    except (OSError, ValueError) as e:  # 权限/编码/JSON 语法都算配置损坏
         if report is not None:
             report.append({"file": label, "path": str(path),
                            "error": "%s: %s" % (type(e).__name__, e)})

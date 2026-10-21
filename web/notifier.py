@@ -274,11 +274,11 @@ def send(cfg: dict, subject: str, body: str, timeout=DEFAULT_TIMEOUT) -> tuple:
         if refused:
             return False, "服务器拒收: %s" % ", ".join(str(v) for v in refused)
         return True, "已发送到 %s" % ", ".join(to_list)
-    except Exception as e:  # noqa: BLE001 —— 邮件失败绝不能影响下载任务本身
+    except Exception as e:  # noqa: BLE001 - 边界: 邮件失败绝不能影响下载任务本身(smtp/ssl/解析任意失败都折成返回值)
         return False, "%s: %s" % (type(e).__name__, e)
     finally:
         if server is not None:
             try:
                 server.quit()
-            except Exception:  # noqa: BLE001 —— quit 失败不影响投递结果
+            except (OSError, smtplib.SMTPException):  # quit 失败不影响投递结果
                 pass
