@@ -163,6 +163,14 @@ def build_summary(json_path=None, path=None, download_dir=None) -> dict:
 
     states 只统计 configured 的键(与 never_invoked 同口径), 账本里残留的
     已下线配置用 ledger_total 体现。任何读取异常都吞掉, health 永远 200。
+
+    关于 stale(v1.5.4): 账本记的是"曾经发生过什么", 删文件不会回头改账本。
+    于是会出现"账本说 pass, 盘上却没有这个文件" —— states.pass 就这样虚高
+    (实测生产 pass=6 而盘上只有 4 个通过校验的文件)。这类记录单列进 stale,
+    并给出 stale_by_state 让监控能算出"当前真正在盘上的通过数":
+        states[state] - stale_by_state[state]
+    判定 stale 需要**能确定文件确实没了**: 缺文件名(无法拼候选路径)或
+    下载根目录不可访问时宁可不算, 不能把"没扫到盘"当成"文件丢了"。
     """
     jp = Path(json_path) if json_path else data_dir() / "distributions.json"
     lp = Path(path) if path else ledger_path()
@@ -184,22 +192,28 @@ def build_summary(json_path=None, path=None, download_dir=None) -> dict:
     ledger = _load(lp)
     disk_ok = root.is_dir()
     states = {s: 0 for s in STATES}
-    never_invoked, not_downloaded, on_disk = [], [], 0
+    stale_by_state = {s: 0 for s in STATES}
+    never_invoked, not_downloaded, stale, on_disk = [], [], [], 0
 
     for k, group in by_key.items():
         cands = [c for e in group for c in local_candidates(e, root)]
+        # decidable = 能拼出候选路径, 只有它为真时"文件不存在"才是结论
         if cands:
-            present, undecidable = disk_ok and any(c.is_file() for c in cands), False
+            present, decidable = disk_ok and any(c.is_file() for c in cands), True
         else:
-            present, undecidable = False, True  # 缺文件名 -> 无法判定
+            present, decidable = False, False  # 缺文件名 -> 无法判定
         if present:
             on_disk += 1
         st = (ledger.get(k) or {}).get("state")
         if st in states:
             states[st] += 1
+            if disk_ok and decidable and not present:
+                # 账本有记录, 文件却不在盘上了 -> 陈旧记录, 不该再计入"当前通过"
+                stale.append(k)
+                stale_by_state[st] += 1
         if k in ledger:
             continue
-        if undecidable or not disk_ok or present:
+        if not decidable or not disk_ok or present:
             never_invoked.append(k)
         else:
             not_downloaded.append(k)
@@ -208,6 +222,8 @@ def build_summary(json_path=None, path=None, download_dir=None) -> dict:
         "configured": len(by_key),
         "on_disk": on_disk,
         "states": states,
+        "stale": stale,
+        "stale_by_state": stale_by_state,
         "never_invoked": never_invoked,
         "not_downloaded": not_downloaded,
         "ledger_total": len(ledger),

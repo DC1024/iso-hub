@@ -18,6 +18,7 @@
 """
 import importlib.util
 import os
+import stat
 import io
 import sys
 import tarfile
@@ -116,6 +117,18 @@ class BackupTest(_Base):
         newest = max(archives, key=lambda p: p.stat().st_mtime_ns)
         with tarfile.open(str(newest), "r:gz") as tar:
             self.assertIn("settings.json", [m.name for m in tar.getmembers()])
+
+    @unittest.skipIf(os.name == "nt",
+                     "Windows 的 os.chmod 只能开关只读位, 表达不了 0600")
+    def test_archive_is_not_world_readable(self):
+        """归档里是会话 token 与 SMTP 授权码, 不能 644。
+
+        /data 整块会通过 SMB / WebDAV 共享出去, 备份目录的 0700 挡不住
+        "共享配置改了"这种变化; 文件自身的 0600 才是不依赖上下文的那道锁。
+        """
+        _run(bk, ["--data-dir", str(self.data)])
+        newest = max(self.backups(), key=lambda p: p.stat().st_mtime_ns)
+        self.assertEqual(stat.S_IMODE(newest.stat().st_mode), 0o600)
 
     def test_no_leftover_part_files(self):
         _run(bk, ["--data-dir", str(self.data)])

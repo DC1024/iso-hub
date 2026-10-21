@@ -652,6 +652,12 @@
             <input id="tm-dist" class="inp" style="width:160px" placeholder="发行版名(可选,决定落盘目录)" data-i18n="torrManualDist" data-page-node-id="ZAEZHhIHyiIxVgGYEqocDk">
             <button class="btn-p" onclick="torrAddManual()" data-i18n="torrAddBtn" data-page-node-id="imnxT2DrEnljQLw22kQmM9">➕ 添加下载</button>
           </div>
+          <!-- v1.5.4: 后端早有 /api/torrent/link/add, 前端却只有删除按钮 ——
+               列表能减不能增, 接口成了孤儿。这里补上"存为常驻源"入口。 -->
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap" data-page-node-id="Wq3NvZtKxLmRp7HbYdCs2G">
+            <span class="muted" style="font-size:11px;flex:1;min-width:200px" data-i18n="torrLinkHint" data-page-node-id="Rt8YmBnQvKzJd4WsLpXe6T">常驻源: 存的链接每次订阅刷新都会出现在种子列表里, 可指定发行版决定落盘目录</span>
+            <button class="btn-s" onclick="torrLinkAdd()" data-i18n="torrLinkSaveBtn" data-page-node-id="Mn5KjHwQzVbTp9CrXgNs3L">🔖 存为常驻源</button>
+          </div>
           <div id="torr-links" style="display:flex;flex-direction:column;gap:6px" data-page-node-id="NtYOSonWna4autWwBcltKz"></div>
         </div>
       </div>
@@ -722,8 +728,8 @@ let TORR_SEL=new Set(); let PROTECTED=new Set();
 // 前端版本号: 与 git tag / 镜像 tag 同源(去掉前缀 v), 发版时两行同步递增。
 // v1.3.20 起统一为发布版本号 —— 此前前端走 "beta 2.x"、Release 走 v1.3.x, 两套编号
 // 长期并行(2.5 对 1.3.19), 徽标显示的版本和用户实际跑的镜像对不上。
-const APP_VERSION='1.5.3';
-const VERSION_TAG='1.5.3';
+const APP_VERSION='1.5.4';
+const VERSION_TAG='1.5.4';
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -893,8 +899,6 @@ const I18N={
   'loginUser':{zh:'用户名:',en:'Username:'},
   'loginPass':{zh:'密码:',en:'Password:'},
   'loginFailed':{zh:'登录失败',en:'Login failed'},
-  'loginNoUser':{zh:'用户名不存在',en:'Username does not exist'},
-  'loginBadPass':{zh:'密码错误',en:'Incorrect password'},
   'pleaseLogin':{zh:'请先登录后再操作',en:'Please log in first'},
   'loginGateTitle':{zh:'🔐 需要登录',en:'🔐 Login required'},
   'loginGateSub':{zh:'请输入管理员账号以继续访问',en:'Enter admin credentials to continue'},
@@ -1139,6 +1143,11 @@ const I18N={
   'torrName':{zh:'名称',en:'Name'},
   'torrSize':{zh:'大小',en:'Size'},
   'torrLinkEmpty':{zh:'暂无手动添加的链接',en:'No manual links yet'},
+  'torrLinkSaveBtn':{zh:'🔖 存为常驻源',en:'🔖 Save as Source'},
+  'torrLinkHint':{zh:'常驻源: 存的链接每次订阅刷新都会出现在种子列表里, 可指定发行版决定落盘目录',en:'Saved links reappear in the torrent list on every refresh; distro sets the save dir'},
+  'torrLinkSaveOk':{zh:'已存为常驻源',en:'Saved as source'},
+  'torrLinkSaveFail':{zh:'保存失败',en:'Save failed'},
+  'torrLinkNeedUrl':{zh:'请输入链接',en:'Enter a link'},
   'torrCatTab':{zh:'🏷️ 分类管理',en:'🏷️ Categories'},
   'torrCatTitle':{zh:'🏷️ 种子分类',en:'🏷️ Torrent Categories'},
   'torrCatPresetTitle':{zh:'预置分类（只能禁用，不能删除）',en:'Built-in categories (disable only)'},
@@ -1895,7 +1904,9 @@ function renderTorrLinks(list){
   const box=document.getElementById('torr-links');
   const cnt=document.getElementById('torr-link-count'); if(cnt)cnt.textContent=list.length;
   if(box)box.innerHTML=!list.length?('<div class="empty" style="padding:10px 0">'+t('torrLinkEmpty')+'</div>')
-    :list.map(x=>'<div class="prot-row" style="padding:6px 0"><span class="pn" style="font-size:12px;word-break:break-all;flex:1;min-width:0">'+esc(x.url)+'</span>'
+    :list.map(x=>'<div class="prot-row" style="padding:6px 0">'
+      +(x.distro?'<span class="chip" style="font-size:10px;flex:none">'+esc(x.distro)+'</span>':'')
+      +'<span class="pn" style="font-size:12px;word-break:break-all;flex:1;min-width:0">'+esc(x.url)+'</span>'
       +'<button class="btn-s" style="padding:3px 10px;font-size:11px" data-act="linkrm" data-url="'+esc(x.url)+'">✖</button></div>').join('');
 }
 /* ---------- 种子分类(后端算, 前端只渲染) ----------
@@ -2237,6 +2248,16 @@ async function torrAddRss(){
 }
 async function torrRssRemove(url){await jpost('/api/torrent/rss/remove',{url});loadTorrentSources();}
 async function torrLinkRemove(url){await jpost('/api/torrent/link/remove',{url});loadTorrentSources();}
+/* v1.5.4: 补上"存为常驻源" —— 与 torrAddManual 的区别要说清:
+   后者是**立刻**把链接丢给 qBittorrent 下载; 这里是**持久化**成种子源,
+   之后每次订阅刷新它都会出现在种子列表里, 还能带发行版决定落盘目录。 */
+async function torrLinkAdd(){
+  const url=($('#tm-url').value||'').trim(); if(!url)return toast(t('torrLinkNeedUrl'),'err');
+  const distro=($('#tm-dist').value||'').trim();
+  const r=await jpost('/api/torrent/link/add',{url:url,distro:distro});
+  toast(r.j&&r.j.ok?t('torrLinkSaveOk'):((r.j&&r.j.error)||t('torrLinkSaveFail')),!(r.j&&r.j.ok));
+  if(r.j&&r.j.ok){$('#tm-url').value='';$('#tm-dist').value='';loadTorrentSources();}
+}
 async function torrDel(hash,files){
   // L10 修复: 带删文件时二次确认, 避免误删已下载 ISO
   if(files && !confirm(t('torrDelFilesConfirm')||'删除种子并删除已下载文件?'))return;
@@ -2907,16 +2928,15 @@ async function checkLoginGate(){
   }catch(e){}
   openGate();return false;
 }
-/* 把登录接口的错误转成精确提示: 用户名不存在 / 密码错误, 而不是笼统的"登录失败"。
-   优先用后端返回的 code 字段; 兼容只有 error 文案的旧后端。 */
+/* v1.5.4: 登录失败一律统一话术 —— 不再区分"用户名不存在"与"密码错误"。
+   精确区分等于把登录接口变成一台账号枚举机: 攻击者拿一个字典挨个试就能
+   列出本站所有账号, 之后再专心撞这一两个的口令。后端已同步改成
+   code=bad_credentials; 这里是兼容旧后端(<1.5.3)仍返回精确文案的情况。 */
 function loginErrMsg(j){
-  const code=j&&j.code;
-  if(code==='no_user')return t('loginNoUser');
-  if(code==='bad_pass')return t('loginBadPass');
   const m=(j&&j.error)||'';
-  if(m.includes('用户名不存在'))return t('loginNoUser');
-  if(m.includes('密码错误'))return t('loginBadPass');
-  return m||t('loginFailed');
+  if(!m)return t('loginFailed');
+  if(m.includes('用户名不存在')||m.includes('密码错误'))return t('wrongCred');
+  return m;
 }
 async function gateLogin(){
   const u=$('#gate-user').value.trim(),p=$('#gate-pass').value;

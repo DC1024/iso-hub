@@ -1282,6 +1282,9 @@ def _sessions_persist() -> None:
 # PBKDF2_ITERATIONS_LEGACY 是 v1.3.18 及以前写死的值, 仅用于验证存量哈希。
 PBKDF2_ITERATIONS = 600_000
 PBKDF2_ITERATIONS_LEGACY = 120_000
+# 用户不存在时用的假盐: 只为把 KDF 跑满同等迭代数, 不参与任何校验。
+# 固定值即可 —— 它的唯一作用是让"查无此人"这条分支别快得刺眼。
+DUMMY_SALT = "0" * 32
 
 
 def _sessions_load() -> None:
@@ -1343,12 +1346,13 @@ def _check_login(username: str, password: str) -> bool:
 def _verify_login(username: str, password: str) -> str:
     """校验登录, 返回精确结果: 'ok' | 'no_user' | 'bad_pass'。
 
-    分开返回两种失败原因, 让前端能提示"用户名不存在"还是"密码错误"。
-    注意: 这会暴露账号是否存在(用户枚举)。本应用是自建私有面板、公网通常还有
-    反代/防火墙兜底, 可读性优先; 如后续要抗枚举, 可改为统一话术+恒定耗时。
+    v1.5.4: 精确结果**只用于内部日志**, 不再回给客户端(见 /api/user/login)。
+    用户不存在时也跑一遍同等迭代数的 KDF —— 否则这个分支会明显更快,
+    响应时间本身就成了另一条枚举信道, 统一话术只是障眼法。
     """
     u = load_users().get(username)
     if not u:
+        _hash_pw(password, DUMMY_SALT, PBKDF2_ITERATIONS)
         return "no_user"
     iters = _as_int(u.get("iterations"), PBKDF2_ITERATIONS_LEGACY, 1)
     ok = secrets.compare_digest(_hash_pw(password, u.get("salt", ""), iters),
@@ -3432,12 +3436,11 @@ def api_user_login():
         _login_note_ok(ip)
         return jsonify({"ok": True, "token": _issue_token(u), "username": u})
     v = _verify_login(u, p)
-    if v == "no_user":
+    if v != "ok":
         _login_note_fail(ip)
-        return jsonify({"error": "用户名不存在", "code": "no_user"}), 401
-    if v == "bad_pass":
-        _login_note_fail(ip)
-        return jsonify({"error": "密码错误", "code": "bad_pass"}), 401
+        # 精确原因只进日志: 回给客户端的是同一句话, 否则登录接口就是一台账号枚举机
+        log(f"[用户] 登录失败({v}): {u} @ {ip}")
+        return jsonify({"error": "用户名或密码错误", "code": "bad_credentials"}), 401
     _login_note_ok(ip)
     return jsonify({"ok": True, "token": _issue_token(u), "username": u})
 
