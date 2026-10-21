@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import hashlib
+import shutil
 import subprocess
 import requests
 import argparse
@@ -40,6 +41,39 @@ FLAT_DIRNAME = "iso"
 RETRY_TOTAL = 3
 RETRY_BACKOFF = 1.5
 RETRY_STATUSES = (429, 500, 502, 503, 504)
+
+# v1.5.2: 下载前剩余空间预检(与 web/iso_runner.py 的同名策略保持一致)。
+# 旧行为: 20GB ISO 下到 95% 才 ENOSPC, 只留一个坏掉的 .part。现在写第一个字节前
+# 就按 Content-Length/Content-Range 比一次可用空间, 不足直接拒单。
+# 预留 256 MiB 给校验和文件、日志与"刚好写满"导致的其他写盘失败。
+DISK_SAFETY_MARGIN = 256 * 1024 * 1024
+
+
+def _human_bytes(n: int) -> str:
+    """人类可读的字节数。低空间时 GiB 两位小数会显示成 0.00, 必须往下退一级。"""
+    if n >= 1024 ** 3:
+        return f"{n / 1024 ** 3:.2f} GiB"
+    if n >= 1024 ** 2:
+        return f"{n / 1024 ** 2:.0f} MiB"
+    return f"{n / 1024:.0f} KiB"
+
+
+def check_free_space(directory, need_bytes: int, margin: int = DISK_SAFETY_MARGIN) -> tuple:
+    """返回 (是否够用, 说明)。need_bytes<=0 表示大小未知 —— 无从判断, 放行。"""
+    if need_bytes <= 0:
+        return True, "文件大小未知, 跳过剩余空间预检"
+    try:
+        free = shutil.disk_usage(str(directory)).free
+    except OSError as e:
+        # 部分 FUSE/网络盘不支持 statvfs, 不能因此把正常下载全挡死
+        return True, f"无法获取剩余空间({e}), 跳过预检"
+    if free >= need_bytes + margin:
+        return True, ""
+    return False, (
+        f"磁盘空间不足: 还需 {_human_bytes(need_bytes)}, "
+        f"另需预留 {_human_bytes(margin)}, 当前可用 {_human_bytes(free)} "
+        f"({directory})"
+    )
 
 
 def http_get_with_retry(url: str, *, headers=None, stream: bool = False,
@@ -830,6 +864,22 @@ class LinuxDistributionDownloader:
                 if not _already_complete:
                     # 416 是"已完成"信号而非错误, 上面已 close, 不能再 raise_for_status
                     response.raise_for_status()
+
+                if not _already_complete:
+                    # v1.5.2: 写盘前确认放得下, 不足则整条跳过(不产生 .part)。
+                    # 416 时字节已经全在盘上, 无需再判。GET 没给 Content-Length 时
+                    # 用 HEAD 兜底再判一次(判不了才放行, 与大小校验同一套兜底思路)。
+                    if not total_size:
+                        total_size = self._head_content_length(target_dist["download_url"])
+                    _ok_space, _why_space = check_free_space(
+                        dist_dir, max(0, total_size - _have))
+                    if not _ok_space:
+                        response.close()
+                        print(f"\n✗ 下载中止: {_why_space}")
+                        print("  清出空间后重跑即可续传(.part 未被删除)")
+                        continue
+                    if _why_space:
+                        print(f"⚠ {_why_space}")
 
                 # 使用tqdm创建进度条(416 时跳过传输, 直接落校验)
                 if not _already_complete:

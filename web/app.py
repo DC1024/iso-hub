@@ -1977,6 +1977,22 @@ def _webdav_conf_path() -> Path:
     return Path(os.environ.get("WEBDAV_CONF") or str(DATA_DIR / "webdav.yml"))
 
 
+def _webdav_conf_dir() -> "Path | None":
+    """WebDAV 配置的**独立挂载目录**; 没配置独立挂载点返回 None。
+
+    v1.5.2 修复: 可写性探针曾直接用 `_webdav_conf_path().parent` —— WEBDAV_CONF 未设时
+    它等于 DATA_DIR, 而 /data 是必探且必然可写的, 于是 /api/health 里的
+    webdav_config 恒为 true。生产实测: 容器没挂 /webdav-config、webdav.enabled=false,
+    这个字段依然报 true, 纯假阳性。
+
+    现在只有 WEBDAV_CONF 显式指向独立挂载点时才认为"已配置"。未配置记
+    not_configured —— 旧版单文件模式(config 落在 /data 里)不再冒充"WebDAV 配置可写",
+    因为它与数据目录是同一个挂载点, 单独报一项没有任何诊断价值。
+    """
+    conf = (os.environ.get("WEBDAV_CONF") or "").strip()
+    return Path(conf).parent if conf else None
+
+
 # webdav.yml 初始模板。
 # 仓库根目录的 webdav.yml 只是一份示例, 部署时并不会自动落到宿主机的 ./webdav-config/,
 # 而 compose 里 webdav 容器以 `-c /config/webdav.yml` 启动 —— 目录为空时容器读不到配置,
@@ -2488,9 +2504,12 @@ def api_health():
     # v1.5.0: 暴露各挂载点的可写性 —— 非 root 运行后, "属主配错"的典型症状就是
     # writable.data=false。字段是诊断用, 不影响 ok(写不了盘时服务本身确实是活的,
     # 让容器被判 unhealthy 后重启并不能解决属主问题, 只会掩盖日志)。
+    # v1.5.2: writable 是布尔视图, writable_states 给出 ok/missing/denied/not_configured,
+    # 用于区分"卷没挂"与"属主不对" —— 两者的处置方式完全不同。
     return jsonify({"ok": True,
                     "gpg_ledger": gpg_ledger.build_summary(JSON_FILE, download_dir=DATA_DIR),
-                    "writable": writable_snapshot()})
+                    "writable": writable_snapshot(),
+                    "writable_states": writable_states()})
 
 
 @app.get("/api/distros")
@@ -4053,10 +4072,13 @@ def api_torrent_link_remove():
 # 因此只在 __main__ 里调用, 测试直接调函数。
 
 def _writable_targets():
-    """运行期需要可写的路径: [(key, 标签, Path, 是否必需)]。
+    """运行期需要可写的路径: [(key, 标签, Path|None, 是否必需)]。
 
     只有数据目录是必需的 —— 其余三项对应可选 sidecar(qB/WebDAV/Samba), 老部署或
     只用核心功能时根本没挂载, 目录不存在属于正常, 只提示不拦启动。
+
+    webdav 项可能是 None: 没有配置 WEBDAV_CONF 就没有独立的配置挂载点(见
+    _webdav_conf_dir), 此时状态记 not_configured, 而不是去探 /data 报一个恒真的值。
     """
     return (
         ("data", "数据目录", DATA_DIR, True),
@@ -4064,7 +4086,7 @@ def _writable_targets():
         # qBittorrent.conf 落在 /qb-config/qBittorrent/ 下, 探测其上一层更稳定
         # (子目录由 qB 自己创建, 首次启动前不存在)。
         ("qb_config", "qBittorrent 配置", QB_CONF_PATH.parent.parent, False),
-        ("webdav_config", "WebDAV 配置", _webdav_conf_path().parent, False),
+        ("webdav_config", "WebDAV 配置", _webdav_conf_dir(), False),
         ("samba_config", "Samba 凭据", SHARE_CONF_DIR, False),
     )
 
@@ -4091,12 +4113,17 @@ def _writable_probe(d: Path) -> str:
 
 
 def _check_writable_targets() -> list:
-    """探测全部目标的状态: [(key, 标签, Path, 是否必需, state, 说明)]。
+    """探测全部目标的状态: [(key, 标签, Path|None, 是否必需, state, 说明)]。
 
-    state 取 ok / missing(未挂载) / denied(存在但写不了)。
+    state 取 ok / missing(未挂载) / denied(存在但写不了) / not_configured(没有独立挂载点)。
     """
     rows = []
     for key, label, path, required in _writable_targets():
+        if path is None:
+            # 没有独立挂载点 ≠ 写不了: 这类目标压根不该被当成"运行期依赖"来告警
+            rows.append((key, label, None, required, "not_configured",
+                         "未配置独立挂载点(未设置 WEBDAV_CONF)"))
+            continue
         if not path.exists():
             rows.append((key, label, path, required, "missing", "目录不存在(未挂载)"))
             continue
@@ -4106,24 +4133,38 @@ def _check_writable_targets() -> list:
     return rows
 
 
+# key -> state(ok/missing/denied/not_configured), 启动时算一次即缓存
 _WRITABLE_CACHE: dict = {}
+
+
+def _writable_states(force: bool = False) -> dict:
+    if force or not _WRITABLE_CACHE:
+        _WRITABLE_CACHE.clear()
+        for key, _label, _p, _req, state, _detail in _check_writable_targets():
+            _WRITABLE_CACHE[key] = state
+    return dict(_WRITABLE_CACHE)
 
 
 def writable_snapshot(force: bool = False) -> dict:
     """{key: 是否可写}, 供 /api/health 暴露。启动时算一次即缓存。
 
-    语义是"这个位置此刻能不能写", 所以**未挂载也算 False** —— 它确实写不进去。
-    区分"未挂载"和"挂了但写不了"要看启动日志, 或直接 `docker compose config` 对一下
-    挂载列表。
+    语义是"这个位置此刻能不能写", 所以**未挂载、未配置也算 False** —— 它确实写不进去。
+    想知道具体是"没挂载"还是"挂了但写不了", 看 writable_states 或启动日志。
 
     缓存理由: Docker HEALTHCHECK 每 60s 探一次, 没必要每次真实写盘。force=True 重探
     (测试、或排查「运行中突然写不了」时用)。
     """
-    if force or not _WRITABLE_CACHE:
-        _WRITABLE_CACHE.clear()
-        for key, _label, _p, _req, state, _detail in _check_writable_targets():
-            _WRITABLE_CACHE[key] = state == "ok"
-    return dict(_WRITABLE_CACHE)
+    return {k: v == "ok" for k, v in _writable_states(force).items()}
+
+
+def writable_states(force: bool = False) -> dict:
+    """{key: ok|missing|denied|not_configured} —— writable 布尔版的展开形式。
+
+    v1.5.2: 布尔值无法区分"卷没挂"与"挂了但属主不对", 而这两种情况的处置完全不同
+    (前者改 compose, 后者 chown)。文档此前声称这里会给出 missing, 但接口只输出 bool,
+    属于文档与实现脱节; 现在补上真正的三态(加 not_configured 共四态)。
+    """
+    return _writable_states(force)
 
 
 _PREFLIGHT_HINT = """
@@ -4151,7 +4192,7 @@ def preflight_writable() -> bool:
     rows = _check_writable_targets()
     _WRITABLE_CACHE.clear()
     for key, _label, _p, _req, state, _detail in rows:
-        _WRITABLE_CACHE[key] = state == "ok"
+        _WRITABLE_CACHE[key] = state
 
     for _key, label, path, required, state, detail in rows:
         if state == "denied":
@@ -4164,6 +4205,8 @@ def preflight_writable() -> bool:
                 print(f"✖ 缺失: {label} ({path}) —— 必需目录不存在(卷没挂上?)", flush=True)
             else:
                 print(f"· 未挂载, 跳过: {label} ({path})", flush=True)
+        elif state == "not_configured":
+            print(f"· 未配置, 跳过: {label}", flush=True)
 
     if any(r[3] and r[4] in ("denied", "missing") for r in rows):
         print(_PREFLIGHT_HINT, flush=True)
