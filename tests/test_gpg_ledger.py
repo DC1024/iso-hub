@@ -135,6 +135,117 @@ class TestLedgerSummary(unittest.TestCase):
             self.assertEqual(s["never_invoked"], [])
 
 
+class TestNeverInvokedDiskAware(unittest.TestCase):
+    """v1.5.1: never_invoked 只点名「盘上有文件却没验过」的条目。
+
+    生产实测: 清单里 5 条 gpg_verify, 硬盘上只有 1 个 ISO, 另外 4 条曾被
+    永久报成 never_invoked —— 那不是缺陷, 是还没下载。
+    """
+
+    ISO_NAME = "Fedora-Workstation-Live-43-1.6.x86_64.iso"
+    W_ENTRY = {"type": "linux", "distribution": "Fedora", "gpg_verify": "checksum",
+               "download_url": "https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/43/"
+                               "Workstation/x86_64/iso/" + ISO_NAME}
+    KEY = "linux/Fedora#" + ISO_NAME
+
+    def _config(self, d, entries=None) -> Path:
+        jp = Path(d) / "distributions.json"
+        jp.write_text(json.dumps({"distributions": entries or [self.W_ENTRY]},
+                                 ensure_ascii=False), encoding="utf-8")
+        return jp
+
+    def _touch(self, p: Path) -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"ISO")
+
+    def test_filename_from_url_strips_query(self):
+        e = dict(self.W_ENTRY, download_url=self.W_ENTRY["download_url"] + "?mirror=a")
+        self.assertEqual(gpg_ledger.entry_filename(e), self.ISO_NAME,
+                         "query 不得混进文件名, 否则磁盘永远匹配不上")
+
+    def test_flat_file_present_is_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._touch(Path(d) / "iso" / self.ISO_NAME)
+            s = gpg_ledger.build_summary(json_path=self._config(d), download_dir=d)
+            self.assertEqual(s["on_disk"], 1)
+            self.assertEqual(s["never_invoked"], [self.KEY])
+            self.assertEqual(s["not_downloaded"], [])
+            self.assertTrue(s["disk_available"])
+
+    def test_classified_file_present_is_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._touch(Path(d) / "linux" / "Fedora" / self.ISO_NAME)
+            s = gpg_ledger.build_summary(json_path=self._config(d), download_dir=d)
+            self.assertEqual(s["on_disk"], 1, "classified 模式也必须识别")
+            self.assertEqual(s["never_invoked"], [self.KEY])
+
+    def test_missing_file_goes_to_not_downloaded(self):
+        """核心回归: 清单里有、盘上没有 -> 不算 never_invoked。"""
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "iso").mkdir()
+            s = gpg_ledger.build_summary(json_path=self._config(d), download_dir=d)
+            self.assertEqual(s["never_invoked"], [], "没下载的条目不得再冒充'验签失败'")
+            self.assertEqual(s["not_downloaded"], [self.KEY])
+            self.assertEqual(s["on_disk"], 0)
+
+    def test_disk_unavailable_is_conservative(self):
+        """下载根目录不存在 -> 保守报警, 不允许把"没扫到盘"当成"一切正常"。"""
+        with tempfile.TemporaryDirectory() as d:
+            s = gpg_ledger.build_summary(json_path=self._config(d),
+                                         download_dir=Path(d) / "not-mounted")
+            self.assertFalse(s["disk_available"])
+            self.assertEqual(s["never_invoked"], [self.KEY])
+            self.assertEqual(s["not_downloaded"], [])
+
+    def test_entry_without_url_is_undecidable(self):
+        """缺 download_url/filename 的条目无法判定 -> 保守计入 never_invoked。"""
+        with tempfile.TemporaryDirectory() as d:
+            jp = Path(d) / "distributions.json"
+            jp.write_text(json.dumps({"distributions": [ENTRY]}), encoding="utf-8")
+            s = gpg_ledger.build_summary(json_path=jp, download_dir=d)
+            self.assertEqual(s["on_disk"], 0)
+            self.assertEqual(s["never_invoked"], [ENTRY_KEY])
+
+    def test_downloaded_and_recorded_is_clean(self):
+        """盘上有、账本也有 -> 什么都不该报。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._touch(Path(d) / "iso" / self.ISO_NAME)
+            lp = Path(d) / "gpg_ledger.json"
+            gpg_ledger.record_from_msg(self.W_ENTRY, True, PASS_MSG, path=lp)
+            s = gpg_ledger.build_summary(json_path=self._config(d), path=lp, download_dir=d)
+            self.assertEqual(s["never_invoked"], [])
+            self.assertEqual(s["not_downloaded"], [])
+            self.assertEqual(s["states"]["pass"], 1)
+            self.assertEqual(s["on_disk"], 1)
+
+    def test_states_only_count_configured(self):
+        """账本里残留的已下线配置: 不进 states, 但 ledger_total 要看得见。"""
+        with tempfile.TemporaryDirectory() as d:
+            lp = Path(d) / "gpg_ledger.json"
+            lp.write_text(json.dumps({"linux/old@1": {"state": "pass", "ts": 1}}),
+                          encoding="utf-8")
+            s = gpg_ledger.build_summary(json_path=self._config(d), path=lp, download_dir=d)
+            self.assertEqual(s["states"]["pass"], 0, "states 必须与 configured 同口径")
+            self.assertEqual(s["ledger_total"], 1)
+
+    def test_duplicate_keys_collapse(self):
+        """同 key 的多条 entry(镜像组预设)不得让 configured/never_invoked 重复。"""
+        with tempfile.TemporaryDirectory() as d:
+            s = gpg_ledger.build_summary(
+                json_path=self._config(d, [self.W_ENTRY, dict(self.W_ENTRY)]), download_dir=d)
+            self.assertEqual(s["configured"], 1)
+            self.assertEqual(s["not_downloaded"], [self.KEY])
+
+    def test_constants_match_app_and_downloader(self):
+        """路径常量复制了一份, 必须与真正落盘的模块保持一致。"""
+        import download_linux
+        import web.app as web_app
+        self.assertEqual(gpg_ledger.FLAT_DIRNAME, web_app.FLAT_ISO_DIRNAME)
+        self.assertEqual(gpg_ledger.FLAT_DIRNAME, download_linux.FLAT_DIRNAME)
+        self.assertEqual(gpg_ledger.ALLOWED_TYPES, web_app.ALLOWED_TYPES)
+        self.assertEqual(gpg_ledger.ALLOWED_TYPES, download_linux.ALLOWED_TYPES)
+
+
 class TestHealthExposesLedger(unittest.TestCase):
     """/api/health 必须携带 gpg_ledger 摘要(运维/巡检的单一入口)。"""
 

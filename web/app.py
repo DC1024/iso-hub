@@ -2484,11 +2484,12 @@ def index():
 @app.get("/api/health")
 def api_health():
     # P1-⑤b: 暴露 GPG 状态账本 —— never_invoked 非空 = 有发行版从未获得验签机会
+    # v1.5.1: 传 download_dir, 让摘要能区分"盘上有文件却没验签"与"根本没下载"。
     # v1.5.0: 暴露各挂载点的可写性 —— 非 root 运行后, "属主配错"的典型症状就是
     # writable.data=false。字段是诊断用, 不影响 ok(写不了盘时服务本身确实是活的,
     # 让容器被判 unhealthy 后重启并不能解决属主问题, 只会掩盖日志)。
     return jsonify({"ok": True,
-                    "gpg_ledger": gpg_ledger.build_summary(JSON_FILE),
+                    "gpg_ledger": gpg_ledger.build_summary(JSON_FILE, download_dir=DATA_DIR),
                     "writable": writable_snapshot()})
 
 
