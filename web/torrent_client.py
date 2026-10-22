@@ -13,11 +13,28 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+_log = logging.getLogger(__name__)
+
+
+def _qb_reject(detail: Any, code: Optional[int] = None) -> Dict:
+    """qBittorrent 拒绝请求时的对外消息(原文只进服务端日志)。
+
+    M7 修复(审查 2026-10): qB 的响应体常回显 savepath(容器内绝对路径)、
+    种子文件名甚至配置片段。原样透给前端等于泄露部署细节。
+    """
+    _log.warning("qBittorrent 拒绝请求%s: %s",
+                 f" (HTTP {code})" if code is not None else "",
+                 str(detail)[:300])
+    if code is not None:
+        return {"ok": False, "error": f"qBittorrent 返回 HTTP {code}, 请求被拒绝"}
+    return {"ok": False, "error": "qBittorrent 拒绝了该请求, 详情见服务端日志"}
 
 try:
     import requests
@@ -174,17 +191,17 @@ class QBClient:
         code, t = self._request("POST", "/api/v2/torrents/add", data)
         # 旧版 200 "Ok."; qBittorrent 5.x 异步接受返回 **202** + JSON
         if code not in (200, 202):
-            return {"ok": False, "error": f"HTTP {code}: {str(t)[:300]}"}
+            return _qb_reject(t, code)
         # 5.x 返回: {"added_torrent_ids": [...], "failure_count": 0,
         #           "pending_count": 1, "success_count": 0}
         # pending_count>0 表示正在拉取种子/元数据, 属正常接受
         if isinstance(t, dict):
             if int(t.get("failure_count") or 0) == 0:
                 return {"ok": True, "detail": t}
-            return {"ok": False, "error": str(t)[:300]}
+            return _qb_reject(t)
         if str(t).strip() in ("Ok.", ""):
             return {"ok": True}
-        return {"ok": False, "error": str(t)[:300]}
+        return _qb_reject(t)
 
     def list_torrents(self, tag: str = "") -> List[Dict]:
         """列出种子信息。可按自定义标签过滤。"""

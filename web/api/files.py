@@ -96,7 +96,10 @@ def api_files_get():
     # 二次校验: 票据里存的是 (type, distro, 文件名) 分量而不是路径, 必须重新过一遍约束
     fp = core._resolve_dl_target(typ, name, fname)
     if fp is None:
-        return jsonify({"error": f"文件不存在: {fname}"}), 404
+        # M7 修复(审查 2026-10): fname 可能是容器内绝对路径(/downloads/foo.iso),
+        # 回显等于把容器目录结构送给调用方。原文只进服务端日志。
+        core.log(f"[下载] 票据目标解析失败: {fname!r}")
+        return jsonify({"error": "文件不存在或已被移除"}), 404
     # P3 修复: download_name 必须是**文件名**, 不能直接用票据里的 fname ——
     # _abs 寻址时 fname 是容器内绝对路径(/downloads/xxx.iso), 直接塞进
     # Content-Disposition 会变成 "/downloads/xxx.iso" 这种带路径的怪名字,
