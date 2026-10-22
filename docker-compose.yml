@@ -113,7 +113,8 @@ services:
   # ---------- Docker socket 代理: 收窄主容器对 Docker API 的访问权限 ----------
   # 主容器不再持有裸 /var/run/docker.sock(等价宿主机 root), 而是经此代理按白名单调用。
   # 白名单写在 docker/socket-proxy/haproxy.cfg, 只有四类:
-  #   GET /_ping|/version, GET /containers/*, POST .../(start|stop|restart|update), 其余 403
+  #   GET /_ping|/version、GET /containers/<三个 sidecar>/json、
+  #   POST /containers/<三个 sidecar>/(start|stop|restart|update), 其余 403
   # 为什么不用 tecnativa/docker-socket-proxy 的 env 开关: 它的 ACL 是"方法 + 路径前缀"两档,
   # POST=1 会把 /containers 前缀整体放行 —— 连带 open 了 POST /containers/create(足以创建
   # 挂载宿主根目录的特权容器)与 DELETE /containers/<id>; 而 POST=0 会在第一条规则
@@ -127,6 +128,25 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+    # ---- M9(审查 2026-10): 与主容器同级别的纵深防御 ----
+    # 本容器持有裸 docker.sock, 一旦被攻破等于宿主机 root, 而它此前是全套无加固的。
+    read_only: true          # 根文件系统只读: 被拿下也写不进后门/替换二进制
+    tmpfs:
+      - /tmp
+      - /run                 # haproxy 运行期可能需要写运行时目录
+    cap_drop:
+      - ALL                  # 只监听 2375(>1024), 不需要任何 capability
+    security_opt:
+      - no-new-privileges:true
+    # 为什么**不**降成 user: "10001:10001"(审查建议里的那一项, 已否决):
+    #   本容器存在的唯一目的就是打开 /var/run/docker.sock, 而该 socket 在宿主上
+    #   通常是 root:docker 0660。换成 uid 10001 后它打不开 socket —— 整个 sidecar
+    #   启停/状态查询立刻全废, 而这不是 CI 能发现的(CI 只跑主镜像的 smoke)。
+    #   若确实要非 root, 正确做法是先把宿主 docker 组的 gid 查出来, 然后:
+    #     user: "10001:<docker 组 gid>"
+    #     group_add: ["<docker 组 gid>"]
+    #   并且必须在部署机实测三个 sidecar 的启停。在拿到 gid 之前, 保持 root + 上述
+    #   四项加固比"看起来更安全但其实已坏掉"更诚实。
     volumes:
       # ACL 配置: 显式 allowlist, 见文件头注释
       - ./docker/socket-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
