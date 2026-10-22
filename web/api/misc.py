@@ -187,8 +187,16 @@ def api_subscriptions():
 
 @bp.post("/api/subscriptions")
 def api_subscriptions_save():
-    body = request.get_json(force=True, silent=True) or {}
-    items = body.get("subscriptions") or []
+    body = request.get_json(force=True, silent=True)
+    # H3 修复(审查 2026-10): 旧实现 `body.get("subscriptions") or []` 在**空 body /
+    # 字段名拼错 / 前端发了个空对象**时都会得到 [], 然后原样落盘 —— 等于把用户的
+    # 全部订阅静默清空, 而且返回 200 说"保存成功"。
+    # 清空本身是合法操作, 但必须是**显式**的 {"subscriptions": []}。
+    if not isinstance(body, dict) or "subscriptions" not in body:
+        return jsonify({"error": "缺少 subscriptions 字段(清空请显式传空数组)"}), 400
+    items = body["subscriptions"]
+    if not isinstance(items, list):
+        return jsonify({"error": "subscriptions 必须是数组"}), 400
     core.save_subscriptions(items)
     core.log(f"[订阅] 保存 {len(items)} 条订阅配置")
     return jsonify({"ok": True})
