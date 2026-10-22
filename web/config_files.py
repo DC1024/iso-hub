@@ -203,13 +203,17 @@ def read_json_raw(path) -> dict:
     return data
 
 
-def write_json_atomic(path, data: dict) -> None:
+def write_json_atomic(path, data: dict | list) -> None:
     """原子写 JSON: 先落同目录临时文件, 再 os.replace 替换。
 
     读者永远只能看到"旧内容"或"完整的新内容", 不会读到被写了一半的 JSON
     (进程在 write_text 中途被 kill / 磁盘满, 都会留下半截文件 —— 那正是过去
     不得不靠 try/except 兜底的原因)。临时文件以 . 开头, 且在异常时清理,
     正常情况下不会残留在数据目录里。
+
+    data 允许 dict 也允许 list: custom_sources.json / subscriptions.json 顶层
+    就是数组(M2)。这两个文件**不能**走 update_json —— 那个函数为 dict 设计,
+    遇到 list 会抛 CorruptJsonFile 并把文件当损坏件隔离。
 
     settings.json 在启用密钥时先整文件 AES-GCM 加密再落盘; 写完后 chmod 600(档位 A),
     收窄"能读 data 卷的进程/用户"范围(对 root 容器只能挡非 root 读者, 但仍有意义)。

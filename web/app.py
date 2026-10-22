@@ -562,9 +562,19 @@ def load_custom_sources() -> list:
 
 
 def save_custom_sources(items: list) -> None:
-    CUSTOM_JSON.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    """原子写入自定义镜像源。
+
+    M2 修复(审查 2026-10): 旧实现是裸 write_text —— 进程中途被 kill / 磁盘满 /
+    容器重启都会留下**截断的 JSON**, 下次 load_custom_sources 解析失败返回 [],
+    用户的全部自定义源就静默永久丢失。并发 POST 的 read-modify-write 也会互相覆盖。
+    这里与项目其余 JSON 落盘保持一致: file_lock + write_json_atomic。
+
+    注意**不能**用 config_files.update_json(): 它是为 dict 设计的, 内部
+    read_json_raw 对 list 会抛 CorruptJsonFile 并把文件当损坏件隔离 ——
+    这两个文件都是 list 形状。
+    """
+    with config_files.file_lock(CUSTOM_JSON):
+        config_files.write_json_atomic(CUSTOM_JSON, items)
 
 
 # ---------- 自定义源自动刷新设置 (独立开关, 默认关闭不主动访问源服务器) ----------
@@ -619,9 +629,9 @@ def load_subscriptions() -> list:
 
 
 def save_subscriptions(items: list) -> None:
-    SUBS_JSON.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    """原子写入订阅配置(理由同 save_custom_sources, 见 M2)。"""
+    with config_files.file_lock(SUBS_JSON):
+        config_files.write_json_atomic(SUBS_JSON, items)
 
 
 # 自定义源展开结果采用「持久化落盘缓存」, 请求线程内只读缓存、绝不发起网络请求。
