@@ -83,7 +83,7 @@ def main() -> int:
         # 忽略 stdin 关闭报错(某些 sudo 配置会报 "sudo: no tty present")
         try:
             stdin.close()
-        except Exception:  # noqa: BLE001
+        except (OSError, paramiko.SSHException):  # 通道已断时 close 报错可忽略
             pass
         out = stdout.read().decode(errors="replace")
         err = stderr.read().decode(errors="replace")

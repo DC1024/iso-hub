@@ -54,6 +54,6 @@ def is_http_url(url) -> bool:
         _port = parsed.port
     except ValueError:
         return False
-    except Exception:  # noqa: BLE001 - 解析库的行为不该影响判定结果, 一律拒绝
+    except Exception:  # noqa: BLE001 - 边界: 解析库的未预期行为不该影响判定结果, 一律拒绝(安全函数宁可误拒)
         return False
     return scheme.lower() in ALLOWED_SCHEMES and host != ""

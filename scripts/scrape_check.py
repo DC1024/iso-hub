@@ -81,7 +81,7 @@ def _probe_source(source: dict) -> dict:
                 result["detail"] = (f"版本正则匹配 0 个(页面可能改版): "
                                     f"{source['listing_url']}")
                 return result
-        except Exception as exc:  # 网络层/HTTP 层失败 -> 存疑而非判死
+        except Exception as exc:  # noqa: BLE001 - 边界: 网络/HTTP 层失败 -> 存疑而非判死(契约)
             result["status"] = "suspect"
             result["detail"] = f"列表页拉取失败: {type(exc).__name__}: {exc}"
             return result
@@ -93,7 +93,7 @@ def _probe_source(source: dict) -> dict:
         if not entries:
             result["status"] = "broken"
             result["detail"] = "build_entries 返回 0 条(解析链已断)"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 边界: 解析链任意异常都判 broken, 这正是探测目的
         result["status"] = "broken"
         result["detail"] = f"build_entries 异常: {type(exc).__name__}: {exc}"
     return result
@@ -132,7 +132,7 @@ def main(argv=None) -> int:
     cfg_path = Path(args.config)
     try:
         sources = json.loads(cfg_path.read_text(encoding="utf-8")).get("sources", [])
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         print(f"⛔ 配置读取失败 {cfg_path}: {exc}")
         return 3
     if not sources:
@@ -144,7 +144,7 @@ def main(argv=None) -> int:
     if baseline_path.exists():
         try:
             doc = json.loads(baseline_path.read_text(encoding="utf-8"))
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             print(f"⛔ 基线 JSON 损坏 {baseline_path}: {exc} "
                   f"(删掉重建: --update-baseline)")
             return 3

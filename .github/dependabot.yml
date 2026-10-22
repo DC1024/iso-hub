@@ -46,8 +46,11 @@ updates:
   # v1.5.3: 镜像也纳入监控。
   # 为什么之前没有: 以为"镜像升级只是换 tag", 实际基础镜像的 OS 包(gnupg/gpgv)与
   # sidecar 的 CVE 修复只体现在新 digest 上, 靠每周的 cve-baseline 事后告警太晚。
-  # 注意: 基础镜像写的是 tag@digest, Dependabot 只改 digest 那一半, 所以 Python
-  # 大版本不会被动升级 —— 想跨小版本要手改 tag(见 Dockerfile 注释)。
+  # 注意: 此前注释说"基础镜像写 tag@digest, Dependabot 只改 digest 那一半,
+  # 大版本不会被动升级" —— 被 PR #44 证伪: 它把 python 3.12.15-slim 连 tag 带
+  # digest 一起改成了 3.14.7-slim(docker tag 的 semver 判定把跨线算成 minor)。
+  # 跨 Python 小版本必须走 Dockerfile 注释里的手工流程(手改 tag → 实测 → 显式
+  # 授权, 还要同步 CI 的 python-version), 故对 python 镜像只放行 patch。
   # 项目自己的镜像必须 ignore: 它们不在 Docker Hub 上, 交给 Dependabot 只会报错。
   - package-ecosystem: docker
     directory: "/"
@@ -57,6 +60,10 @@ updates:
       - dependency-name: "iso-hub"
       - dependency-name: "dcchendockeruser/iso-hub"
       - dependency-name: "registry.cn-hangzhou.aliyuncs.com/dcchen/isohub"
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
     groups:
       docker-minor-and-patch:
         update-types:

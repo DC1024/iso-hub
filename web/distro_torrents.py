@@ -28,7 +28,7 @@ _log = logging.getLogger(__name__)
 
 try:  # 优先使用 defusedxml 防御 XML 炸弹/XXE
     from defusedxml import ElementTree as ET
-except Exception:  # noqa: BLE001
+except ImportError:
     # 生产环境已依赖 defusedxml; 此 fallback 仅用于无该库的开发环境,
     # 且下层 parse_rss 已对 URL 做 http/https 校验并限制响应大小。
     import xml.etree.ElementTree as ET  # type: ignore  # nosec B405
@@ -62,7 +62,7 @@ def _load_settings() -> dict:
                      " 下一次保存会把原件备份为 %s.corrupt",
                      SETTINGS_JSON, SETTINGS_JSON.name)
         return {}
-    except Exception as e:  # noqa: BLE001  读盘/权限/解码异常: 保持不外抛
+    except (OSError, ValueError) as e:  # 读盘/权限/解码异常: 保持不外抛
         _log.warning("读取 %s 失败: %s", SETTINGS_JSON, e)
         return {}
 
@@ -187,7 +187,7 @@ def scan_sources() -> Dict:
         try:
             items = parse_rss(src["url"])
             return (src, items, None)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - 边界: 单源失败随元组返回, 不得影响其他源的并发抓取
             return (src, [], str(e)[:200])
 
     reports = []

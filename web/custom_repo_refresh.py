@@ -21,6 +21,8 @@ import sys
 import time
 from pathlib import Path
 
+import errs  # noqa: E402  # 可预期异常组合(JSON 读写/网络), 替代宽捕获
+
 STRATEGIES = ("dated_directory", "flat_listing", "versioned_flat_listing", "static")
 
 
@@ -73,7 +75,7 @@ def main() -> None:
         custom = json.loads(custom_path.read_text(encoding="utf-8"))
         if not isinstance(custom, list):
             custom = []
-    except Exception as e:  # noqa: BLE001
+    except errs.JSON_READ as e:
         print(f"[WARN] 读取自定义源失败: {e}", file=sys.stderr)
         custom = []
 
@@ -89,7 +91,7 @@ def main() -> None:
             data = json.loads(cache_path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 existing = data
-    except Exception as e:  # noqa: BLE001
+    except errs.JSON_READ as e:
         print(f"[WARN] 读取缓存文件失败, 忽略旧缓存: {e}", file=sys.stderr)
 
     cache: dict = {}
@@ -106,7 +108,7 @@ def main() -> None:
         print(f"{'=' * 60}\n>>> 展开发行版源: {dist} ({c.get('strategy')}) <- {listing}")
         try:
             entries = expand_source(c)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - 边界: 单源展开失败不拖垮整批, 保留旧缓存后继续其余源
             print(f"[WARN] 展开失败 {dist}: {e!r}", file=sys.stderr)
             if key in existing:
                 cache[key] = existing[key]

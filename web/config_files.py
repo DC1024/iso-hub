@@ -127,9 +127,11 @@ def _decrypt_settings(raw: bytes) -> bytes:
     if len(body) <= 12:
         raise SettingsDecryptError("settings.json 密文过短")
     nonce, ct = body[:12], body[12:]
+    # 懒导入同 _aesgcm: 仅在已配置密钥(必然已装 cryptography)时才会走到这里
+    from cryptography.exceptions import InvalidTag  # noqa: PLC0415
     try:
         return _aesgcm(secret).decrypt(nonce, ct, None)
-    except Exception as e:  # cryptography 对错误密钥/篡改抛 InvalidTag
+    except (InvalidTag, OverflowError, ValueError) as e:  # cryptography 对错误密钥/篡改抛 InvalidTag
         raise SettingsDecryptError(
             "settings.json 解密失败(密钥不匹配或文件被篡改)") from e
 

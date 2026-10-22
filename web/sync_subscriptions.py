@@ -55,6 +55,7 @@ import gpg_ledger  # noqa: E402
 # 注意: 本脚本是被 app.py **Popen 出来的独立进程**, 所以线程锁这部分用不上 ——
 # 与主进程的互斥必须要文件锁才做得到。这里真正拿到的是**原子写**: 见下方注释。
 import config_files  # noqa: E402
+import errs  # noqa: E402  # 可预期异常组合(JSON 读写/网络), 替代宽捕获
 
 
 def natural_key(value: str):
@@ -73,13 +74,13 @@ def _record_failure(download_dir: Path, typ: str, name: str, fname: str, kind: s
         if jf.exists():
             try:
                 data = json.loads(jf.read_text(encoding="utf-8")) or {}
-            except Exception:  # noqa: BLE001
+            except errs.JSON_READ:
                 data = {}
         data[f"{typ}/{name}/{fname}"] = {"at": int(time.time()), "kind": kind}
         tmp = jf.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(jf)
-    except Exception:  # noqa: BLE001
+    except errs.JSON_WRITE:  # 失败记录写不进不影响同步结果本身
         pass
 
 
@@ -95,7 +96,7 @@ def _clear_failure(download_dir: Path, typ: str, name: str, fname: str) -> None:
             tmp = jf.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(jf)
-    except Exception:  # noqa: BLE001
+    except errs.JSON_WRITE:  # 清除失败记录失败不影响同步结果本身
         pass
 
 
@@ -110,7 +111,7 @@ def _last_run_verified(downloader, entry: dict, fp: Path) -> bool:
         )
         gpg_ledger.record_from_msg(entry, ok, msg)
         return bool(ok)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - 边界: 校验内部错误一律按"未通过"处理, 不得中断整批订阅同步
         return False
 
 
@@ -214,7 +215,7 @@ def main() -> None:
                         cached = json.loads(Path(args.cache_json).read_text(encoding="utf-8"))
                         if isinstance(cached, dict):
                             repo_cache = cached
-                    except Exception as e:  # noqa: BLE001
+                    except errs.JSON_READ as e:
                         print(f"[WARN] 读取自定义源缓存失败: {e}", file=sys.stderr)
                 for c in custom:
                     if c.get("strategy"):
@@ -234,7 +235,7 @@ def main() -> None:
                     elif c.get("download_url"):
                         by_url[c["download_url"]] = c
                 all_entries = list(by_url.values())
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - 边界: 自定义源合并失败时按官方清单继续跑, 不得让脏缓存杀死整批同步
             print(f"[WARN] 读取自定义源失败: {e}", file=sys.stderr)
     download_dir = Path(args.download_dir)
 
@@ -293,7 +294,7 @@ def main() -> None:
                                    allow_redirects=True, headers=HEAD_UA_HEADERS)
                 _r.raise_for_status()
                 _sz = int(_r.headers.get("Content-Length", 0) or 0)
-            except Exception:  # noqa: BLE001
+            except errs.HTTP_REQ:
                 _sz = 0
             # 已存在完整文件 → 本轮不会重新下载(download_linux 会先校验再跳过),
             # 它的贡献恒为满值。此时把目标大小夹到本地实际大小, 让这一条在聚合里
@@ -374,7 +375,7 @@ def main() -> None:
             protected, hist = set(), {}
             _warn("[sync] settings.json 不是合法 JSON 对象, protected 名单按空处理 —— "
                   "本轮过期清理将只能依赖 manifest_history 之外的判据。")
-        except Exception as e:  # noqa: BLE001  读盘/权限异常
+        except errs.JSON_READ as e:  # 读盘/权限异常
             protected, hist = set(), {}
             _warn("[sync] 读取 settings.json 失败: %s" % e)
         # B7 修复: 先把当前清单文件名并入历史(只删"曾出现在清单里"的文件, 保护用户自有 ISO)

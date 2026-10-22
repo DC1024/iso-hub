@@ -117,7 +117,7 @@ def local_candidates(entry: dict, download_dir) -> list:
 def _load(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8")) or {}
-    except Exception:  # noqa: BLE001
+    except (OSError, ValueError):  # 磁盘错误 + JSON 解码/解析错误
         return {}
 
 
@@ -148,7 +148,7 @@ def record_from_msg(entry: dict, ok: bool, msg: str, path=None) -> str | None:
         data[key_for(entry)] = {"state": state, "ts": int(time.time())}
         _save(p, data)
         return state
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - 边界: 账本绝不影响下载主流程(见 docstring), 任何未预期异常都吞
         return None
 
 
@@ -181,7 +181,7 @@ def build_summary(json_path=None, path=None, download_dir=None) -> dict:
         cfg = json.loads(jp.read_text(encoding="utf-8")) or {}
         entries = [e for e in cfg.get("distributions", [])
                    if isinstance(e, dict) and e.get("gpg_verify")]
-    except Exception:  # noqa: BLE001
+    except (OSError, ValueError):  # 清单读不出按空处理, health 永远 200
         pass
 
     # 同一 key 可能对应多条 entry(镜像组预设), 按首次出现顺序聚合成一条结论

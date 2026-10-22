@@ -41,7 +41,7 @@ try:  # 种子下载集成(qBittorrent + DistroWatch 源) —— 可选加载
     from torrent_client import QBClient, qb_config, distro_name_from_torrent  # noqa: PLC0415
     import distro_torrents as dtorrents  # noqa: PLC0415
     TORRENT_AVAILABLE = True
-except Exception as e:  # noqa: BLE001
+except Exception as e:  # noqa: BLE001 - 边界: 可选模块导入, 模块级代码可能抛任意异常, 一律降级为无种子功能
     TORRENT_AVAILABLE = False
     _torrent_import_err = str(e)
 
@@ -61,6 +61,9 @@ import url_guard  # noqa: E402
 # 下载完成后的邮件通知(纯模块: 不读盘不写盘, 配置由本文件读出来传进去)。
 # 单向依赖 —— notifier 绝不 import app, 否则循环。
 import notifier  # noqa: E402
+
+# 可预期异常组合(JSON 读写/Docker API/网络/qB API)的唯一真源, 替代散落的宽捕获。
+import errs  # noqa: E402
 
 # --------------------------------------------------------------------------- paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -276,7 +279,7 @@ def _persist_log_line(seq: int, ts: float, text: str) -> None:
                 f"[{seq}] {text}\n")
         with open(_log_file_path(ts), "a", encoding="utf-8") as f:
             f.write(line)
-    except Exception:  # noqa: BLE001 - 日志落盘失败不得影响请求/下载主流程
+    except OSError:  # 日志落盘失败不得影响请求/下载主流程
         pass
 
 
@@ -295,7 +298,7 @@ def log(msg: str) -> None:
 try:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     _rotate_logs()
-except Exception:  # noqa: BLE001
+except OSError:  # 日志目录初始化失败不该拖垮应用启动
     pass
 
 
@@ -317,7 +320,7 @@ def load_json() -> dict:
             try:
                 base = json.loads(p.read_text(encoding="utf-8"))
                 break
-            except Exception as e:  # noqa: BLE001
+            except errs.JSON_READ as e:
                 log(f"[WARN] 解析 {p} 失败: {e}")
     base = base or {"distributions": []}
     base["distributions"] = merge_custom_entries(base.get("distributions", []))
@@ -354,7 +357,7 @@ def write_fail_record(rel: str, kind: str = "hard", err: str = "", url: str = ""
         tmp = FAILURES_JSON.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(FAILURES_JSON)
-    except Exception as e:  # noqa: BLE001
+    except errs.JSON_WRITE as e:
         log(f"[WARN] 写下载失败记录失败: {e}")
 
 
@@ -396,7 +399,7 @@ def load_failures() -> dict:
             if isinstance(data, dict):
                 return drop_expired_failures(data)
             return {}
-    except Exception as e:  # noqa: BLE001
+    except errs.JSON_READ as e:
         log(f"[WARN] 解析下载失败记录失败: {e}")
     return {}
 
@@ -414,7 +417,7 @@ def load_unverified() -> dict:
         if UNVERIFIED_JSON.exists():
             data = json.loads(UNVERIFIED_JSON.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
-    except Exception as e:  # noqa: BLE001
+    except errs.JSON_READ as e:
         log(f"[WARN] 解析未验签记录失败: {e}")
     return {}
 
@@ -428,7 +431,7 @@ def clear_failure(rel: str) -> None:
             tmp = FAILURES_JSON.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(FAILURES_JSON)
-    except Exception as e:  # noqa: BLE001
+    except errs.JSON_WRITE as e:
         log(f"[WARN] 清除下载失败记录失败: {e}")
 
 
@@ -506,7 +509,7 @@ def _flat_disk_inventory() -> dict:
             if fn:
                 fname_key.setdefault(fn, (e.get("type", "linux"),
                                           e.get("distribution", "?")))
-    except Exception as e:  # noqa: BLE001  清单不可读时宁可不归属, 也不报错
+    except errs.JSON_READ as e:  # 清单不可读时宁可不归属, 也不报错
         log(f"[WARN] 平铺模式建立文件名归属失败: {e}")
     for f in iso_dir.iterdir():
         if not f.is_file():
@@ -548,7 +551,7 @@ def load_custom_sources() -> list:
         try:
             data = json.loads(CUSTOM_JSON.read_text(encoding="utf-8"))
             return data if isinstance(data, list) else []
-        except Exception as e:  # noqa: BLE001
+        except errs.JSON_READ as e:
             log(f"[WARN] 解析自定义源失败: {e}")
     return []
 
@@ -605,7 +608,7 @@ def load_subscriptions() -> list:
         try:
             data = json.loads(SUBS_JSON.read_text(encoding="utf-8"))
             return data if isinstance(data, list) else []
-        except Exception as e:  # noqa: BLE001
+        except errs.JSON_READ as e:
             log(f"[WARN] 解析订阅配置失败: {e}")
     return []
 
@@ -652,7 +655,7 @@ def load_custom_repo_cache() -> dict:
         _CUSTOM_REPO_CACHE = data
         _CUSTOM_REPO_CACHE_MTIME = mtime
         return data
-    except Exception as e:  # noqa: BLE001
+    except errs.JSON_READ as e:
         log(f"[自定义源] 解析缓存文件失败 {CUSTOM_CACHE_JSON}: {e}")
         _CUSTOM_REPO_CACHE = {}
         _CUSTOM_REPO_CACHE_MTIME = None
@@ -965,7 +968,7 @@ def _probe_qb_connection(qb: dict, timeout: float = 3.0) -> dict:
         cli = QBClient(url, user, pwd)
         code, text = cli._request("POST", "/api/v2/auth/login",
                                   {"username": user, "password": pwd}, timeout=timeout)
-    except Exception as e:  # noqa: BLE001
+    except errs.QB_API as e:
         return {"state": "unreachable", "detail": f"{type(e).__name__}: {e}"}
     # _request 内部网络异常返回 code=0(且 text 形如 "连接失败: ...")
     if code == 0:
@@ -1022,7 +1025,7 @@ def load_settings_all() -> dict:
             " 下一次保存会将原件备份为 %s.corrupt。请检查该文件。"
             % (SETTINGS_JSON.name, SETTINGS_JSON.name))
         return {}
-    except Exception as e:  # noqa: BLE001  读盘失败/权限/解码异常: 保持不外抛
+    except errs.JSON_READ as e:  # 读盘失败/权限/解码异常: 保持不外抛
         log("[settings] 读取 %s 失败: %s" % (SETTINGS_JSON.name, e))
         return {}
 
@@ -1171,7 +1174,7 @@ def notify_download_finished(snapshot: dict) -> None:
             snapshot.get("exit_code"), dur)
         ok, detail = notifier.send(cfg, subject, body)
         log("[邮件] " + detail if ok else "[邮件] 发送失败: " + detail)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 邮件是附加功能, 任何未预期异常都不得影响下载主流程
         log("[邮件] 通知异常: %r" % (e,))
 
 
@@ -1271,12 +1274,12 @@ def _sessions_persist() -> None:
     """把内存会话原子写盘到 settings.json（容器重建后 token 仍有效）。"""
     try:
         save_settings_all({SESSION_KEY: dict(_sessions)})
-    except Exception as e:  # noqa: BLE001
+    except errs.JSON_WRITE as e:
         # v1.3.16: 会话写盘失败会让"重启后仍保持登录"静默失效 —— 之前是裸 except: pass。
         # 这里不向上抛(登录流程不该因为持久化失败而 500), 但必须留下线索。
         try:
             log("[auth] 会话持久化失败(重启后将需要重新登录): %s" % e)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - 边界: log 自身失败时已是最后一环, 无路可报只能吞
             pass
 
 
@@ -1298,7 +1301,7 @@ def _sessions_load() -> None:
         _sessions = {k: v for k, v in saved.items() if isinstance(v, (list, tuple)) and len(v) == 2 and v[1] > now}
         if len(saved) != len(_sessions):
             _sessions_persist()
-    except Exception:  # noqa: BLE001
+    except errs.JSON_READ:
         _sessions = {}
 
 
@@ -1370,7 +1373,7 @@ def _verify_login(username: str, password: str) -> str:
                     "iterations": PBKDF2_ITERATIONS,
                 })
                 save_users(users)
-        except Exception as e:  # noqa: BLE001
+        except errs.JSON_WRITE as e:
             log(f"[WARN] 口令哈希升级失败(不影响本次登录): {e}")
     return "ok" if ok else "bad_pass"
 
@@ -1424,7 +1427,7 @@ def _login_note_fail(ip: str) -> None:
         rec["n"] = 0
         try:
             log(f"[auth] {ip} 连续登录失败 {_LOGIN_MAX_FAILS} 次, 锁定 {_LOGIN_LOCK_SECS} 秒")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - 边界: 限速记账时 log 失败无路可报, 不得影响登录判定
             pass
     _login_fails[ip] = rec
     # 防止大量来源 IP 把内存撑大: 超过 2000 条时清掉一小时前的过期项
@@ -1557,7 +1560,7 @@ def service_state(name: str) -> str:
             log(f"[docker] 容器 {name} 返回异常结构: State={payload.get('State')!r}")
             return "unknown"
         return _CONTAINER_STATUS_TO_STATE.get(st, "stopped")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 契约是任何异常都返回 unknown 绝不抛错(见 docstring)
         _log_docker_once(f"state|{name}|{type(e).__name__}",
                          f"[docker] 查询容器 {name} 异常: {e!r}" + _docker_failure_hint(e))
         return "unknown"
@@ -1580,7 +1583,7 @@ def container_restart_policy(name: str) -> str | None:
         payload = json.loads(r.text)
         policy = ((payload.get("HostConfig") or {}).get("RestartPolicy") or {}).get("Name")
         return policy or None
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 契约是查询失败一律返回 None(调用方保守跳过), 绝不抛错
         _log_docker_once(f"policy|{name}|{type(e).__name__}",
                          f"[docker] 查询容器 {name} 重启策略异常: {e!r}" + _docker_failure_hint(e))
         return None
@@ -1601,7 +1604,7 @@ def share_container_state(name: str) -> str | None:
         if not st:
             log(f"[docker] 容器 {name} 返回异常结构: State={payload.get('State')!r}")
         return st or None
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 契约是查询失败返回 None, 绝不抛错(见 docstring)
         _log_docker_once(f"raw|{name}|{type(e).__name__}",
                          f"[docker] 查询容器 {name} 异常: {e!r}" + _docker_failure_hint(e))
         return None
@@ -1649,7 +1652,7 @@ def set_share(proto: str, enabled: bool) -> bool:
             else:
                 log(f"[共享] {proto} 停用失败: 容器停止失败(步骤2: HTTP {r2.status}), 配置未变更。")
         return False
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - 边界: 契约是失败返回 False(布尔语义), 绝不抛错
         return False
 
 
@@ -1673,7 +1676,7 @@ def _sync_disabled_shares() -> None:
                 if st == "running":
                     log(f"[共享] 启动同步: {proto} 当前为禁用但容器在运行, 正在停止")
                     set_share(proto, False)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - 边界: 启动同步是尽力而为, 任何异常都不得影响启动流程
         pass
 
 
@@ -1701,7 +1704,7 @@ def _set_qb_password(username: str, password: str) -> bool:
         with open(QB_CONF_PATH, "w", encoding="utf-8") as f:
             c.write(f)
         return True
-    except Exception as e:  # noqa: BLE001
+    except (OSError, configparser.Error) as e:
         log(f"[qB] 写入密码失败: {e!r}")
         return False
 
@@ -1747,7 +1750,7 @@ def set_qb(enabled: bool, username: str, password: str) -> bool:
             else:
                 log(f"[qB] 停用失败: 容器停止失败(步骤2: HTTP {r.status}), 配置未变更。")
             return False
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 契约是失败返回 False(布尔语义), 绝不抛错
         log(f"[qB] 启停异常: {e!r}")
         return False
 
@@ -1764,7 +1767,7 @@ def _sync_disabled_qb() -> None:
             if st == "running":
                 log("[qB] 启动同步: qBittorrent 当前为禁用但容器在运行, 正在停止")
                 set_qb(False, qb.get("username", ""), qb.get("password", ""))
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - 边界: 启动同步是尽力而为, 任何异常都不得影响启动流程
         pass
 
 
@@ -1862,7 +1865,7 @@ def _converge_disabled_sidecars(attempts: int = 12, interval: float = 5.0) -> No
                     elif st is None:
                         # 容器尚未出现(Docker API 未响应)或代理暂不可达 —— 下一轮再看
                         pending = True
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - 边界: 按 section 隔离, 共享区的未预期异常不得跳过 qB 区/杀死收敛循环
                 log(f"[共享] 启动收敛检查异常: {e!r}")
 
             # --- 种子 sidecar: qBittorrent ---
@@ -1889,7 +1892,7 @@ def _converge_disabled_sidecars(attempts: int = 12, interval: float = 5.0) -> No
                             pending = True
                     elif st is None:
                         pending = True
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - 边界: 按 section 隔离, qB 区的未预期异常不得杀死收敛循环
                 log(f"[qB] 启动收敛检查异常: {e!r}")
 
             if not pending:
@@ -1898,7 +1901,7 @@ def _converge_disabled_sidecars(attempts: int = 12, interval: float = 5.0) -> No
             if i < attempts - 1:
                 time.sleep(interval)
         log(f"[启动收敛] 已尝试 {attempts} 轮, 个别 sidecar 可能仍未就绪; 后续在设置页手动操作即可")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 启动收敛在守护线程里跑, 任何未预期异常都不得杀死线程/影响启动
         log(f"[启动收敛] 异常: {e!r}")
 
 
@@ -1956,7 +1959,7 @@ def _apply_samba_creds(username: str, password: str) -> bool:
             os.chmod(path, 0o600)
         except OSError:
             pass
-    except Exception as e:  # noqa: BLE001
+    except OSError as e:
         log(f"[共享] 写入 samba 账号文件失败: {e!r}")
         return False
 
@@ -1967,7 +1970,7 @@ def _apply_samba_creds(username: str, password: str) -> bool:
             log(f"[共享] samba 侧车未部署, 凭据已写入 {path}(部署 sidecar 后生效)")
         elif r.status not in (200, 204):
             log(f"[共享] samba 重启失败 HTTP {r.status}, 凭据已写入 {path}(下次启动生效)")
-    except Exception as e:  # noqa: BLE001
+    except errs.DOCKER_API as e:
         # Docker 不可达不影响凭据落盘: 下次 sidecar 启动自然会用新文件
         log(f"[共享] samba 重启异常(凭据已写入 {path}): {e!r}")
     return True
@@ -2049,7 +2052,7 @@ def _ensure_webdav_conf(username: str, password: str) -> bool:
         )
         log(f"[共享] 已自动生成 webdav 配置文件: {cfg_path}")
         return True
-    except Exception as e:  # noqa: BLE001
+    except OSError as e:
         log(f"[共享] 自动生成 webdav 配置文件失败: {e!r}")
         return False
 
@@ -2063,7 +2066,7 @@ def _bootstrap_webdav_conf() -> None:
     try:
         wd = load_shares().get("webdav", {})
         _ensure_webdav_conf(wd.get("username", ""), wd.get("password", ""))
-    except Exception as e:  # noqa: BLE001
+    except errs.JSON_READ as e:  # load_shares 读设置 + 写配置文件的磁盘错误
         log(f"[共享] 启动时生成 webdav 配置异常: {e!r}")
 
 
@@ -2102,7 +2105,7 @@ def _apply_webdav_creds(username: str, password: str) -> bool:
         cfg_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
         _docker_request("POST", f"/containers/{SHARE_CONTAINERS['webdav']}/restart", None, 30)
         return True
-    except Exception as e:  # noqa: BLE001
+    except errs.DOCKER_API as e:  # 读写配置(OSError/ValueError) + 重启容器
         log(f"[共享] webdav 凭据同步异常: {e!r}")
         return False
 
@@ -2135,7 +2138,7 @@ def _spawn_worker() -> None:
             # L8 修复: 新建进程组, 停止任务时能连带终止孙进程(如 update_distributions.py)
             start_new_session=True,
         )
-    except Exception as e:  # L7 修复: Popen 失败(命令不存在等)不再静默死亡
+    except OSError as e:  # L7 修复: Popen 失败(命令不存在等)不再静默死亡
         with _lock:
             cur["proc"] = None
             cur["starting"] = False
@@ -2329,7 +2332,7 @@ def schedule_auto_sync() -> None:
                     _trigger(f"自动订阅同步 (间隔 {AUTO_SYNC_INTERVAL//3600} 小时)")
                 # 自定义源自动刷新(独立开关, 默认关闭)
                 _trigger_custom_refresh()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - 边界: 守护线程循环, 单轮未预期异常不得杀死调度线程
                 log(f"[自动同步] 异常: {e}")
             time.sleep(30)
     threading.Thread(target=_loop, daemon=True).start()
@@ -2401,17 +2404,17 @@ def stop_task() -> bool:
             # L8 修复: 终止整个进程组(含孙进程), 避免订阅同步内的 update_distributions 成孤儿继续写清单
             import signal
             os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-        except Exception:  # noqa: BLE001
+        except OSError:  # 进程已退出/无权限 -> 退化为 terminate
             p.terminate()
 
         def _kill():
             try:
                 p.wait(timeout=10)
-            except Exception:  # noqa: BLE001
+            except (subprocess.TimeoutExpired, OSError):  # 超时未退 -> 补 SIGKILL
                 try:
                     import signal
                     os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                except Exception:  # noqa: BLE001
+                except OSError:
                     p.kill()
         threading.Thread(target=_kill, daemon=True).start()
         return True
@@ -3103,7 +3106,7 @@ def _resolve_abs_qb(h: str, path: str) -> Path | None:
         return None
     try:
         entries, _sk = _torrent_completed_files([h])
-    except Exception:  # noqa: BLE001
+    except errs.QB_API:  # qB 不可达 -> 复核无法完成, 一律拒绝
         return None
     for kind, v in entries:
         if kind == "abs" and v == str(p):
@@ -3141,7 +3144,7 @@ def _torrent_completed_files(hashes: list) -> tuple[list, list]:
                 continue
             try:
                 files = qb.torrent_files(h) or []
-            except Exception as e:  # noqa: BLE001
+            except errs.QB_API as e:
                 skipped.append(f"{t.get('name', h)}: 列举文件失败: {e}")
                 continue
             found = 0
@@ -3173,7 +3176,7 @@ def _torrent_completed_files(hashes: list) -> tuple[list, list]:
                     + (f"{hidden} 个已完成文件不在 iso-hub 数据目录"
                        "(外部 qB 需把下载目录按原路径挂载进容器)"
                        if hidden else "没有已完成的可下载文件"))
-    except Exception as e:  # noqa: BLE001
+    except errs.QB_API as e:
         log(f"[下载] 列举种子文件失败: {e!r}")
     return entries, skipped
 
@@ -3627,7 +3630,7 @@ def api_qb_settings_get():
     try:
         _raw = load_settings_all() if SETTINGS_JSON.exists() else {}
         qb["url_saved"] = bool((_raw.get("qb") or {}).get("url"))
-    except Exception:  # noqa: BLE001
+    except errs.JSON_READ:
         qb["url_saved"] = False
     # 区分「配套容器」与「外部容器」: 只要 url 未被用户指向外部(仍是默认内部 sidecar 地址,
     # 或从未自定义), iso-hub 就能管理该 qb 容器, 可改凭据并同步到 sidecar; 若用户填了外部
@@ -3677,7 +3680,7 @@ def api_qb_settings_post():
     try:
         _raw = load_settings_all() if SETTINGS_JSON.exists() else {}
         qb["url_saved"] = bool((_raw.get("qb") or {}).get("url")) or ("url" in body)
-    except Exception:  # noqa: BLE001
+    except errs.JSON_READ:
         qb["url_saved"] = bool("url" in body)
     _is_ext = _qb_is_external(qb)
 
@@ -3757,7 +3760,7 @@ def api_torrent_sources():
                         "items": res.get("items", []),
                         "user_rss": dtorrents.get_user_rss(),
                         "user_links": dtorrents.get_user_links()})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
         log(f"[种子] 扫描种子源失败: {e!r}")
         return jsonify({"error": f"扫描种子源失败: {e}"}), 500
 
@@ -3809,7 +3812,7 @@ def api_torrent_classify():
         cats = tcats.load_categories(report=report)     # 每次实时读, 不缓存
         res = tcats.classify(clean, cats)
         res["show_empty"] = tcats.load_show_empty()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
         log(f"[种子] 分类失败: {e!r}")
         return jsonify({"ok": False, "error": f"分类失败: {e}"}), 500
 
@@ -3827,7 +3830,7 @@ def api_torrent_categories_get():
     try:
         merged = tcats.load_categories(report=report)
         user = tcats.load_user_doc()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
         log(f"[种子] 读取分类配置失败: {e!r}")
         return jsonify({"ok": False, "error": f"读取分类配置失败: {e}"}), 500
     res = {"ok": True, "categories": merged,
@@ -3859,7 +3862,7 @@ def api_torrent_categories_post():
         tcats.save_user_doc(doc)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
         log(f"[种子] 保存分类配置失败: {e!r}")
         return jsonify({"ok": False, "error": f"保存分类配置失败: {e}"}), 500
 
@@ -3900,7 +3903,7 @@ def api_torrent_info():
                 f in names for f in _torrent_file_names(t))
         return jsonify({"ok": True, "connected": True, "version": ver,
                         "transfer": transfer, "torrents": toks})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
         log(f"[种子] 查询 qBittorrent 状态失败: {e!r}")
         return jsonify({"ok": False, "error": f"查询失败: {e}"}), 500
 
@@ -3979,7 +3982,7 @@ def api_torrent_add():
             return jsonify({"error": f"qBittorrent 添加失败: {r.get('error')}"}), 502
         log(f"[种子] 添加 {len(urls)} 个下载, 保存到 {save_path}")
         return jsonify({"ok": True, "save_path": save_path, "distro": distro, "type": typ})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
         log(f"[种子] 添加失败: {e!r}")
         return jsonify({"error": f"添加失败: {e}"}), 500
 
@@ -4002,7 +4005,7 @@ def api_torrent_delete():
         ok = qb.delete_torrents(hashes, delete_files)
         log(f"[种子] 删除 {len(hashes)} 个, 同时删文件={delete_files}")
         return jsonify({"ok": ok})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
         return jsonify({"error": f"删除失败: {e}"}), 500
 
 

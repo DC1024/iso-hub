@@ -108,7 +108,7 @@ def http_get_with_retry(url: str, *, headers=None, stream: bool = False,
             _delay = RETRY_BACKOFF * (2 ** attempt)
             try:
                 resp.close()
-            except Exception:  # noqa: BLE001 - 关闭失败不影响重试
+            except OSError:  # 关闭失败不影响重试
                 pass
             print(f"  服务器返回 {code}, {_delay:.1f}s 后重试 ({attempt + 1}/{retries})")
             time.sleep(_delay)
@@ -292,7 +292,7 @@ class LinuxDistributionDownloader:
                 print(f"  校验文件中未找到文件名 {query_name}")
             return None
 
-        except Exception as e:
+        except (requests.RequestException, ValueError) as e:
             print(f"  从URL获取校验和失败: {e}")
             return None
 
@@ -459,7 +459,7 @@ class LinuxDistributionDownloader:
             resp = requests.get(gpg_key_url, timeout=30)
             resp.raise_for_status()
             pubkey = resp.content  # 官方 .gpg 多为二进制, 必须用 content 而非 text
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - 边界: 公钥/签名获取失败一律降级 skip(不阻塞下载), 这是设计契约
             print(f"  获取官方公钥失败(降级): {e}")
             return "skip"
         import tempfile
@@ -588,7 +588,7 @@ class LinuxDistributionDownloader:
                 if r.returncode == 0:
                     return "pass"
                 return "fail"
-        except Exception as e:  # noqa: BLE001
+        except OSError as e:  # gpg 子进程/临时文件/密钥缓存的磁盘错误
             print(f"  GPG 签名验证异常(降级): {e}")
             return "skip"
 
@@ -614,7 +614,7 @@ class LinuxDistributionDownloader:
             r = requests.head(url, headers=self.headers, timeout=15, allow_redirects=True)
             if r.status_code < 400:
                 return int(r.headers.get("content-length") or 0)
-        except Exception:  # noqa: BLE001
+        except (requests.RequestException, ValueError):  # 探测失败按 0(大小未知)处理
             pass
         return 0
 
@@ -644,7 +644,7 @@ class LinuxDistributionDownloader:
             checksum_text = ""
             try:
                 checksum_text = requests.get(checksum_url, headers=self.headers, timeout=30).text
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - 边界: GPG 预检是可选增强, 获取失败一律降级到 SHA256 比对
                 print(f"  获取 checksum 文本失败: {e}")
             sig_url = dist.get("signature_url") or self._default_sig_url(checksum_url)
             keyring_dir = self.download_dir / "gpg-keyring"  # 缓存到 data 卷
@@ -726,7 +726,7 @@ class LinuxDistributionDownloader:
                 try:
                     file_path.unlink()
                     print(f"    ✓ 删除: {file_name}")
-                except Exception as e:
+                except OSError as e:
                     print(f"    ✗ 删除失败 {file_name}: {e}")
         else:
             print(f"  目录 {dist_dir.name} 无需清理")
@@ -984,7 +984,7 @@ class LinuxDistributionDownloader:
         try:
             actual_checksum = self.sha256_of(filepath)
             return actual_checksum == (expected_checksum or "").strip().lower()
-        except Exception as e:
+        except OSError as e:  # 文件读不出按校验不通过处理
             print(f"校验和验证错误: {e}")
             return False
 
@@ -1010,7 +1010,7 @@ class LinuxDistributionDownloader:
                 )
                 if not success:
                     print(f"下载失败: {dist_name}")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 - 边界: 单个发行版的未预期异常不中断整批(风险8)
                 print(f"下载 {dist_name} 异常: {e}")
             time.sleep(2)  # 避免请求过于频繁
         

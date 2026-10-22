@@ -352,7 +352,7 @@ def build_from_versioned_flat_listing(source: Dict) -> List[Dict]:
                     source, entry, entry_context, download_template, checksum_template
                 )
                 entries.append(entry)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 边界: 单版本构建失败不拖垮该源的其余版本
             per_version_failures.append(f"{version}: {exc}")
             print(
                 f"[WARN] Skipping {source['distribution']} {version}: {exc}",
@@ -408,7 +408,7 @@ def main() -> None:
     output_path = Path(args.output)
     try:
         sources = load_config(config_path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 边界: CLI 兜底, 任何配置错误统一折成 SystemExit 消息
         raise SystemExit(f"Failed to load config: {exc}") from exc
 
     all_entries: List[Dict] = []
@@ -417,7 +417,7 @@ def main() -> None:
         name = source.get("distribution", "unknown")
         try:
             all_entries.extend(build_entries(source))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 边界: 单源构建失败记入 failures, 不拖垮其余源
             failures.append(f"{name}: {exc}")
             print(f"[WARN] Skipping {name}: {exc}", file=sys.stderr)
 

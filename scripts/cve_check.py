@@ -209,13 +209,13 @@ def main(argv=None) -> int:
 
     try:
         baseline_doc = load_baseline(Path(args.baseline))
-    except Exception as e:
+    except (OSError, ValueError) as e:
         print("::error::基线读取失败: %s" % e, file=sys.stderr)
         return EXIT_CONFIG
 
     try:
         raw = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    except Exception as e:
+    except (OSError, ValueError) as e:
         print("::error::扫描结果读取/解析失败: %s" % e, file=sys.stderr)
         return EXIT_CONFIG
 
