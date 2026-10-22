@@ -128,29 +128,38 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+    # ---- 必须显式以 root 运行, 否则代理形同虚设 ----
+    # 官方 haproxy 镜像的默认用户是 uid 99(haproxy), 不是 root。而宿主
+    # /var/run/docker.sock 通常是 root:docker 0660 —— uid 99 既不是属主、也不在
+    # docker 组, 权限位是 `---`, connect() 直接 EACCES。
+    #
+    # 表现极具欺骗性(CI 逐 flag 对照实测确认, 与下面的加固无关, 不加也是 503):
+    #   haproxy 正常启动、ACL 正常放行、日志里没有任何 ACL 错误,
+    #   但每个请求都是 `503 SC--`(连不上后端), 面板上三个 sidecar 全 unknown。
+    #
+    # 为什么选 root 而不是 group_add:
+    #   group_add 需要宿主的 docker 组 gid, 而它每台机器都不一样(CI 上是 113,
+    #   Debian/Ubuntu 常见 998/999, NAS 上又是别的)。写死一个默认值 = 换个宿主
+    #   就静默坏掉; 写成必填变量 = 老用户升级时 compose 直接报错起不来。
+    #   root 是唯一"在任何宿主上都成立"的选择, 而它在这里的权限已经被下面四项
+    #   (只读根/零能力/禁提权/无端口发布)压到只剩"能打开这个 socket"。
+    #
+    # 想改成非 root(可选, 需要你在部署机执行):
+    #   stat -c '%g' /var/run/docker.sock        # 拿到 docker 组 gid, 例如 999
+    #   然后删掉下面这行 user, 换成:  group_add: ["999"]
+    #   并实测三个 sidecar 的启停仍然正常。
+    user: "0:0"
     # ---- M9(审查 2026-10): 与主容器同级别的纵深防御 ----
-    # 本容器持有裸 docker.sock, 一旦被攻破等于宿主机 root, 而它此前是全套无加固的。
     read_only: true          # 根文件系统只读: 被拿下也写不进后门/替换二进制
     tmpfs:
       - /tmp
       # 这里**绝不能**加 /run。容器里 /var/run 是 /run 的软链接, 而 docker.sock
       # 是按 /var/run/docker.sock 挂进来的 —— 一旦给 /run 挂上 tmpfs, 那个空 tmpfs
-      # 会把 socket 整个遮住, haproxy 能正常启动、ACL 也照常放行, 但每个请求都以
-      # `503 SC--`(连不上后端) 结束。表现为"面板所有 sidecar 状态都是 unknown",
-      # 而日志里看不出任何 ACL 相关的错误。CI 的 socket-proxy ACL 步骤守着这条。
+      # 会把 socket 整个遮住, 症状与上面权限问题一模一样(503 SC--)。
     cap_drop:
       - ALL                  # 只监听 2375(>1024), 不需要任何 capability
     security_opt:
       - no-new-privileges:true
-    # 为什么**不**降成 user: "10001:10001"(审查建议里的那一项, 已否决):
-    #   本容器存在的唯一目的就是打开 /var/run/docker.sock, 而该 socket 在宿主上
-    #   通常是 root:docker 0660。换成 uid 10001 后它打不开 socket —— 整个 sidecar
-    #   启停/状态查询立刻全废, 而这不是 CI 能发现的(CI 只跑主镜像的 smoke)。
-    #   若确实要非 root, 正确做法是先把宿主 docker 组的 gid 查出来, 然后:
-    #     user: "10001:<docker 组 gid>"
-    #     group_add: ["<docker 组 gid>"]
-    #   并且必须在部署机实测三个 sidecar 的启停。在拿到 gid 之前, 保持 root + 上述
-    #   四项加固比"看起来更安全但其实已坏掉"更诚实。
     volumes:
       # ACL 配置: 显式 allowlist, 见文件头注释
       - ./docker/socket-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro

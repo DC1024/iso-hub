@@ -167,14 +167,24 @@ class TestM9SocketProxyHardened(unittest.TestCase):
         self.assertTrue(any("docker.sock" in v and v.endswith(":ro") for v in vols),
                         "docker.sock 必须以 :ro 挂载")
 
-    def test_does_not_force_unknown_uid(self):
-        """红线: 不能在没有宿主 docker 组 gid 的情况下把 user 写死成 10001。
+    def test_can_actually_open_docker_sock(self):
+        """红线: 必须真的能打开 root:docker 0660 的 docker.sock。
 
-        该容器必须打开 root:docker 0660 的 docker.sock; 换成 10001 会打不开,
-        sidecar 管理直接全废, 而 CI 发现不了(只跑主镜像 smoke)。
+        官方 haproxy 镜像默认以 uid 99(haproxy) 运行, 而宿主 docker.sock 是
+        root:docker 0660 —— uid 99 既不是属主也不在 docker 组, 权限位是 `---`。
+        CI 逐 flag 对照实测: 不加任何加固也是 `503 SC--`, 与 M9 无关,
+        是**既有问题** —— 这个代理此前从来没真正通过。
+
+        所以这里断言"要么以 root 跑(命中属主位), 要么显式加入 docker 组",
+        二者必居其一。只写个 uid 却不管组, 等于把一个永远 503 的代理当成功。
         """
-        self.assertNotIn("user", self.svc,
-                         "降非 root 必须先拿到宿主 docker 组 gid 并实机验证, 不能盲写")
+        user = str(self.svc.get("user") or "")
+        group_add = self.svc.get("group_add") or []
+        as_root = user.split(":")[0] in ("0", "root")
+        self.assertTrue(as_root or bool(group_add),
+                        f"既不是 root 也没有 group_add(group_add={group_add!r}), "
+                        "haproxy 以 uid 99 跑时打不开 root:docker 0660 的 socket, "
+                        "所有请求都会 503 SC--, 面板上三个 sidecar 全 unknown")
 
 
 if __name__ == "__main__":
