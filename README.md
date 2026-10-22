@@ -115,6 +115,7 @@ docker compose up -d   # 改 .env 后重启生效
 |---|---|---|
 | `ISO_HUB_PORT` | `8899` | Web 端口（映射到容器 8080） |
 | `ISO_HUB_ADMIN_USER` / `ISO_HUB_ADMIN_PASS` | 空 | 管理员播种：用户表为空时自动创建；**公网部署必设** |
+| `ISO_HUB_ADMIN_PASS_FILE` / `ISO_HUB_TOKEN_FILE` | 空 | 上面两项的只读文件版本（推荐）。设了就只看文件，值不进 `docker inspect` 的 `.Config.Env` |
 | `ISO_HUB_REQUIRE_LOGIN` | `1` | `1`=强制登录才能使用；`0`=关闭门禁 |
 | `ISO_HUB_TOKEN` | 空 | 附加访问令牌（所有写操作需携带）；建议公网环境开启或置于反代之后 |
 | `ISO_HUB_SYNC_INTERVAL` | `86400` | 订阅自动同步间隔（秒）；`0`=关闭内置调度器 |

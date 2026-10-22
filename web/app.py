@@ -1370,10 +1370,41 @@ def save_users(users: dict) -> None:
     save_settings_all({USER_STORE_KEY: users})
 
 
+def _read_secret_file(path: str, what: str) -> str:
+    """读只读文件里的机密, 去掉首尾空白(主要是 `echo pw > f` 带出来的换行)。
+
+    读不到返回空串并告警, 调用方按"未设置"处理。刻意**不**回退到环境变量:
+    "设了文件却读不到"说明路径或权限配错了, 这时悄悄用另一份旧值, 会让人以为
+    自己改的那份生效了 —— 排查成本远高于直接说"没读到"。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError as e:
+        log(f"[安全] ⚠ 无法读取 {what} 文件 {path}: {e} —— 按未设置处理")
+        return ""
+
+
+def _secret_env(name: str, what: str) -> str:
+    """`<NAME>_FILE` 优先, 否则取 `<NAME>`。
+
+    M10: 口令/密钥走环境变量会长期留在两处 —— `docker inspect` 的 `.Config.Env`
+    与容器内 `/proc/<pid>/environ`, 任何能读到其中之一的人直接拿到明文。
+    改成只读文件挂载后, 值不再进容器的环境块。
+    """
+    fp = (os.environ.get(name + "_FILE") or "").strip()
+    if fp:
+        return _read_secret_file(fp, what)
+    return (os.environ.get(name) or "").strip()
+
+
 def seed_admin():
-    """若未播种管理员且设置了 ISO_HUB_ADMIN_USER/PASS, 则创建之。"""
-    u = os.environ.get("ISO_HUB_ADMIN_USER", "").strip()
-    p = os.environ.get("ISO_HUB_ADMIN_PASS", "").strip()
+    """若未播种管理员且设置了 ISO_HUB_ADMIN_USER/PASS, 则创建之。
+
+    口令支持 `ISO_HUB_ADMIN_PASS_FILE`(M10); 用户名不是机密, 只认环境变量。
+    """
+    u = (os.environ.get("ISO_HUB_ADMIN_USER") or "").strip()
+    p = _secret_env("ISO_HUB_ADMIN_PASS", "管理员初始口令")
     if not u or not p:
         return
     users = load_users()
@@ -2518,7 +2549,7 @@ def stop_task() -> bool:
 
 # --------------------------------------------------------------------------- flask app
 app = Flask(__name__, static_folder="static", static_url_path="/static")
-AUTH_TOKEN = os.environ.get("ISO_HUB_TOKEN", "").strip()
+AUTH_TOKEN = _secret_env("ISO_HUB_TOKEN", "访问令牌")
 # 强制登录开关: ISO_HUB_REQUIRE_LOGIN=1 时, 除登录/自身状态接口外所有 API 均需登录会话或 X-Auth-Token
 REQUIRE_LOGIN = os.environ.get("ISO_HUB_REQUIRE_LOGIN", "1").strip().lower() in ("1", "true", "yes", "on")
 

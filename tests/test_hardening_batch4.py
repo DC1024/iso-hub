@@ -199,5 +199,100 @@ class BackupWritableTargetTest(unittest.TestCase):
                 self.assertFalse(app._warn_if_legacy_backup_dir())
 
 
+# --------------------------------------------------------------- M10: 机密走文件
+class SecretFileTest(unittest.TestCase):
+    def test_file_beats_env(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "pw"
+            p.write_text("from-file\n", encoding="utf-8")
+            with patch.dict(os.environ, {"ISO_HUB_ADMIN_PASS": "from-env",
+                                         "ISO_HUB_ADMIN_PASS_FILE": str(p)}):
+                self.assertEqual(app._secret_env("ISO_HUB_ADMIN_PASS", "口令"), "from-file")
+
+    def test_trailing_newline_is_stripped(self):
+        """`echo pw > f` 会带换行; 不 strip 的话播种出来的口令永远对不上。"""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "pw"
+            p.write_text("  s3cret \r\n", encoding="utf-8")
+            with patch.dict(os.environ, {"ISO_HUB_ADMIN_PASS_FILE": str(p)}):
+                self.assertEqual(app._secret_env("ISO_HUB_ADMIN_PASS", "口令"), "s3cret")
+
+    def test_missing_file_does_not_fall_back_to_env(self):
+        """设了文件却读不到 = 配置错了。此时回退到环境变量会让人以为改生效了。"""
+        msgs = []
+        with patch.dict(os.environ, {"ISO_HUB_ADMIN_PASS": "from-env",
+                                     "ISO_HUB_ADMIN_PASS_FILE": "/nope/not-there"}):
+            with patch.object(app, "log", msgs.append):
+                self.assertEqual(app._secret_env("ISO_HUB_ADMIN_PASS", "口令"), "")
+        self.assertTrue(any("无法读取" in m for m in msgs), msgs)
+        self.assertFalse(any("from-env" in m for m in msgs), "告警里不能带出值")
+
+    def test_no_file_falls_back_to_env(self):
+        with patch.dict(os.environ, {"ISO_HUB_ADMIN_PASS": " from-env ",
+                                     "ISO_HUB_ADMIN_PASS_FILE": ""}):
+            self.assertEqual(app._secret_env("ISO_HUB_ADMIN_PASS", "口令"), "from-env")
+
+
+class SeedAdminFromFileTest(unittest.TestCase):
+    def test_seeds_with_password_from_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            settings = Path(td) / "settings.json"
+            pw = Path(td) / "admin_pass"
+            pw.write_text("S3cret-from-file\n", encoding="utf-8")
+            msgs = []
+            env = {"ISO_HUB_ADMIN_USER": "admin",
+                   "ISO_HUB_ADMIN_PASS": "env-pass",
+                   "ISO_HUB_ADMIN_PASS_FILE": str(pw)}
+            with patch.dict(os.environ, env), \
+                    patch.object(app, "SETTINGS_JSON", settings), \
+                    patch.object(app, "log", msgs.append):
+                app.seed_admin()
+                self.assertIn("admin", app.load_users())
+                self.assertTrue(app._check_login("admin", "S3cret-from-file"),
+                                "文件里的口令应该生效")
+                self.assertFalse(app._check_login("admin", "env-pass"),
+                                 "设了 PASS_FILE 就不该再用 ADMIN_PASS")
+            self.assertFalse(any("S3cret-from-file" in m for m in msgs),
+                             "口令不得出现在日志里: %r" % msgs)
+
+    def test_unreadable_file_seeds_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            settings = Path(td) / "settings.json"
+            env = {"ISO_HUB_ADMIN_USER": "admin",
+                   "ISO_HUB_ADMIN_PASS": "env-pass",
+                   "ISO_HUB_ADMIN_PASS_FILE": str(Path(td) / "missing")}
+            with patch.dict(os.environ, env), \
+                    patch.object(app, "SETTINGS_JSON", settings), \
+                    patch.object(app, "log", lambda _m: None):
+                app.seed_admin()
+                self.assertEqual(app.load_users(), {},
+                                 "读不到口令文件时不该拿环境变量里的旧口令凑数")
+
+
+class ComposeSecretPassthroughTest(unittest.TestCase):
+    """compose 少透传一个变量, 用户在 .env 里配了也白配 —— 静默失效最难查。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.docs = {n: yaml.safe_load((REPO_ROOT / n).read_text(encoding="utf-8"))
+                    for n in COMPOSE_FILES}
+
+    def test_secret_file_vars_are_passed_through(self):
+        for name, doc in self.docs.items():
+            env = _env_dict(doc["services"]["iso-hub"])
+            for var in ("ISO_HUB_ADMIN_PASS_FILE", "ISO_HUB_TOKEN_FILE",
+                        "ISO_HUB_SECRET_KEY_FILE"):
+                with self.subTest(compose=name, var=var):
+                    self.assertIn(var, env)
+
+    def test_admin_seed_vars_are_passed_through(self):
+        """dockerhub 变体曾整个漏掉 ADMIN_USER/PASS —— 那条路径根本无法播种管理员。"""
+        for name, doc in self.docs.items():
+            env = _env_dict(doc["services"]["iso-hub"])
+            for var in ("ISO_HUB_ADMIN_USER", "ISO_HUB_ADMIN_PASS"):
+                with self.subTest(compose=name, var=var):
+                    self.assertIn(var, env)
+
+
 if __name__ == "__main__":
     unittest.main()
