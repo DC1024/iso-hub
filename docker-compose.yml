@@ -95,6 +95,9 @@ services:
       - ISO_HUB_SECRET_KEY_FILE=${ISO_HUB_SECRET_KEY_FILE:-}
       # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
       - ISO_HUB_REQUIRE_LOGIN=${ISO_HUB_REQUIRE_LOGIN:-1}
+      # 反向代理支持(H1): 前置 nginx/Caddy/Traefik 时设 1, 从 X-Forwarded-For 取真实 IP。
+      # ⚠️ 没有反代不要开 —— 该头客户端可伪造, 开了等于允许自称 127.0.0.1。
+      - ISO_HUB_TRUST_PROXY=${ISO_HUB_TRUST_PROXY:-}
       # 管理员账号播种: 首次启动时用这两个变量自动创建管理员
       # 不设置的话, 公网访问登录会报"管理员账号未设置"(防抢注), 只能从服务器本机建号
       - ISO_HUB_ADMIN_USER=${ISO_HUB_ADMIN_USER:-}

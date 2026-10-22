@@ -41,7 +41,7 @@ def api_user_login():
     # P3 修复: 登录失败限速 —— 此前 /api/user/login 完全没有节流, 公网实例可被
     # 无限次撞库。策略刻意温和(连续 5 次失败锁 5 分钟, 成功即清零), 只挡暴力枚举,
     # 不惩罚手误; 计数只在内存, 容器重启归零。
-    ip = (request.remote_addr or "-").strip()
+    ip = core._client_ip()
     wait = core._login_lock_remaining(ip)
     if wait > 0:
         return jsonify({"error": f"登录尝试过于频繁，请 {wait} 秒后再试",
@@ -49,9 +49,13 @@ def api_user_login():
     # 首次登录且尚未播种: 允许用 ISO_HUB_ADMIN_USER/PASS 播种
     if not core.load_users() and not (os.environ.get("ISO_HUB_ADMIN_USER", "").strip() or ""):
         # 无可播种账号, 允许首个登录者创建管理员(设置页用相同用户名/密码建账号)
-        # B5 修复: 仅限 localhost 请求放行首用户建号, 防止公网访客顺手抢注管理员
-        if request.remote_addr not in ("127.0.0.1", "::1", "localhost"):
-            return jsonify({"error": "管理员账号未设置, 请先在服务器本机或通过环境变量创建"}), 403
+        # H1: 判定收敛到内核的 _bootstrap_denied_reason() —— 由它统一处理
+        # "本机/局域网 vs 公网" 与 "反代是否被信任" 两件事。此前这里是裸的
+        # `remote_addr not in ("127.0.0.1", "::1", "localhost")`, 既挡掉了整个
+        # 局域网, 又在反代部署下把公网客户端误判成本机。
+        reason = core._bootstrap_denied_reason()
+        if reason:
+            return jsonify({"error": reason, "code": "bootstrap_denied"}), 403
         if not u or not p:
             return jsonify({"error": "缺少用户名或密码"}), 400
         salt = secrets.token_hex(16)

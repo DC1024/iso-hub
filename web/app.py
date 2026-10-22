@@ -29,6 +29,7 @@ import shlex
 import base64
 import hashlib
 import configparser
+import ipaddress
 from time import struct_time  # 供 _sched_matches 类型注解
 import threading
 import subprocess
@@ -2549,6 +2550,18 @@ def stop_task() -> bool:
 
 # --------------------------------------------------------------------------- flask app
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+# H1: 反向代理支持。默认关闭 —— 没有代理时 X-Forwarded-For 是客户端自己填的,
+# 信了它就等于让任何人自称 127.0.0.1(既能绕过"仅内网可建号", 也能绕过登录限速)。
+# 前面确实挂了 nginx/Caddy/Traefik 时才设 ISO_HUB_TRUST_PROXY=1。
+# x_for=1 表示"只信任最近一跳", 即取 X-Forwarded-For 的**最后**一项 ——
+# nginx 的 $proxy_add_x_forwarded_for 会把真实来源追加在末尾, 前面的项客户端可伪造。
+TRUST_PROXY = os.environ.get("ISO_HUB_TRUST_PROXY", "").strip().lower() in (
+    "1", "true", "yes", "on")
+if TRUST_PROXY:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+
 AUTH_TOKEN = _secret_env("ISO_HUB_TOKEN", "访问令牌")
 # 强制登录开关: ISO_HUB_REQUIRE_LOGIN=1 时, 除登录/自身状态接口外所有 API 均需登录会话或 X-Auth-Token
 REQUIRE_LOGIN = os.environ.get("ISO_HUB_REQUIRE_LOGIN", "1").strip().lower() in ("1", "true", "yes", "on")
@@ -2596,6 +2609,55 @@ def _warn_if_legacy_backup_dir() -> bool:
         f" && rmdir {legacy}")
     log("!" * 70)
     return True
+
+
+def _client_ip() -> str:
+    """当前请求的客户端 IP。
+
+    启用 ISO_HUB_TRUST_PROXY 后 ProxyFix 已经把 remote_addr 换成真实来源,
+    所以这里不需要再自己解析 X-Forwarded-For —— 只解析一次, 只有一个真相。
+    """
+    return (request.remote_addr or "").strip()
+
+
+def _ip_is_lan(ip: str) -> bool:
+    """是否属于"本机或私有网段"(公网不可路由的那一类)。
+
+    is_loopback / is_private / is_link_local 合起来覆盖: 127.0.0.0/8、::1、
+    10/8、172.16/12、192.168/16、fc00::/7、169.254/16、fe80::/10。
+    IPv4-mapped IPv6(::ffff:192.168.1.5)先还原成 IPv4 再判 —— 否则它落在
+    ::ffff:0:0/96 里, 按 v6 判会得出与直觉相反的结论。
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:      # 空串 / 非法值 / 上游给的怪字符串
+        return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return bool(addr.is_loopback or addr.is_private or addr.is_link_local)
+
+
+def _bootstrap_denied_reason() -> str:
+    """首次建号(用户表为空时由首个访客创建管理员)的准入判定。空串 = 放行。
+
+    H1: 原判定是"仅 127.0.0.1 / ::1", 部署在局域网时其他设备根本建不了号,
+    只能去 SSH 隧道。现在放宽到"本机或私有网段", 公网来源仍然 403。
+
+    为什么不能只是把字符串比对改宽: 反向代理部署时容器内的 remote_addr 恒为
+    代理地址(127.0.0.1 或 docker 网关), 无脑放宽等于把公网客户端当成内网放行
+    —— 谁先打开登录页谁就是管理员。所以:
+      · 用反代必须显式设 ISO_HUB_TRUST_PROXY=1, 由 ProxyFix 取真实 IP;
+      · 没设却收到了 X-Forwarded-For, 说明前面有我们看不穿的代理, 一律拒绝,
+        并把该设哪个变量直接写在错误里。宁可拒绝, 也不靠猜。
+    """
+    ip = _client_ip()
+    if not TRUST_PROXY and request.headers.get("X-Forwarded-For"):
+        return ("检测到反向代理转发头, 但未启用 ISO_HUB_TRUST_PROXY=1。"
+                "请设置该变量后重启(或改用 ISO_HUB_ADMIN_USER/PASS 播种管理员)")
+    if _ip_is_lan(ip):
+        return ""
+    return ("管理员账号未设置, 请先在服务器本机或局域网内建号,"
+            " 或设置 ISO_HUB_ADMIN_USER/PASS")
 
 
 @app.before_request

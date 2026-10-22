@@ -18,6 +18,7 @@
 
 import importlib.util
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -292,6 +293,165 @@ class ComposeSecretPassthroughTest(unittest.TestCase):
             for var in ("ISO_HUB_ADMIN_USER", "ISO_HUB_ADMIN_PASS"):
                 with self.subTest(compose=name, var=var):
                     self.assertIn(var, env)
+
+
+# ------------------------------------------------------------------- H1: 首次建号
+class IpClassifyTest(unittest.TestCase):
+    LAN = ("127.0.0.1", "::1", "192.168.1.5", "192.168.43.18", "10.0.0.1",
+           "172.16.0.1", "172.31.255.254", "169.254.1.1", "fc00::1",
+           "fd12:3456::1", "fe80::1", "::ffff:192.168.1.5")
+    WAN = ("8.8.8.8", "1.1.1.1", "223.5.5.5", "172.32.0.1", "172.15.255.255",
+           "2001:4860:4860::8888", "", "not-an-ip", "999.1.1.1")
+
+    def test_private_and_loopback_are_lan(self):
+        for ip in self.LAN:
+            with self.subTest(ip=ip):
+                self.assertTrue(app._ip_is_lan(ip), f"{ip} 应判为内网")
+
+    def test_public_is_not_lan(self):
+        for ip in self.WAN:
+            with self.subTest(ip=ip):
+                self.assertFalse(app._ip_is_lan(ip), f"{ip} 不该判为内网")
+
+    def test_ipv4_mapped_is_unwrapped(self):
+        """::ffff:192.168.1.5 若不还原成 v4, 会落到 ::ffff:0:0/96 上判反。"""
+        self.assertTrue(app._ip_is_lan("::ffff:192.168.1.5"))
+        self.assertFalse(app._ip_is_lan("::ffff:8.8.8.8"))
+
+
+class BootstrapPolicyTest(unittest.TestCase):
+    """_bootstrap_denied_reason(): 空串=放行, 非空=拒绝(内容直接回给客户端)。"""
+
+    @staticmethod
+    def _reason(ip, xff=None, trust_proxy=False):
+        headers = {"X-Forwarded-For": xff} if xff else {}
+        with patch.object(app, "TRUST_PROXY", trust_proxy), \
+                app.app.test_request_context("/api/user/login",
+                                             environ_base={"REMOTE_ADDR": ip},
+                                             headers=headers):
+            return app._bootstrap_denied_reason()
+
+    def test_lan_without_proxy_is_allowed(self):
+        for ip in ("127.0.0.1", "::1", "192.168.43.18", "10.8.0.2"):
+            with self.subTest(ip=ip):
+                self.assertEqual(self._reason(ip), "")
+
+    def test_public_without_proxy_is_denied(self):
+        self.assertNotEqual(self._reason("8.8.8.8"), "")
+
+    def test_forwarded_header_without_trust_is_denied(self):
+        """没设 TRUST_PROXY 却收到 XFF: 说明前面有看不穿的代理, 拒绝并点名该设的变量。"""
+        reason = self._reason("192.168.43.18", xff="8.8.8.8")
+        self.assertIn("ISO_HUB_TRUST_PROXY", reason)
+
+    def test_forwarded_header_with_trust_still_checks_real_ip(self):
+        """开了信任代理也只是"改看真实 IP", 公网照样拒绝。"""
+        self.assertNotEqual(self._reason("8.8.8.8", xff="8.8.8.8", trust_proxy=True), "")
+        self.assertEqual(self._reason("192.168.43.18", xff="192.168.43.18",
+                                      trust_proxy=True), "")
+
+
+class LoginBootstrapEndToEndTest(unittest.TestCase):
+    """走完整 HTTP 栈: 局域网来源能建号, 公网来源 403 且不建号。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.settings = Path(self._tmp.name) / "settings.json"
+        self._env = patch.dict(os.environ, {
+            k: v for k, v in os.environ.items()
+            if k not in ("ISO_HUB_ADMIN_USER", "ISO_HUB_ADMIN_PASS",
+                         "ISO_HUB_ADMIN_PASS_FILE", "ISO_HUB_TOKEN",
+                         "ISO_HUB_TOKEN_FILE")}, clear=True)
+        self._env.start()
+        self._settings_patch = patch.object(app, "SETTINGS_JSON", self.settings)
+        self._settings_patch.start()
+        self._sessions_backup = dict(app._sessions)
+        app._sessions.clear()
+
+    def tearDown(self):
+        app._sessions.clear()
+        app._sessions.update(self._sessions_backup)
+        self._settings_patch.stop()
+        self._env.stop()
+        self._tmp.cleanup()
+
+    def _login(self, ip, user="admin", pw="pw-123456"):
+        return app.app.test_client().post(
+            "/api/user/login", json={"username": user, "password": pw},
+            environ_base={"REMOTE_ADDR": ip})
+
+    def test_lan_client_can_bootstrap(self):
+        r = self._login("192.168.43.50")
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertTrue(r.get_json().get("token"))
+        self.assertIn("admin", app.load_users())
+
+    def test_public_client_is_refused_and_creates_nothing(self):
+        r = self._login("8.8.8.8")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(app.load_users(), {}, "公网来源不能建号")
+
+    def test_forwarded_header_blocks_bootstrap_when_proxy_untrusted(self):
+        r = app.app.test_client().post(
+            "/api/user/login", json={"username": "admin", "password": "pw-123456"},
+            environ_base={"REMOTE_ADDR": "192.168.43.50"},
+            headers={"X-Forwarded-For": "8.8.8.8"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(app.load_users(), {})
+
+    def test_second_login_goes_through_normal_auth(self):
+        """建号之后同一路径必须回到正常校验 —— 不能因为"用户表非空"就放行任意口令。"""
+        self.assertEqual(self._login("192.168.43.50").status_code, 200)
+        bad = self._login("192.168.43.50", pw="wrong")
+        self.assertEqual(bad.status_code, 401)
+
+
+class ProxyFixWiringTest(unittest.TestCase):
+    """ProxyFix 只在显式开启时包上去。
+
+    必须在**子进程**里验证: 这个决定发生在 import 期, 在当前进程里 reload 会换掉
+    sys.modules['app'], 后面所有测试都会拿着一个孤儿模块跑。
+    """
+
+    SNIPPET = (
+        "import sys; sys.path.insert(0, {web!r}); import app; "
+        "from werkzeug.middleware.proxy_fix import ProxyFix; "
+        "print('WRAPPED' if isinstance(app.app.wsgi_app, ProxyFix) else 'PLAIN')"
+    )
+
+    def _run(self, trust_proxy):
+        env = {k: v for k, v in os.environ.items() if k != "ISO_HUB_TRUST_PROXY"}
+        if trust_proxy:
+            env["ISO_HUB_TRUST_PROXY"] = "1"
+        out = subprocess.run(
+            [sys.executable, "-c", self.SNIPPET.format(web=str(REPO_ROOT / "web"))],
+            cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+        return out.stdout.strip().splitlines()[-1]
+
+    def test_default_is_plain(self):
+        self.assertEqual(self._run(False), "PLAIN")
+
+    def test_flag_wraps_wsgi_app(self):
+        self.assertEqual(self._run(True), "WRAPPED")
+
+
+class UserRouteUsesCorePolicyTest(unittest.TestCase):
+    def test_user_route_has_no_inline_localhost_check(self):
+        """防止有人把裸的 remote_addr 判定加回去 —— 那正是 H1 要消灭的写法。"""
+        src = (REPO_ROOT / "web" / "api" / "user.py").read_text(encoding="utf-8")
+        self.assertNotIn('request.remote_addr not in', src)
+        self.assertIn("_bootstrap_denied_reason", src)
+
+
+class ComposeTrustProxyTest(unittest.TestCase):
+    def test_trust_proxy_is_passed_through(self):
+        """compose 不透传的话, 用户在 .env 里配了 ISO_HUB_TRUST_PROXY 也不生效。"""
+        for name in COMPOSE_FILES:
+            doc = yaml.safe_load((REPO_ROOT / name).read_text(encoding="utf-8"))
+            with self.subTest(compose=name):
+                self.assertIn("ISO_HUB_TRUST_PROXY",
+                              _env_dict(doc["services"]["iso-hub"]))
 
 
 if __name__ == "__main__":

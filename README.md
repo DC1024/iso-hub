@@ -117,6 +117,7 @@ docker compose up -d   # 改 .env 后重启生效
 | `ISO_HUB_ADMIN_USER` / `ISO_HUB_ADMIN_PASS` | 空 | 管理员播种：用户表为空时自动创建；**公网部署必设** |
 | `ISO_HUB_ADMIN_PASS_FILE` / `ISO_HUB_TOKEN_FILE` | 空 | 上面两项的只读文件版本（推荐）。设了就只看文件，值不进 `docker inspect` 的 `.Config.Env` |
 | `ISO_HUB_REQUIRE_LOGIN` | `1` | `1`=强制登录才能使用；`0`=关闭门禁 |
+| `ISO_HUB_TRUST_PROXY` | 空 | 前置反向代理时设 `1`（从 `X-Forwarded-For` 取真实 IP）。**没有反代不要开**，否则客户端可自称 `127.0.0.1` |
 | `ISO_HUB_TOKEN` | 空 | 附加访问令牌（所有写操作需携带）；建议公网环境开启或置于反代之后 |
 | `ISO_HUB_SYNC_INTERVAL` | `86400` | 订阅自动同步间隔（秒）；`0`=关闭内置调度器 |
 | `ISO_HUB_BACKUP_DIR` | `/backups` | 配置备份输出目录。刻意在 `./data` 之外（共享树里就是 `settings.json` 明文），改这里要同步 compose 挂载 |
