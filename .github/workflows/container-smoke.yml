@@ -250,7 +250,10 @@ jobs:
             fi
             echo "  ok $desc -> $got"
           }
-          B=http://localhost:2375
+          # 必须用 127.0.0.1 而不是 localhost: 容器 /etc/hosts 里 ::1 排在前面,
+          # musl 会先解析到 ::1, 而 haproxy 的 bind *:2375 只监听 IPv4。
+          # (compose 的 healthcheck 踩过同一个坑, 见 docker-compose.yml 里的注释)
+          B=http://127.0.0.1:2375
 
           # --- 必须放行, 否则功能倒退 ---
           probe 200 "GET /_ping (compose healthcheck)"                   "$B/_ping"
