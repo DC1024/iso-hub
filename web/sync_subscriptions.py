@@ -53,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpg_ledger  # noqa: E402
 # settings.json 的共享读写通道(加锁 + 原子写 + 损坏隔离)。
 # 注意: 本脚本是被 app.py **Popen 出来的独立进程**, 所以线程锁这部分用不上 ——
-# 与主进程的互斥必须要文件锁才做得到。这里真正拿到的是**原子写**: 见下方注释。
+# 与主进程的互斥必须要文件锁才做得到(M3 之后用 config_files.cross_process_lock)。
 import config_files  # noqa: E402
 import errs  # noqa: E402  # 可预期异常组合(JSON 读写/网络), 替代宽捕获
 
@@ -67,19 +67,23 @@ def _failures_path(download_dir: Path) -> Path:
 
 
 def _record_failure(download_dir: Path, typ: str, name: str, fname: str, kind: str) -> None:
-    """记录文件级下载失败(供前端显示「下载失败 / 下载停止」)。"""
+    """记录文件级下载失败(供前端显示「下载失败 / 下载停止」)。
+
+    M3: 全程持跨进程锁 —— 本脚本与 web 进程、并行 runner 同时写这个账本。
+    """
     try:
         jf = _failures_path(download_dir)
-        data = {}
-        if jf.exists():
-            try:
-                data = json.loads(jf.read_text(encoding="utf-8")) or {}
-            except errs.JSON_READ:
-                data = {}
-        data[f"{typ}/{name}/{fname}"] = {"at": int(time.time()), "kind": kind}
-        tmp = jf.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(jf)
+        with config_files.cross_process_lock(jf):
+            data = {}
+            if jf.exists():
+                try:
+                    data = json.loads(jf.read_text(encoding="utf-8")) or {}
+                except errs.JSON_READ:
+                    data = {}
+            data[f"{typ}/{name}/{fname}"] = {"at": int(time.time()), "kind": kind}
+            tmp = jf.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(jf)
     except errs.JSON_WRITE:  # 失败记录写不进不影响同步结果本身
         pass
 
@@ -87,15 +91,16 @@ def _record_failure(download_dir: Path, typ: str, name: str, fname: str, kind: s
 def _clear_failure(download_dir: Path, typ: str, name: str, fname: str) -> None:
     try:
         jf = _failures_path(download_dir)
-        if not jf.exists():
-            return
-        data = json.loads(jf.read_text(encoding="utf-8")) or {}
-        rel = f"{typ}/{name}/{fname}"
-        if rel in data:
-            data.pop(rel, None)
-            tmp = jf.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(jf)
+        with config_files.cross_process_lock(jf):
+            if not jf.exists():
+                return
+            data = json.loads(jf.read_text(encoding="utf-8")) or {}
+            rel = f"{typ}/{name}/{fname}"
+            if rel in data:
+                data.pop(rel, None)
+                tmp = jf.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                tmp.replace(jf)
     except errs.JSON_WRITE:  # 清除失败记录失败不影响同步结果本身
         pass
 

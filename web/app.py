@@ -364,21 +364,27 @@ def write_fail_record(rel: str, kind: str = "hard", err: str = "", url: str = ""
       * "stopped" — 已停止/被中断, 半成品保留, 下次可续传 → 下载停止
 
     v1.3.17: 新增 err/url 两个诊断字段, 并在写入时按 TTL 清理过期记录。
+
+    M3(审查 2026-10): 读-改-写全程持有**跨进程**文件锁。这个文件由 web 线程、
+    iso_runner 子进程、sync_subscriptions 子进程三方共写, 只靠 tmp+replace 的
+    原子写挡不住"后写的覆盖先写的"(丢的是别人的失败记录, 表现为 UI 状态莫名消失)。
     """
     try:
-        data = {}
-        if FAILURES_JSON.exists():
-            data = json.loads(FAILURES_JSON.read_text(encoding="utf-8")) or {}
-        data = drop_expired_failures(data)
-        data[rel] = {
-            "at": int(time.time()),
-            "kind": kind,
-            **({"err": err[:300]} if err else {}),
-            **({"url": url[:500]} if url else {}),
-        }
-        tmp = FAILURES_JSON.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(FAILURES_JSON)
+        with config_files.cross_process_lock(
+                FAILURES_JSON, on_degraded=lambda m: log(f"[WARN] {m}")):
+            data = {}
+            if FAILURES_JSON.exists():
+                data = json.loads(FAILURES_JSON.read_text(encoding="utf-8")) or {}
+            data = drop_expired_failures(data)
+            data[rel] = {
+                "at": int(time.time()),
+                "kind": kind,
+                **({"err": err[:300]} if err else {}),
+                **({"url": url[:500]} if url else {}),
+            }
+            tmp = FAILURES_JSON.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(FAILURES_JSON)
     except errs.JSON_WRITE as e:
         log(f"[WARN] 写下载失败记录失败: {e}")
 

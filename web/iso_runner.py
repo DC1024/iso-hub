@@ -18,6 +18,14 @@ from pathlib import Path
 
 import requests
 
+# 跨进程文件锁(M3): 与 web 进程 / sync_subscriptions 共用同一把锁。
+# 本脚本既可能以 `python web/iso_runner.py` 运行(sys.path[0] 就是 web/),
+# 也可能被测试直接 import —— 两种情况 config_files 都在同目录。
+try:
+    import config_files
+except ImportError:  # pragma: no cover - 仅当以 web.iso_runner 形式导入时走到
+    from . import config_files  # type: ignore[no-redef]
+
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 PART_SUFFIX = ".part"
 # ISO 存放模式: classified=<type>/<发行版>/ 分类存放; flat=统一单目录。
@@ -261,6 +269,15 @@ def _pick_candidates(strategy: str, entry: dict, headers: dict):
     return list(zip(urls, cs))
 
 
+def _warn(msg: str) -> None:
+    """告警走 stderr。
+
+    不能走 stdout: app.py 把它当**结构化标记流**解析(#TARGET / 进度行),
+    混进一行中文告警有概率被当成标记。
+    """
+    print(f"[WARN] {msg}", file=sys.stderr)
+
+
 def _record_failure(data_dir, typ: str, name: str, fname: str, kind: str,
                     err: str = "", url: str = "") -> None:
     """把文件级失败写进 download_failures.json(供前端显示「下载失败/下载停止」)。
@@ -277,23 +294,25 @@ def _record_failure(data_dir, typ: str, name: str, fname: str, kind: str,
     """
     try:
         jf = Path(data_dir) / "download_failures.json"
-        data = {}
-        if jf.exists():
-            try:
-                data = json.loads(jf.read_text(encoding="utf-8")) or {}
-            except errs.JSON_READ:
-                data = {}
-        data = _drop_expired_failures(data)
-        data[f"{typ}/{name}/{fname}"] = {
-            "at": int(time.time()),
-            "kind": kind,
-            # 只在有值时写, 避免把 JSON 撑满空字段
-            **({"err": err[:300]} if err else {}),
-            **({"url": url[:500]} if url else {}),
-        }
-        tmp = jf.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(jf)
+        # M3: 这个文件同时被 web 线程与其它并行 runner 子进程写, 读-改-写必须跨进程互斥
+        with config_files.cross_process_lock(jf, on_degraded=_warn):
+            data = {}
+            if jf.exists():
+                try:
+                    data = json.loads(jf.read_text(encoding="utf-8")) or {}
+                except errs.JSON_READ:
+                    data = {}
+            data = _drop_expired_failures(data)
+            data[f"{typ}/{name}/{fname}"] = {
+                "at": int(time.time()),
+                "kind": kind,
+                # 只在有值时写, 避免把 JSON 撑满空字段
+                **({"err": err[:300]} if err else {}),
+                **({"url": url[:500]} if url else {}),
+            }
+            tmp = jf.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(jf)
     except errs.JSON_WRITE:  # 失败记录写不进不影响下载结果本身
         pass
 
@@ -323,15 +342,16 @@ def _clear_failure(data_dir, typ: str, name: str, fname: str) -> None:
     """下载成功后清除该文件的失败记录。"""
     try:
         jf = Path(data_dir) / "download_failures.json"
-        if not jf.exists():
-            return
-        data = json.loads(jf.read_text(encoding="utf-8")) or {}
-        rel = f"{typ}/{name}/{fname}"
-        if rel in data:
-            data.pop(rel, None)
-            tmp = jf.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(jf)
+        with config_files.cross_process_lock(jf, on_degraded=_warn):
+            if not jf.exists():
+                return
+            data = json.loads(jf.read_text(encoding="utf-8")) or {}
+            rel = f"{typ}/{name}/{fname}"
+            if rel in data:
+                data.pop(rel, None)
+                tmp = jf.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                tmp.replace(jf)
     except errs.JSON_WRITE:  # 清除失败记录失败不影响下载结果本身
         pass
 
@@ -352,20 +372,22 @@ def _record_unverified(data_dir, typ: str, name: str, fname: str, reason: str,
     """
     try:
         jf = Path(data_dir) / "download_unverified.json"
-        data = {}
-        if jf.exists():
-            try:
-                data = json.loads(jf.read_text(encoding="utf-8")) or {}
-            except errs.JSON_READ:
-                data = {}
-        data[f"{typ}/{name}/{fname}"] = {
-            "at": int(time.time()),
-            "reason": (reason or "")[:300],
-            "state": state if state in ("unverified", "mismatch") else "unverified",
-        }
-        tmp = jf.with_name(jf.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(jf)
+        # M3: 同上 —— 多个 runner 并行时, 未验签标记同样会互相覆盖
+        with config_files.cross_process_lock(jf, on_degraded=_warn):
+            data = {}
+            if jf.exists():
+                try:
+                    data = json.loads(jf.read_text(encoding="utf-8")) or {}
+                except errs.JSON_READ:
+                    data = {}
+            data[f"{typ}/{name}/{fname}"] = {
+                "at": int(time.time()),
+                "reason": (reason or "")[:300],
+                "state": state if state in ("unverified", "mismatch") else "unverified",
+            }
+            tmp = jf.with_name(jf.name + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(jf)
     except errs.JSON_WRITE:  # 未验签记录写不进不影响落定结果本身
         pass
 
@@ -374,15 +396,16 @@ def _clear_unverified(data_dir, typ: str, name: str, fname: str) -> None:
     """真正校验通过后清除「未验签」标记。"""
     try:
         jf = Path(data_dir) / "download_unverified.json"
-        if not jf.exists():
-            return
-        data = json.loads(jf.read_text(encoding="utf-8")) or {}
-        rel = f"{typ}/{name}/{fname}"
-        if rel in data:
-            data.pop(rel, None)
-            tmp = jf.with_name(jf.name + ".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(jf)
+        with config_files.cross_process_lock(jf, on_degraded=_warn):
+            if not jf.exists():
+                return
+            data = json.loads(jf.read_text(encoding="utf-8")) or {}
+            rel = f"{typ}/{name}/{fname}"
+            if rel in data:
+                data.pop(rel, None)
+                tmp = jf.with_name(jf.name + ".tmp")
+                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                tmp.replace(jf)
     except errs.JSON_WRITE:  # 清除未验签标记失败不影响校验结果本身
         pass
 
