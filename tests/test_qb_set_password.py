@@ -25,6 +25,7 @@ import configparser
 import hashlib
 import importlib.util
 import io
+import os
 import re
 import shlex
 import subprocess
@@ -34,6 +35,7 @@ import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "qb_set_password.py"
@@ -177,13 +179,23 @@ class PatchScriptContractTest(unittest.TestCase):
                           f"payload 里没有 {key.replace(chr(92) * 2, chr(92))}")
 
     def test_disables_local_host_auth(self):
-        """qB 5.x 的关键开关：不开这个，密码对了也 401。
+        """LocalHostAuth=false 是**取消** localhost 免密, 属于收紧。
 
-        注释里写得很清楚是「关键」，重构时最容易被当成冗余删掉，故单独钉一条。
+        默认 true 表示本机访问不验密码; iso-hub 从容器网络访问 qB, 不该享受免密。
+        重构时最容易被当成冗余删掉, 故单独钉一条。
+        """
+        self.assertRegex(_payload(), r"LocalHostAuth',\s*'false'")
+
+    def test_keeps_host_header_validation_on(self):
+        """L1: 不得再把 Host 头校验关掉。
+
+        旧版本写 false 只为让浏览器经映射端口(8090)打开 WebUI, 代价是 DNS
+        rebinding 防护被整个拆掉。现在写 true(qB 默认值), 让 8090 那条路
+        付出应有的代价(401), 而不是悄悄削弱 qB。
         """
         payload = _payload()
-        self.assertRegex(payload, r"LocalHostAuth',\s*'false'")
-        self.assertRegex(payload, r"HostHeaderValidation',\s*'false'")
+        self.assertRegex(payload, r"HostHeaderValidation',\s*'true'")
+        self.assertNotRegex(payload, r"HostHeaderValidation',\s*'false'")
 
     def test_preserves_key_case(self):
         """`c.optionxform = str` 是「大小写保留」的唯一开关。
@@ -278,7 +290,7 @@ class PatchScriptExecutionTest(unittest.TestCase):
         prefs = self._read()["Preferences"]
         self.assertEqual(prefs["WebUI\\Username"], "operator")
         self.assertEqual(prefs["WebUI\\LocalHostAuth"], "false")
-        self.assertEqual(prefs["WebUI\\HostHeaderValidation"], "false")
+        self.assertEqual(prefs["WebUI\\HostHeaderValidation"], "true")
         self.assertTrue(prefs["WebUI\\Password_PBKDF2"].startswith("@ByteArray("))
 
     def test_other_sections_preserved(self):
@@ -324,10 +336,18 @@ class PatchScriptExecutionTest(unittest.TestCase):
 class _FakeStream:
     def __init__(self, data=b""):
         self._data = data
+        self.written = []
         self.closed = False
 
     def read(self):
         return self._data
+
+    def write(self, data):
+        self.written.append(data)
+        return len(data)
+
+    def flush(self):
+        pass
 
     def close(self):
         self.closed = True
@@ -362,6 +382,7 @@ class _FakeSSH:
 
     def __init__(self):
         self.commands = []
+        self.stdins = []
         self.policy = None
         self.connect_kw = None
         self.uploaded = {}
@@ -377,7 +398,9 @@ class _FakeSSH:
 
     def exec_command(self, cmd, timeout=None):
         self.commands.append(cmd)
-        return _FakeStream(), _FakeStream(b""), _FakeStream(b"")
+        self.stdin = _FakeStream()
+        self.stdins.append(self.stdin)
+        return self.stdin, _FakeStream(b""), _FakeStream(b"")
 
     def open_sftp(self):
         self._sftp = _FakeSFTP(self)
@@ -402,8 +425,11 @@ class MainTest(unittest.TestCase):
         PARAMIKO.SSHClient = _FakeSSH
         self.addCleanup(setattr, PARAMIKO, "SSHClient", self._real_client)
 
-    def _run(self, extra=(), pw="sshpw"):
-        argv = ["qb_set_password.py", "--host", "10.0.0.1", "--user", "root", "--pw", pw]
+    def _run(self, extra=(), pw="sshpw", qbpass="qbsecret"):
+        argv = ["qb_set_password.py", "--host", "10.0.0.1", "--user", "root",
+                "--pw", pw]
+        if qbpass is not None:      # None = 故意不传, 测 QB_PASS 兜底
+            argv += ["--qbpass", qbpass]
         argv.extend(extra)
         old = sys.argv
         sys.argv = argv
@@ -442,25 +468,59 @@ class MainTest(unittest.TestCase):
         self.assertLess(i_patch, i_start, "必须先改配置再起容器")
         self.assertIn("iso-hub-qbittorrent", ssh.commands[i_stop])
 
-    def test_ssh_password_is_quoted(self):
-        """SSH 密码来自命令行，含 shell 元字符时绝不能裸奔进远端命令。"""
+    def test_ssh_password_never_enters_remote_command(self):
+        """L1: 口令只走 stdin, 不得以任何形态出现在远端命令里。
+
+        旧写法 `echo <pw> | sudo -S` 会把口令放进远端 echo 进程的 argv —— 同机
+        任何用户 `ps aux` 都能看到。shlex.quote 只防注入, 不防可见性, 所以这里
+        连"转义后的形态"也一并禁止。
+        """
         pw = "p'a s;s$wd`id`"
         _rc, ssh, _o = self._run(pw=pw)
-        quoted = shlex.quote(pw)
-        self.assertNotEqual(quoted, pw, "夹具密码应需要转义")
+        self.assertTrue(ssh.commands)
+        self.assertNotEqual(shlex.quote(pw), pw, "夹具密码应需要转义")
         for cmd in ssh.commands:
-            if pw in cmd:
-                # 只允许以转义后的形态出现
-                self.assertNotIn(pw, cmd.replace(quoted, ""),
-                                 f"密码未转义就进了命令: {cmd[:120]}")
+            self.assertNotIn(pw, cmd, f"口令原样进了远端命令: {cmd[:120]}")
+            self.assertNotIn(shlex.quote(pw), cmd,
+                             f"口令以转义形态进了远端命令: {cmd[:120]}")
+            self.assertNotIn("| sudo", cmd, f"又用管道把口令喂给 sudo: {cmd[:120]}")
 
-    def test_uses_sudo_with_stdin_password(self):
-        """`sudo -S -p ''`：密码走 stdin，且不打印提示语污染输出解析。"""
-        _rc, ssh, _o = self._run()
-        sudo_cmds = [c for c in ssh.commands if "sudo" in c]
+    def test_sudo_password_goes_over_stdin(self):
+        """`sudo -S -p ''`：口令从 stdin 读, 所以每条 sudo 命令都必须真的写进去。
+
+        写漏了不会报错, 只会让 sudo 挂在那儿等输入, 直到 exec_command 超时 ——
+        表现为"脚本卡住", 很难从现象反推到这一行。
+        """
+        _rc, ssh, _o = self._run(pw="sshpw")
+        sudo_cmds = [c for c in ssh.commands if c.startswith("sudo ")]
         self.assertTrue(sudo_cmds)
         for c in sudo_cmds:
             self.assertIn("sudo -S -p ''", c)
+        self.assertEqual(len(ssh.stdins), len(ssh.commands))
+        for st in ssh.stdins:
+            self.assertEqual(st.written, ["sshpw\n"],
+                             "每条命令都该收到一次口令(sudo 可能每次都重新提示)")
+
+    def test_no_sudo_skips_sudo_and_stdin(self):
+        """root 直连时 --no-sudo 必须真的不调 sudo, 也不该白喂口令。"""
+        _rc, ssh, _o = self._run(extra=["--no-sudo"])
+        for c in ssh.commands:
+            self.assertNotIn("sudo", c)
+        for st in ssh.stdins:
+            self.assertEqual(st.written, [])
+
+    def test_qbpass_from_env(self):
+        """口令可以改走环境变量, 免得留在 shell 历史里。"""
+        with patch.dict(os.environ, {"QB_PASS": "envsecret"}):
+            rc, ssh, _o = self._run(qbpass=None)
+        self.assertEqual(rc, 0)
+        # 远端 sh 命令里那个 PBKDF2 值必须能用 envsecret 反算出来
+        sh_cmd = next(c for c in ssh.commands if "sh /tmp/_qbpatch_" in c)
+        val = shlex.split(sh_cmd)[-3]
+        m = re.match(r"^@ByteArray\(([^:]+):(.+)\)$", val)
+        salt = base64.b64decode(m.group(1))
+        expect = hashlib.pbkdf2_hmac("sha512", b"envsecret", salt, 100000, 64)
+        self.assertEqual(m.group(2), base64.b64encode(expect).decode())
 
     def test_remote_script_path_is_random(self):
         """临时脚本名必须每次不同 —— 固定路径可被预先占位/替换。"""
@@ -500,27 +560,30 @@ class CliTest(unittest.TestCase):
     """凭据参数没有默认值；缺了就非零退出，不能猜一个去连。"""
 
     def test_required_args_have_no_default(self):
-        """三个凭据参数都没有默认值 —— 缺任一个就 argparse 直接退出(2)。
+        """四个凭据参数都没有默认值 —— 缺任一个就 argparse 直接退出(2)。
 
-        有默认值意味着脚本会拿一个猜的值去连生产机，比直接失败危险得多。
+        有默认值意味着脚本会拿一个猜的值去连生产机/去设口令, 比直接失败危险得多。
+        旧版本的 --qbpass 默认 adminadmin, 那正是 L1 要修的点。
         """
-        vals = {"--host": "10.0.0.1", "--user": "root", "--pw": "p"}
-        for missing in vals:
-            with self.subTest(missing=missing):
-                argv = ["qb_set_password.py"]
-                for flag, v in vals.items():
-                    if flag != missing:
-                        argv += [flag, v]
-                old = sys.argv
-                sys.argv = argv
-                try:
-                    with redirect_stderr(io.StringIO()), \
-                            self.assertRaises(SystemExit) as cm:
-                        qb.main()
-                finally:
-                    sys.argv = old
-                self.assertEqual(cm.exception.code, 2,
-                                 f"{missing} 缺失时不应进入主流程")
+        vals = {"--host": "10.0.0.1", "--user": "root", "--pw": "p", "--qbpass": "q"}
+        # QB_PASS 会顶替 --qbpass, 测"缺参"时必须先把它清空, 否则这一条恒过
+        with patch.dict(os.environ, {"QB_PASS": ""}):
+            for missing in vals:
+                with self.subTest(missing=missing):
+                    argv = ["qb_set_password.py"]
+                    for flag, v in vals.items():
+                        if flag != missing:
+                            argv += [flag, v]
+                    old = sys.argv
+                    sys.argv = argv
+                    try:
+                        with redirect_stderr(io.StringIO()), \
+                                self.assertRaises(SystemExit) as cm:
+                            qb.main()
+                    finally:
+                        sys.argv = old
+                    self.assertEqual(cm.exception.code, 2,
+                                     f"{missing} 缺失时不应进入主流程")
 
     def test_help_mentions_usage(self):
         """`--help` 必须正常退出并说清用法。

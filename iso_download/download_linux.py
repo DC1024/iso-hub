@@ -5,6 +5,7 @@ Linux发行版下载器
 用于下载、更新和验证各种Linux发行版的ISO文件
 """
 
+import contextlib
 import json
 import os
 import sys
@@ -25,6 +26,11 @@ ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 # 校验阶段拿到的文件名因此可能带这个后缀, 凡是要拿文件名去外部数据源
 # (sha256sums.txt 等)查表的地方, 都必须先剥离它。
 PART_SUFFIX = ".part"
+# M4/M5: 半成品的「来源标记」(<part>.src), 记住这个 .part 是从哪个 URL 下的。
+# 有了多源 failover 之后, 跨源续传就成了真问题: 两个镜像上的同名文件可能是
+# 不同版本, 前一半来自 A、后一半来自 B 拼出来的文件只能靠最终 SHA256 兜底。
+# 必须与 web/iso_runner.py、web/app.py 的同名常量保持一致(有测试盯着)。
+PART_SRC_SUFFIX = ".part.src"
 # ISO 存放模式: classified=<type>/<发行版>/ 分类存放(默认); flat=统一单目录。
 # 必须与 web/app.py 的 STORAGE_MODES / FLAT_ISO_DIRNAME 保持一致。
 STORAGE_MODES = ("classified", "flat")
@@ -47,6 +53,44 @@ RETRY_STATUSES = (429, 500, 502, 503, 504)
 # 就按 Content-Length/Content-Range 比一次可用空间, 不足直接拒单。
 # 预留 256 MiB 给校验和文件、日志与"刚好写满"导致的其他写盘失败。
 DISK_SAFETY_MARGIN = 256 * 1024 * 1024
+
+
+# --------------------------------------------------------------------------- 半成品来源标记
+def part_src_path(part) -> Path:
+    """半成品来源标记的路径: ``<part>.src``。"""
+    return Path(str(part) + PART_SRC_SUFFIX)
+
+
+def read_part_src(part) -> str:
+    """读取半成品是从哪个 URL 下的; 没有标记(旧版本留下的 .part)返回空串。"""
+    try:
+        return part_src_path(part).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def write_part_src(part, url: str) -> None:
+    """记下当前半成品的来源。写不进去只是失去同源判定, 不影响下载本身。"""
+    try:
+        part_src_path(part).write_text((url or "") + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def forget_part_src(part) -> None:
+    try:
+        part_src_path(part).unlink()
+    except OSError:
+        pass
+
+
+def discard_part(part) -> None:
+    """删半成品, 连同它的来源标记 —— 留着标记会污染下一次续传的判断。"""
+    for p in (Path(part), part_src_path(part)):
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 def _human_bytes(n: int) -> str:
@@ -527,6 +571,12 @@ class LinuxDistributionDownloader:
           "fail"  签名校验失败/指纹不匹配(应拒绝下载)
           "skip"  官方无公钥/获取失败/无 gpg 环境(降级到 SHA256, 不阻塞)
         """
+        # M1 修复(审查 2026-10): 没有 checksum 文本就没有可验的对象。
+        # 缺了这道闸, checksum 源 404 后调用方会把 404 的 HTML 正文当 checksum
+        # 传进来, 再去配 .gpg 验签, 必然 fail —— 又是一次"不可达被误判成被篡改"。
+        if not checksum_text:
+            print("  - 无 checksum 文本可验, 跳过 GPG 验签(降级)")
+            return "skip"
         try:
             import shutil
             # 导入/导出/指纹提取都依赖 gpg; gpgv 只负责校验签名
@@ -565,7 +615,19 @@ class LinuxDistributionDownloader:
             # 3. 取 detached 签名文件(URL 或按惯例推导)
             if not sig_url:
                 return "skip"  # 无签名文件可验
-            sig = requests.get(sig_url, timeout=30).content
+            # M1 修复(审查 2026-10): 必须先判 HTTP 状态码, 再判内容是否为空。
+            # 镜像对不存在的 .gpg 返回 404 的 HTML 错误页 —— 正文非空, 拦不住下面
+            # 的 `if not sig`, 交给 gpg 验签必然失败, 于是"源不可达"被误判成
+            # "签名被篡改"(fail), 触发无谓重下并污染 /api/health 账本。
+            # 不可达属"无法判定", 只能降级 skip —— 这是 v1.3.17 三态契约的要求:
+            # fail 只留给"拿到了材料且明确不符"。
+            try:
+                sig_resp = requests.get(sig_url, timeout=30)
+                sig_resp.raise_for_status()
+                sig = sig_resp.content
+            except requests.RequestException as e:
+                print(f"  获取签名文件失败(降级跳过验签): {e}")
+                return "skip"
             if not sig:
                 return "skip"
             # 4. 验证 detached 签名: 优先 gpgv(不信任签名者), 否则回退 gpg --verify
@@ -643,9 +705,15 @@ class LinuxDistributionDownloader:
             print("  尝试 GPG 签名验证 checksum 文件…")
             checksum_text = ""
             try:
-                checksum_text = requests.get(checksum_url, headers=self.headers, timeout=30).text
+                # M1 修复(审查 2026-10): 与 verify_signature 同因 —— 404/5xx 返回的
+                # HTML 正文不是 checksum, 不能拿去验签。raise_for_status 让"不可达"
+                # 走 except 分支, 保持 checksum_text 为空, 后续由 verify_signature
+                # 的空文本闸降级为 skip, 而不是报 fail。
+                checksum_resp = requests.get(checksum_url, headers=self.headers, timeout=30)
+                checksum_resp.raise_for_status()
+                checksum_text = checksum_resp.text
             except Exception as e:  # noqa: BLE001 - 边界: GPG 预检是可选增强, 获取失败一律降级到 SHA256 比对
-                print(f"  获取 checksum 文本失败: {e}")
+                print(f"  获取 checksum 文本失败(降级): {e}")
             sig_url = dist.get("signature_url") or self._default_sig_url(checksum_url)
             keyring_dir = self.download_dir / "gpg-keyring"  # 缓存到 data 卷
             gpg_status = self.verify_signature(checksum_text, sig_url,
@@ -714,10 +782,19 @@ class LinuxDistributionDownloader:
         
         # 找出需要删除的文件。半成品(.part / .aria2)一律保留:
         # 它们是正在下载或可续传的数据, 既不是"过时 ISO", 也不能当作完整文件处理。
-        files_to_delete = [
-            f for f in existing_files
-            if f not in expected_files and not f.lower().endswith((".part", ".aria2"))
-        ]
+        #
+        # M4 补充: .part.src 是 .part 的**同源证据**, 单独把它删掉, 下一轮就会
+        # 退化成"无标记 → 照旧续传", 正好把跨源拼接的洞重新打开。所以它必须跟着
+        # .part 一起活; 反过来, .part 已经不在的孤立标记要顺手清掉, 否则永久堆积。
+        def _keep(fname: str) -> bool:
+            low = fname.lower()
+            if low.endswith((".part", ".aria2")):
+                return True
+            if low.endswith(PART_SRC_SUFFIX):
+                return (dist_dir / fname[:-len(PART_SRC_SUFFIX)]).exists()
+            return fname in expected_files
+
+        files_to_delete = [f for f in existing_files if not _keep(f)]
         
         if files_to_delete:
             print(f"  清理目录 {dist_dir.name}，删除 {len(files_to_delete)} 个过时文件:")
@@ -731,242 +808,406 @@ class LinuxDistributionDownloader:
         else:
             print(f"  目录 {dist_dir.name} 无需清理")
     
+    # ------------------------------------------------------------------ 多源候选(M5)
+    def candidate_sources(self, dist: dict) -> list:
+        """把清单条目展开成有序候选源 [(url, checksum_url), ...]。
+
+        Web 侧(_pick_candidates)一直有多源 failover, CLI 这边过去只认
+        download_url 一个 URL —— 主源挂掉 CLI 直接跳过, 没有任何兜底。同一个
+        清单在两个入口行为不同, 本身就是缺陷。这里对齐:
+          * download_urls 的顺序就是优先级(与 Web 策略 A 一致);
+          * pin 指定的源置顶(用户在 UI 上手动选过源);
+          * 没有 download_urls 的旧清单退化成单源, 行为与修复前完全一致。
+        """
+        urls = list(dist.get("download_urls") or [])
+        if not urls:
+            urls = [dist["download_url"]]
+        css = list(dist.get("checksum_urls") or [])
+        css += [None] * (len(urls) - len(css))
+        pin = (dist.get("pin") or "").strip()
+        if pin and pin in urls:
+            i = urls.index(pin)
+            urls = [urls[i]] + urls[:i] + urls[i + 1:]
+            css = [css[i]] + css[:i] + css[i + 1:]
+        return list(zip(urls, css))
+
+    # ------------------------------------------------------------- 未验签账本(M5)
+    def _unverified_path(self) -> Path:
+        return Path(self.download_dir) / "download_unverified.json"
+
+    @staticmethod
+    def _ledger_lock(path):
+        """复用 web/config_files.py 的跨进程锁; CLI 独立运行时退化为空锁。
+
+        download_linux.py 是**可以单独运行**的上游脚本(不依赖 web/), 所以不能
+        在模块级 import config_files。容器里由 app 侧拉起时 web/ 在 sys.path 上,
+        这时就用同一把锁, 与 iso_runner / sync_subscriptions 互斥。
+        """
+        try:
+            import config_files  # noqa: PLC0415 - 可选依赖, 见 docstring
+        except ImportError:
+            return contextlib.nullcontext()
+        return config_files.cross_process_lock(path)
+
+    def _record_unverified(self, dist: dict, fname: str, reason: str,
+                           state: str = "unverified") -> None:
+        """落一条「未验签」记录。
+
+        Web 侧早就在落(iso_runner._record_unverified), CLI 侧过去只打印一行 ⚠
+        就当成功了 —— 同一个文件从 CLI 下和从 Web 下, UI 上一个带徽标一个不带。
+        键格式与 Web 侧完全一致: "<type>/<distribution>/<fname>"。
+        """
+        key = "%s/%s/%s" % (dist.get("type", "linux"), dist.get("distribution", ""), fname)
+        jf = self._unverified_path()
+        try:
+            with self._ledger_lock(jf):
+                data = {}
+                if jf.exists():
+                    try:
+                        data = json.loads(jf.read_text(encoding="utf-8")) or {}
+                    except (OSError, ValueError):
+                        data = {}
+                data[key] = {
+                    "at": int(time.time()),
+                    "reason": (reason or "")[:300],
+                    "state": state if state in ("unverified", "mismatch") else "unverified",
+                }
+                tmp = jf.with_name(jf.name + ".tmp")
+                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                tmp.replace(jf)
+        except (OSError, TypeError, ValueError):  # 记账失败不影响落定本身
+            pass
+
+    def _clear_unverified(self, dist: dict, fname: str) -> None:
+        """真正校验通过后撤掉「未验签」标记 —— 否则徽标会永远挂着。"""
+        key = "%s/%s/%s" % (dist.get("type", "linux"), dist.get("distribution", ""), fname)
+        jf = self._unverified_path()
+        try:
+            with self._ledger_lock(jf):
+                if not jf.exists():
+                    return
+                data = json.loads(jf.read_text(encoding="utf-8")) or {}
+                if key in data:
+                    data.pop(key, None)
+                    tmp = jf.with_name(jf.name + ".tmp")
+                    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    tmp.replace(jf)
+        except (OSError, TypeError, ValueError):
+            pass
+
+    # ------------------------------------------------------------------ 主流程
+    def _already_have(self, filepath: Path, target_dist: dict,
+                      verify_checksum: bool) -> bool:
+        """文件已存在时的处置。返回 True 表示"这个版本不用再下"。
+
+        三种结局与修复前一致: 校验通过 → 保留; 校验源不可达 → 保留(不重下);
+        明确不符 → 返回 False 让它重下。额外补两件事(M5②):
+        校验通过时撤掉「未验签」标记; 验不了时**落一条**未验签记录。
+        """
+        print(f"文件已存在: {filepath}")
+        if not verify_checksum:
+            return False
+        success, message = self.verify_checksum_smart(
+            filepath,
+            target_dist.get("checksum_url"),
+            target_dist.get("checksum"),
+            dist=target_dist
+        )
+        if success:
+            print(f"✓ {message}")
+            # 完整文件已校验通过 -> 同名的 .part 是上一轮中断留下的冗余字节。
+            # 不清理会让 UI 长期误报「下载停止(已下载部分)」: 后端 build_distros()
+            # 在同名的完整文件与 .part 之间取 mtime 较新者作条目代表, 残留
+            # .part 通常更新, 于是"已完整"的文件被判成半成品。
+            stale_part = filepath.with_name(filepath.name + PART_SUFFIX)
+            try:
+                if stale_part.exists():
+                    stale_part.unlink()
+                    print(f"  清理冗余半成品: {stale_part}")
+                forget_part_src(stale_part)
+            except OSError as e:  # noqa: BLE001
+                print(f"  清理冗余半成品失败(忽略): {e}")
+            self._clear_unverified(target_dist, filepath.name)
+            return True
+        if success is None:
+            # v1.3.17: 校验源不可达/清单里没这个文件名 —— "没验过"不等于"验不过"。
+            # 旧代码在这里也走 else 分支 → 打印"校验和验证失败，将重新下载",
+            # 于是每个周期都把完好的 ISO 重下一遍(Proxmox 就是这么循环了 10 天)。
+            # 现在: 保留现有文件不动, 明确告警, 不触发重下。
+            print(f"⚠ {message}")
+            print("  完整性无法判定(校验源不可用), 保留现有文件, 不重新下载")
+            self._record_unverified(target_dist, filepath.name, message)
+            return True
+        print(f"✗ {message}")
+        print("校验和验证失败，将重新下载")
+        return False
+
+    def _download_from_url(self, target_dist: dict, url: str, checksum_url,
+                           dist_dir: Path, filepath: Path, filename: str,
+                           verify_checksum: bool) -> str:
+        """从**一个** URL 下载到 .part, 校验通过后原子落定。
+
+        返回:
+          "ok"    —— 落定成功
+          "next"  —— 这个源不行, 换下一个候选源
+          "fatal" —— 与源无关的失败(磁盘空间不足), 换源也没用
+        """
+        name = target_dist.get("distribution", "")
+        # 下载期间写 <最终名>.part, 全部校验通过后才原子改名(见下方 os.replace)。
+        # 这样任务被「停止」kill 或网络中断时, 磁盘上留下的是 .part 半成品,
+        # 后端能识别为「下载停止」, 而不会被误判为已下载的完整 ISO。
+        part_path = filepath.with_name(filepath.name + PART_SUFFIX)
+
+        # M4: 半成品只能续**同一个源**的字节, 换源必须从头下
+        prev_src = read_part_src(part_path)
+        if part_path.exists() and prev_src and prev_src != url:
+            print(f"  ⚠ 半成品来自另一个源, 不跨源续传, 从头下载: {prev_src}")
+            discard_part(part_path)
+
+        print(f"开始下载 {name}: {filename}")
+        print(f"下载链接: {url}")
+
+        try:
+            # 断点续传: 若已有 .part, 带 Range 头请求剩余部分
+            _have = part_path.stat().st_size if part_path.exists() else 0
+            _headers = dict(self.headers or {})
+            if _have:
+                _headers["Range"] = f"bytes={_have}-"
+
+            # B6 修复: 显式超时(连接 15s, 读 60s), 避免镜像站半开连接时下载线程永久挂起
+            # v1.3.17: 再套一层退避重试, 覆盖瞬时抖动与 429/5xx(不重试 416)
+            response = http_get_with_retry(url, headers=_headers,
+                                           stream=True, timeout=(15, 60))
+            # v1.3.17: 416 = Range 起点越界, 说明 .part 字节数已 >= 远端文件全长。
+            # 旧实现把它归进 else 分支(同 200 处理) → 从头重下整个文件, 下完 .part
+            # 又是全量 → 下一轮再 416 → 无限循环(Proxmox 实测每天一轮, 10 天未自愈)。
+            # 正确语义: .part 已是**完整候选**, 跳过传输直接进校验。
+            _already_complete = bool(_have and response.status_code == 416)
+            if _already_complete:
+                print(f"断点已满({_have/1024/1024:.1f} MiB): 服务器返回 416, "
+                      f"{part_path.name} 视为完整候选, 直接进入校验")
+                response.close()
+                total_size = _have
+            # 服务器支持 Range 时返回 206, 此时应追加写入
+            elif _have and response.status_code == 206:
+                _cr = response.headers.get('content-range', '')
+                try:
+                    total_size = int(_cr.rsplit('/', 1)[-1]) if '/' in _cr else 0
+                except (TypeError, ValueError):
+                    total_size = 0
+                if not total_size:
+                    try:
+                        total_size = _have + int(response.headers.get('content-length') or 0)
+                    except (TypeError, ValueError):
+                        total_size = 0
+                print(f"续传: 从 {_have/1024/1024:.1f} MiB 继续")
+                _mode = 'ab'
+            else:
+                if _have and response.status_code == 200:
+                    print(f"服务器不支持断点续传, 从头下载(丢弃 {_have/1024/1024:.1f} MiB)")
+                _have = 0
+                _mode = 'wb'
+                # 风险6修复: 镜像站可能返回非法/缺失 content-length, 解析失败按 0 处理(不定长模式)
+                try:
+                    total_size = int(response.headers.get('content-length') or 0)
+                except (TypeError, ValueError):
+                    total_size = 0
+            if not _already_complete:
+                # 416 是"已完成"信号而非错误, 上面已 close, 不能再 raise_for_status
+                response.raise_for_status()
+
+            if not _already_complete:
+                # v1.5.2: 写盘前确认放得下, 不足则整条跳过(不产生 .part)。
+                # 416 时字节已经全在盘上, 无需再判。GET 没给 Content-Length 时
+                # 用 HEAD 兜底再判一次(判不了才放行, 与大小校验同一套兜底思路)。
+                if not total_size:
+                    total_size = self._head_content_length(url)
+                _ok_space, _why_space = check_free_space(
+                    dist_dir, max(0, total_size - _have))
+                if not _ok_space:
+                    response.close()
+                    print(f"\n✗ 下载中止: {_why_space}")
+                    print("  清出空间后重跑即可续传(.part 未被删除)")
+                    # 空间不足与源无关: 换下一个镜像照样写不下, 只会把同一个错误重试 N 遍
+                    return "fatal"
+                if _why_space:
+                    print(f"⚠ {_why_space}")
+
+            # 使用tqdm创建进度条(416 时跳过传输, 直接落校验)
+            if not _already_complete:
+                write_part_src(part_path, url)   # 先记来源, 再落第一个字节
+                with open(part_path, _mode) as f:
+                    with tqdm(
+                        total=total_size,
+                        initial=_have,
+                        unit='B',
+                        unit_scale=True,
+                        unit_divisor=1024,
+                        desc=f"下载 {filename}",
+                        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+                    ) as pbar:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                pbar.update(len(chunk))
+
+            print(f"\n下载完成: {part_path}")
+
+            # 大小校验: 声明了 content-length 就必须一致(截断的流不算完成)。
+            # v1.2.9: total_size==0 时过去会**整段跳过**校验, 让不完整文件直接进入
+            # 校验和比对 → 必然失败 → 日志表现为"没下载完就开始校验"。现补 HEAD 兜底:
+            # 仍拿不到就明确告警"无法核对完整性", 不再静默放行。
+            actual_bytes = part_path.stat().st_size
+            if not total_size:
+                total_size = self._head_content_length(url)
+            if total_size and actual_bytes != total_size:
+                raise Exception(
+                    f"大小不匹配: 期望 {total_size}B, 实际 {actual_bytes}B"
+                )
+            if not total_size:
+                print("⚠ 服务器未提供文件总大小, 无法核对完整性, 直接交由校验和判定")
+
+            if not verify_checksum:
+                if filepath.exists():
+                    filepath.unlink()
+                os.replace(part_path, filepath)
+                forget_part_src(part_path)
+                return "ok"
+
+            # 智能校验和验证(对 .part 校验, 通过后才改名)
+            success, message = self.verify_checksum_smart(
+                part_path,
+                checksum_url or target_dist.get("checksum_url"),
+                target_dist.get("checksum"),
+                dist=target_dist
+            )
+            if success is None:
+                # v1.3.17: 校验源不可达/清单无此文件名。长度已与服务器声明一致,
+                # 只是拿不到官方摘要 —— 若此时不落定, .part 会一直躺在磁盘上,
+                # UI 永远显示「下载停止」(正是本次要根治的症状)。故按"尽最大努力
+                # 验证"落定, 但留醒目告警, 便于事后发现源配置问题。
+                print(f"⚠ {message}")
+                if _already_complete and prev_src != url:
+                    # L4: 416 把 .part 直接当完整文件, 但同源性无法证明(旧版本
+                    # 留下的半成品没有来源标记)。有校验和时它能证明内容对不对;
+                    # 而这里恰恰是"验不了"的分支 —— 再落定成"未验签", 等于把来源
+                    # 不明的内容标成"只是没验", 用户会当它是好的。丢弃重下。
+                    print("  416 判定为完整, 但半成品无法确认与当前源同源, "
+                          "且无校验和可兜底 → 丢弃重下")
+                    discard_part(part_path)
+                    return "next"
+                if total_size and actual_bytes == total_size:
+                    print("  长度已与服务器声明一致, 按无法校验处理并落定(请检查 checksum 源配置)")
+                    if filepath.exists():
+                        filepath.unlink()
+                    os.replace(part_path, filepath)
+                    forget_part_src(part_path)
+                    # M5②: 与 Web 侧一致地落一条「未验签」, 让 UI 能标出来
+                    self._record_unverified(target_dist, filename, message)
+                    return "ok"
+                print("  长度未知或不匹配, 保守保留半成品供下次续传")
+                return "next"
+
+            if success:
+                print(f"✓ {message}")
+                # 校验通过 → 原子改名为最终文件名, 此刻才算真正下载完成
+                if filepath.exists():
+                    filepath.unlink()
+                os.replace(part_path, filepath)
+                forget_part_src(part_path)
+                self._clear_unverified(target_dist, filename)
+                return "ok"
+
+            print(f"✗ {message}")
+            # 尺寸与预期一致却校验不过 → 内容确实损坏。必须丢弃: 留着的话下次
+            # Range 起点正好等于全长 → 416 → 又被当完整候选 → 永远验不过的死循环。
+            # (与 iso_runner 的同名分支保持一致)
+            if total_size:
+                discard_part(part_path)
+                print("  半成品尺寸正确但内容校验不符, 已丢弃(避免坏数据被续传)")
+            return "next"
+
+        # 风险5修复: 除网络错误外, 也捕获磁盘/IO 错误(磁盘满/权限不足/文件被占用),
+        # 避免下载中断且不清理不完整文件。
+        # 半成品保留为 .part(不删): 供后端识别为「下载停止」并支持续传。
+        except (requests.exceptions.RequestException, OSError, IOError) as e:
+            print(f"\n下载失败: {e}")
+            return "next"
+
     def download_distribution(self, name: str, verify_checksum: bool = True) -> bool:
-        """下载指定的发行版"""
+        """下载指定的发行版(逐个候选源 failover, 见 candidate_sources)。"""
         # 查找匹配的发行版
         matching_dists = []
         for dist in self.distributions["distributions"]:
             if dist["distribution"].lower() == name.lower():
                 matching_dists.append(dist)
-        
+
         if not matching_dists:
             print(f"错误: 找不到匹配的发行版 {name}")
             return False
-        
+
         print(f"找到 {len(matching_dists)} 个 {name} 发行版，开始下载所有版本...")
-        
+
         # 准备清理：收集所有应该存在的文件名
         expected_files = []
         for dist in matching_dists:
             filename = os.path.basename(urlparse(dist["download_url"]).path)
             expected_files.append(filename)
-        
+
         # 下载所有匹配的版本
         success_count = 0
         for i, target_dist in enumerate(matching_dists, 1):
             print(f"\n{'='*60}")
             print(f"下载第 {i}/{len(matching_dists)} 个版本:")
-            
+
             # 创建下载目录: classified 用 type/distribution, flat 用统一单目录
             dist_dir = _safe_dist_dir(self.download_dir, target_dist.get("type", "linux"), target_dist.get("distribution", ""), flat=_flat_of(self))
             if dist_dir is None:
                 print(f"错误: 发行版 {target_dist} 的 type/distribution 不合法, 跳过")
                 continue
             dist_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 获取文件名
+
+            # 获取文件名: 一律以清单里的主 URL 为准, 保证同名文件在不同镜像下
+            # 落到同一个路径(候选源里的文件名可能不同, 不能跟着它变)。
             filename = os.path.basename(urlparse(target_dist["download_url"]).path)
-            
             filepath = dist_dir / filename
-            
-            # 检查文件是否已存在
-            if filepath.exists():
-                print(f"文件已存在: {filepath}")
-                if verify_checksum:
-                    success, message = self.verify_checksum_smart(
-                        filepath, 
-                        target_dist.get("checksum_url"), 
-                        target_dist.get("checksum"),
-                        dist=target_dist
-                    )
-                    if success:
-                        print(f"✓ {message}")
-                        # 完整文件已校验通过 -> 同名的 .part 是上一轮中断留下的冗余字节。
-                        # 不清理会让 UI 长期误报「下载停止(已下载部分)」: 后端 build_distros()
-                        # 在同名的完整文件与 .part 之间取 mtime 较新者作条目代表, 残留
-                        # .part 通常更新, 于是"已完整"的文件被判成半成品。
-                        stale_part = filepath.with_name(filepath.name + PART_SUFFIX)
-                        try:
-                            if stale_part.exists():
-                                stale_part.unlink()
-                                print(f"  清理冗余半成品: {stale_part}")
-                        except OSError as e:  # noqa: BLE001
-                            print(f"  清理冗余半成品失败(忽略): {e}")
-                        success_count += 1
-                        continue
-                    if success is None:
-                        # v1.3.17: 校验源不可达/清单里没这个文件名 —— "没验过"不等于"验不过"。
-                        # 旧代码在这里也走 else 分支 → 打印"校验和验证失败，将重新下载",
-                        # 于是每个周期都把完好的 ISO 重下一遍(Proxmox 就是这么循环了 10 天)。
-                        # 现在: 保留现有文件不动, 明确告警, 不触发重下。
-                        print(f"⚠ {message}")
-                        print("  完整性无法判定(校验源不可用), 保留现有文件, 不重新下载")
-                        success_count += 1
-                        continue
-                    if not success:
-                        print(f"✗ {message}")
-                        print("校验和验证失败，将重新下载")
-            
-            # 开始下载
-            print(f"开始下载 {name}: {filename}")
-            print(f"下载链接: {target_dist['download_url']}")
-            
-            try:
-                # 下载期间写 <最终名>.part, 全部校验通过后才原子改名(见下方 os.replace)。
-                # 这样任务被「停止」kill 或网络中断时, 磁盘上留下的是 .part 半成品,
-                # 后端能识别为「下载停止」, 而不会被误判为已下载的完整 ISO。
-                part_path = filepath.with_name(filepath.name + ".part")
 
-                # 断点续传: 若已有 .part, 带 Range 头请求剩余部分
-                _have = part_path.stat().st_size if part_path.exists() else 0
-                _headers = dict(self.headers or {})
-                if _have:
-                    _headers["Range"] = f"bytes={_have}-"
+            # 文件是否已存在与源无关, 只判一次
+            if filepath.exists() and self._already_have(filepath, target_dist, verify_checksum):
+                success_count += 1
+                continue
 
-                # B6 修复: 显式超时(连接 15s, 读 60s), 避免镜像站半开连接时下载线程永久挂起
-                # v1.3.17: 再套一层退避重试, 覆盖瞬时抖动与 429/5xx(不重试 416)
-                response = http_get_with_retry(target_dist["download_url"], headers=_headers,
-                                               stream=True, timeout=(15, 60))
-                # v1.3.17: 416 = Range 起点越界, 说明 .part 字节数已 >= 远端文件全长。
-                # 旧实现把它归进 else 分支(同 200 处理) → 从头重下整个文件, 下完 .part
-                # 又是全量 → 下一轮再 416 → 无限循环(Proxmox 实测每天一轮, 10 天未自愈)。
-                # 正确语义: .part 已是**完整候选**, 跳过传输直接进校验。
-                _already_complete = bool(_have and response.status_code == 416)
-                if _already_complete:
-                    print(f"断点已满({_have/1024/1024:.1f} MiB): 服务器返回 416, "
-                          f"{part_path.name} 视为完整候选, 直接进入校验")
-                    response.close()
-                    total_size = _have
-                # 服务器支持 Range 时返回 206, 此时应追加写入
-                elif _have and response.status_code == 206:
-                    _cr = response.headers.get('content-range', '')
-                    try:
-                        total_size = int(_cr.rsplit('/', 1)[-1]) if '/' in _cr else 0
-                    except (TypeError, ValueError):
-                        total_size = 0
-                    if not total_size:
-                        try:
-                            total_size = _have + int(response.headers.get('content-length') or 0)
-                        except (TypeError, ValueError):
-                            total_size = 0
-                    print(f"续传: 从 {_have/1024/1024:.1f} MiB 继续")
-                    _mode = 'ab'
-                else:
-                    if _have and response.status_code == 200:
-                        print(f"服务器不支持断点续传, 从头下载(丢弃 {_have/1024/1024:.1f} MiB)")
-                    _have = 0
-                    _mode = 'wb'
-                    # 风险6修复: 镜像站可能返回非法/缺失 content-length, 解析失败按 0 处理(不定长模式)
-                    try:
-                        total_size = int(response.headers.get('content-length') or 0)
-                    except (TypeError, ValueError):
-                        total_size = 0
-                if not _already_complete:
-                    # 416 是"已完成"信号而非错误, 上面已 close, 不能再 raise_for_status
-                    response.raise_for_status()
+            candidates = self.candidate_sources(target_dist)
+            if len(candidates) > 1:
+                print(f"共 {len(candidates)} 个候选源, 失败自动换源")
+            ok = False
+            for ci, (url, cs_url) in enumerate(candidates, 1):
+                if len(candidates) > 1:
+                    print(f"\n候选源 {ci}/{len(candidates)}: {url}")
+                status = self._download_from_url(target_dist, url, cs_url, dist_dir,
+                                                 filepath, filename, verify_checksum)
+                if status == "ok":
+                    ok = True
+                    break
+                if status == "fatal":
+                    break
+                if ci < len(candidates):
+                    print("  → 尝试下一个候选源")
+            if ok:
+                success_count += 1
+            elif len(candidates) > 1:
+                print(f"  ✗ {filename} 的所有候选源均失败")
 
-                if not _already_complete:
-                    # v1.5.2: 写盘前确认放得下, 不足则整条跳过(不产生 .part)。
-                    # 416 时字节已经全在盘上, 无需再判。GET 没给 Content-Length 时
-                    # 用 HEAD 兜底再判一次(判不了才放行, 与大小校验同一套兜底思路)。
-                    if not total_size:
-                        total_size = self._head_content_length(target_dist["download_url"])
-                    _ok_space, _why_space = check_free_space(
-                        dist_dir, max(0, total_size - _have))
-                    if not _ok_space:
-                        response.close()
-                        print(f"\n✗ 下载中止: {_why_space}")
-                        print("  清出空间后重跑即可续传(.part 未被删除)")
-                        continue
-                    if _why_space:
-                        print(f"⚠ {_why_space}")
-
-                # 使用tqdm创建进度条(416 时跳过传输, 直接落校验)
-                if not _already_complete:
-                    with open(part_path, _mode) as f:
-                        with tqdm(
-                            total=total_size,
-                            initial=_have,
-                            unit='B',
-                            unit_scale=True,
-                            unit_divisor=1024,
-                            desc=f"下载 {filename}",
-                            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
-                        ) as pbar:
-                            for chunk in response.iter_content(chunk_size=8192):
-                                if chunk:
-                                    f.write(chunk)
-                                    pbar.update(len(chunk))
-
-                print(f"\n下载完成: {part_path}")
-
-                # 大小校验: 声明了 content-length 就必须一致(截断的流不算完成)。
-                # v1.2.9: total_size==0 时过去会**整段跳过**校验, 让不完整文件直接进入
-                # 校验和比对 → 必然失败 → 日志表现为"没下载完就开始校验"。现补 HEAD 兜底:
-                # 仍拿不到就明确告警"无法核对完整性", 不再静默放行。
-                actual_bytes = part_path.stat().st_size
-                if not total_size:
-                    total_size = self._head_content_length(target_dist["download_url"])
-                if total_size and actual_bytes != total_size:
-                    raise Exception(
-                        f"大小不匹配: 期望 {total_size}B, 实际 {actual_bytes}B"
-                    )
-                if not total_size:
-                    print("⚠ 服务器未提供文件总大小, 无法核对完整性, 直接交由校验和判定")
-
-                # 智能校验和验证(对 .part 校验, 通过后才改名)
-                if verify_checksum:
-                    success, message = self.verify_checksum_smart(
-                        part_path, 
-                        target_dist.get("checksum_url"), 
-                        target_dist.get("checksum"),
-                        dist=target_dist
-                    )
-                    if success is None:
-                        # v1.3.17: 校验源不可达/清单无此文件名。长度已与服务器声明一致,
-                        # 只是拿不到官方摘要 —— 若此时不落定, .part 会一直躺在磁盘上,
-                        # UI 永远显示「下载停止」(正是本次要根治的症状)。故按"尽最大努力
-                        # 验证"落定, 但留醒目告警, 便于事后发现源配置问题。
-                        print(f"⚠ {message}")
-                        if total_size and actual_bytes == total_size:
-                            print("  长度已与服务器声明一致, 按无法校验处理并落定(请检查 checksum 源配置)")
-                            if filepath.exists():
-                                filepath.unlink()
-                            os.replace(part_path, filepath)
-                            success_count += 1
-                        else:
-                            print("  长度未知或不匹配, 保守保留半成品供下次续传")
-                    elif success:
-                        print(f"✓ {message}")
-                        # 校验通过 → 原子改名为最终文件名, 此刻才算真正下载完成
-                        if filepath.exists():
-                            filepath.unlink()
-                        os.replace(part_path, filepath)
-                        success_count += 1
-                    else:
-                        print(f"✗ {message}")
-                else:
-                    if filepath.exists():
-                        filepath.unlink()
-                    os.replace(part_path, filepath)
-                    success_count += 1
-                
-            # 风险5修复: 除网络错误外, 也捕获磁盘/IO 错误(磁盘满/权限不足/文件被占用),
-            # 避免下载中断且不清理不完整文件。
-            # 半成品保留为 .part(不删): 供后端识别为「下载停止」并支持续传。
-            except (requests.exceptions.RequestException, OSError, IOError) as e:
-                print(f"\n下载失败: {e}")
-        
         # 清理发行版目录，删除不在JSON中维护的文件
         if matching_dists:
             dist_dir = _safe_dist_dir(self.download_dir, matching_dists[0].get("type", "linux"), matching_dists[0].get("distribution", ""), flat=_flat_of(self))
             if dist_dir is not None:
                 self.cleanup_distribution_dir(dist_dir, expected_files)
-        
+
         print(f"\n{'='*60}")
         print(f"下载完成！成功下载 {success_count}/{len(matching_dists)} 个版本")
         return success_count > 0
-    
+
     def sha256_of(self, filepath: Path) -> str:
         """计算文件的 SHA256(小写十六进制)。供校验与诊断日志复用。"""
         sha256_hash = hashlib.sha256()

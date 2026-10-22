@@ -14,10 +14,26 @@ from torrent_client import distro_name_from_torrent
 from torrent_client import qb_config
 import distro_torrents as dtorrents
 import torrent_categories as tcats
+import uuid
 
 from api._ctx import core
 
 bp = Blueprint("torrent", __name__)
+
+
+def _server_error(what: str, e: Exception) -> str:
+    """把**未预期**异常折成给客户端的通用消息, 原文只进服务端日志。
+
+    M7 修复(审查 2026-10): 异常原文常含容器内绝对路径(/downloads/...)、qB
+    主机名与配置片段, 原样回显等于把部署拓扑送给调用方。这里生成一个短关联
+    ID: 客户端只拿到 ID, 服务端日志用同一个 ID 能查到原文, 排障不受影响。
+
+    注意边界: **校验类** ValueError 不走这里。那些是作者写给用户看的中文提示
+    (如 "RSS 地址必须是 http/https 链接"), 属于正常业务反馈, 必须原样返回。
+    """
+    eid = uuid.uuid4().hex[:8]
+    core.log(f"[种子] [{eid}] {what}: {type(e).__name__}: {e}")
+    return f"{what}(错误编号 {eid}), 详情见服务端日志"
 
 
 
@@ -28,7 +44,9 @@ def api_torrent_sources():
     if not ok:
         return err
     if not core.TORRENT_AVAILABLE:
-        return jsonify({"error": "种子模块未加载: " + (core._torrent_import_err or "")}), 500
+        # M7: 导入失败原文可能带容器路径/模块名, 只进服务端日志, 不回显。
+        core.log(f"[种子] 模块导入失败: {core._torrent_import_err or '(无详细信息)'}")
+        return jsonify({"error": "种子模块未加载, 详情见服务端日志"}), 500
     try:
         res = dtorrents.scan_sources()
         return jsonify({"ok": True, "source": res.get("source"),
@@ -37,8 +55,7 @@ def api_torrent_sources():
                         "user_rss": dtorrents.get_user_rss(),
                         "user_links": dtorrents.get_user_links()})
     except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        core.log(f"[种子] 扫描种子源失败: {e!r}")
-        return jsonify({"error": f"扫描种子源失败: {e}"}), 500
+        return jsonify({"error": _server_error("扫描种子源失败", e)}), 500
 
 
 @bp.post("/api/torrent/classify")
@@ -135,8 +152,7 @@ def api_torrent_categories_post():
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        core.log(f"[种子] 保存分类配置失败: {e!r}")
-        return jsonify({"ok": False, "error": f"保存分类配置失败: {e}"}), 500
+        return jsonify({"ok": False, "error": _server_error("保存分类配置失败", e)}), 500
 
     report = []
     merged = tcats.load_categories(report=report)
@@ -244,8 +260,7 @@ def api_torrent_add():
         core.log(f"[种子] 添加 {len(urls)} 个下载, 保存到 {save_path}")
         return jsonify({"ok": True, "save_path": save_path, "distro": distro, "type": typ})
     except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        core.log(f"[种子] 添加失败: {e!r}")
-        return jsonify({"error": f"添加失败: {e}"}), 500
+        return jsonify({"error": _server_error("添加失败", e)}), 500
 
 
 @bp.post("/api/torrent/delete")
@@ -267,7 +282,7 @@ def api_torrent_delete():
         core.log(f"[种子] 删除 {len(hashes)} 个, 同时删文件={delete_files}")
         return jsonify({"ok": ok})
     except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        return jsonify({"error": f"删除失败: {e}"}), 500
+        return jsonify({"error": _server_error("删除失败", e)}), 500
 
 
 @bp.post("/api/torrent/rss/add")

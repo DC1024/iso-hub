@@ -154,6 +154,134 @@ jobs:
           print("  ok tmpfs:", ", ".join(sorted(tmpfs)))
           PY
 
+      # ---- 第 3 批(H2/M9)验收: socket-proxy 的放行范围必须"恰好等于"应用用到的范围 ----
+      # 为什么必须放在这里跑, 而不是只写文本断言: haproxy.cfg 与 compose 都是部署面配置,
+      # 写错了单元测试照样全绿(它们只能 grep 文本), 而线上的表现是"三个 sidecar 全部失联"
+      # 或者"整个 Docker API 暴露给内网"。这里用**生产同款 compose 服务**起代理, 逐条打
+      # 真实 HTTP, 顺便也证明 M9 的 read_only + cap_drop 没有把 haproxy 自己搞死。
+      - name: Validate compose file
+        run: docker compose config -q
+
+      - name: Verify socket-proxy ACL
+        run: |
+          set -uo pipefail
+          docker compose up -d --no-deps socket-proxy
+
+          # 第一步: 先证明"haproxy 在 M9 的加固下真的在服务" —— 直接 exec 进去打 /_ping。
+          # 这一步**不依赖** compose 的 healthcheck, 目的是把两个问题分开:
+          #   这里失败 = M9 把代理搞死了(只读根/零能力导致起不来或不可用)
+          #   这里通过、下一步失败 = compose 的 healthcheck 自身有问题
+          # 分开才有可诊断性: 混在一起只会得到一句"未就绪"。
+          served=""
+          for _ in $(seq 1 60); do
+            if docker exec iso-hub-socket-proxy wget -q -O /dev/null http://127.0.0.1:2375/_ping 2>/dev/null; then
+              served=1; break
+            fi
+            sleep 1
+          done
+          if [ -z "$served" ]; then
+            echo "haproxy 60s 内未响应 /_ping —— 检查 M9 的加固是否把代理搞死了"
+            echo "--- 容器内是否有 wget(后续所有探针都依赖它) ---"
+            docker exec iso-hub-socket-proxy sh -c 'command -v wget || echo "wget 不存在"' || true
+            echo "--- 容器内身份与 docker.sock ---"
+            docker exec iso-hub-socket-proxy sh -c \
+              'id; ls -ld /run /var/run 2>&1; ls -l /run/docker.sock /var/run/docker.sock 2>&1' || true
+            echo "--- 宿主侧看到的挂载 ---"
+            docker inspect -f '{{range .Mounts}}{{.Type}} {{.Source}} -> {{.Destination}} rw={{.RW}}{{"\n"}}{{end}}' \
+              iso-hub-socket-proxy || true
+            echo "--- /etc/hosts ---"
+            docker exec iso-hub-socket-proxy sh -c 'cat /etc/hosts' || true
+            echo "--- 逐 flag 复现: 到底是哪一项加固让后端不可达 ---"
+            for f in none --read-only --cap-drop=ALL --security-opt=no-new-privileges; do
+              extra=""
+              [ "$f" != "none" ] && extra="$f"
+              cid=$(docker run -d --rm $extra \
+                      -v /var/run/docker.sock:/var/run/docker.sock:ro \
+                      -v "$PWD/docker/socket-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+                      haproxy:2.8-alpine 2>/dev/null) || { echo "  $f: 起不来"; continue; }
+              sleep 3
+              code=$( { docker exec "$cid" wget -S -O /dev/null http://127.0.0.1:2375/_ping 2>&1 \
+                        | awk '/HTTP\//{print $2; exit}'; } || true )
+              echo "  $f: ${code:-<无响应>}"
+              docker rm -f "$cid" >/dev/null 2>&1 || true
+            done
+            echo "--- 容器状态 ---"
+            docker inspect -f '{{json .State}}' iso-hub-socket-proxy || true
+            docker logs iso-hub-socket-proxy 2>&1 | tail -40 || true
+            exit 1
+          fi
+          echo "haproxy 已在服务 (127.0.0.1:2375/_ping)"
+
+          # 第二步: compose 的 healthcheck 必须能转 healthy —— 主容器是
+          # depends_on: service_healthy 的, 它不 healthy 就等于"全新部署起不来"。
+          # 失败时把 Health.Log 打出来(每次尝试的 exit code + 原始输出), 否则只能看到
+          # 一个 starting/unhealthy, 完全无法定位是 wget 不存在、DNS 解析、还是端口没通。
+          st=""
+          for _ in $(seq 1 90); do
+            st=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+                 iso-hub-socket-proxy 2>/dev/null || echo missing)
+            [ "$st" = "healthy" ] && break
+            [ "$st" = "missing" ] && break
+            sleep 1
+          done
+          if [ "$st" != "healthy" ]; then
+            echo "compose healthcheck 未转 healthy (status=$st), 逐次尝试明细:"
+            docker inspect -f '{{range .State.Health.Log}}exit={{.ExitCode}} out={{.Output}}{{"\n"}}{{end}}' \
+              iso-hub-socket-proxy || true
+            echo "--- 容器内 wget 是否存在 ---"
+            docker exec iso-hub-socket-proxy sh -c 'command -v wget || echo "wget 不存在"' || true
+            echo "--- 容器内 localhost 解析 ---"
+            docker exec iso-hub-socket-proxy sh -c 'cat /etc/hosts' || true
+            docker logs iso-hub-socket-proxy 2>&1 | tail -20 || true
+            exit 1
+          fi
+          echo "socket-proxy healthy"
+
+          # 用容器自带的 busybox wget 探: 它在 healthcheck 里已被证明存在, 不必再拉镜像。
+          # -S 把响应头打到 stderr, 取第一行 HTTP 状态码; wget 遇 4xx 会非零退出, 故 `|| true`。
+          probe() {
+            want="$1"; desc="$2"; shift 2
+            out=$(docker exec iso-hub-socket-proxy wget -S -O /dev/null "$@" 2>&1 || true)
+            got=$(printf '%s\n' "$out" | awk '/HTTP\//{print $2; exit}')
+            if [ "$got" != "$want" ]; then
+              echo "::error::$desc: 期望 $want, 实际 ${got:-<无响应>}"
+              printf '%s\n' "$out"
+              exit 1
+            fi
+            echo "  ok $desc -> $got"
+          }
+          # 必须用 127.0.0.1 而不是 localhost: 容器 /etc/hosts 里 ::1 排在前面,
+          # musl 会先解析到 ::1, 而 haproxy 的 bind *:2375 只监听 IPv4。
+          # (compose 的 healthcheck 踩过同一个坑, 见 docker-compose.yml 里的注释)
+          B=http://127.0.0.1:2375
+
+          # --- 必须放行, 否则功能倒退 ---
+          probe 200 "GET /_ping (compose healthcheck)"                   "$B/_ping"
+          probe 200 "GET /version (排障)"                               "$B/version"
+          probe 404 "GET /containers/iso-hub-samba/json -> 到 daemon"   "$B/containers/iso-hub-samba/json"
+          probe 404 "GET /v1.44/containers/iso-hub-webdav/json (版本前缀)" "$B/v1.44/containers/iso-hub-webdav/json"
+          probe 404 "POST /containers/iso-hub-samba/start -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/start"
+          probe 404 "POST /containers/iso-hub-samba/restart -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/restart"
+          probe 404 "POST /containers/iso-hub-samba/stop -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/stop"
+          # update 没有现场探: 它要求合法 JSON body, 而容器内只有 busybox wget,
+          # 传 JSON 时 daemon 回 400(请求体被判非法), 与"被 ACL 拒绝"的 403 不好区分,
+          # 硬测只会得到一个含义模糊的断言。它和 start/stop/restart 是**同一个**
+          # 正则分组 (start|stop|restart|update): 前三个都放行, 第四个不可能单独被拒;
+          # 分组内容本身由 test_post_only_allows_lifecycle_on_three_sidecars 静态锁住。
+          # 404 而不是 403 = 请求被代理放行、由 daemon 回"没这个容器"; 这正是我们要的:
+          # ACL 没拦住, 且测试机上确实没有这三个 sidecar。
+
+          # --- 必须拒绝 (H2 收窄的重点) ---
+          probe 403 "GET /containers/json (部署拓扑枚举)"               "$B/containers/json"
+          probe 403 "GET /containers/<id>/archive (任意文件读)"         "$B/containers/iso-hub-samba/archive?path=/etc/shadow"
+          probe 403 "GET /containers/<未知名字>/json (名字收窄)"        "$B/containers/evil-container/json"
+          probe 403 "POST /containers/create (建特权容器)"              --post-data=x "$B/containers/create"
+          probe 403 "POST /containers/<name>/exec (进容器)"             --post-data=x "$B/containers/iso-hub-samba/exec"
+          probe 403 "GET /images/json (镜像枚举)"                       "$B/images/json"
+          probe 403 "GET /v1.44/containers/json (版本前缀绕过)"         "$B/v1.44/containers/json"
+          # DELETE 没有单独探: 无条件的最后一条 `http-request deny` 兜住一切未显式 allow 的
+          # 方法, 上面 /images/json 的 403 已经证明该兜底真的生效。
+
       - name: Dump container logs
         if: failure()
         run: docker logs "$CONTAINER" 2>&1 | tail -60 || true
@@ -162,4 +290,6 @@ jobs:
         if: always()
         run: |
           docker rm -f "$CONTAINER" 2>/dev/null || true
+          # socket-proxy 由 compose 起, 用 down 收尾(含它创建的默认网络)
+          docker compose down -v --remove-orphans 2>/dev/null || true
           sudo rm -rf "$DATA_DIR"

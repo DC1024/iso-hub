@@ -187,8 +187,16 @@ def api_subscriptions():
 
 @bp.post("/api/subscriptions")
 def api_subscriptions_save():
-    body = request.get_json(force=True, silent=True) or {}
-    items = body.get("subscriptions") or []
+    body = request.get_json(force=True, silent=True)
+    # H3 修复(审查 2026-10): 旧实现 `body.get("subscriptions") or []` 在**空 body /
+    # 字段名拼错 / 前端发了个空对象**时都会得到 [], 然后原样落盘 —— 等于把用户的
+    # 全部订阅静默清空, 而且返回 200 说"保存成功"。
+    # 清空本身是合法操作, 但必须是**显式**的 {"subscriptions": []}。
+    if not isinstance(body, dict) or "subscriptions" not in body:
+        return jsonify({"error": "缺少 subscriptions 字段(清空请显式传空数组)"}), 400
+    items = body["subscriptions"]
+    if not isinstance(items, list):
+        return jsonify({"error": "subscriptions 必须是数组"}), 400
     core.save_subscriptions(items)
     core.log(f"[订阅] 保存 {len(items)} 条订阅配置")
     return jsonify({"ok": True})
@@ -357,7 +365,15 @@ def api_protected():
 @bp.post("/api/protected")
 def api_protected_toggle():
     body = request.get_json(force=True, silent=True) or {}
-    path = body.get("path")  # 相对路径 type/name/文件名 或 文件名
+    # M11 修复(审查 2026-10): path 必须是**非空字符串**, 且 strip 后再入库。
+    # 旧实现只判 `if not path`: 传 dict/list 会被原样存进 protected.json,
+    # 而 prune / delete-files 用**相等匹配**去比字符串路径 —— 永远匹配不上,
+    # 于是 🔒 锁定保护**静默失效**(用户以为锁了, 实际没锁)。
+    # 纯空格同理: 存进去也永远匹配不上任何真实文件。
+    raw = body.get("path")
+    if not isinstance(raw, str):
+        return jsonify({"error": "path 必须是字符串"}), 400
+    path = raw.strip()
     if not path:
         return jsonify({"error": "缺少 path"}), 400
     lst = core.load_protected()

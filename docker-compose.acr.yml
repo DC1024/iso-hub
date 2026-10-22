@@ -28,7 +28,7 @@ services:
     # 镜像内已 USER 10001:10001, 这里再显式写一遍是给 `docker compose config` 一份
     # 可见的声明(也防止有人拉了旧 tag 却以为降权已生效)。
     # ⚠️ 升级到 1.5.0 前先在宿主机执行:
-    #      chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+    #      chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config
     #    否则启动自检会立即退出并打印这条命令。
     user: "10001:10001"
     # 根文件系统只读: 运行期唯一可写的是下面显式挂载的卷 + 内存盘 /tmp。
@@ -64,6 +64,12 @@ services:
     volumes:
       # 所有 ISO 与发行版清单持久化到宿主机 ./data
       - ./data:/data
+      # M8: 配置备份**必须在共享树之外**。./data 会整块经 Samba(:/srv/iso)与
+      # WebDAV(:/data)只读共享, 而归档里就是 settings.json —— 会话 token、SMTP
+      # 授权码、qB/共享口令全在里头。0700/0600 挡的是"同机其他用户", 挡不住以
+      # root(Samba 的 USERID=0)或同 uid(WebDAV 的 iso=10001)运行的共享进程。
+      # ⚠️ samba / webdav 服务**不得**挂载这个卷。
+      - ./backups:/backups
       # qBittorrent 配置目录: 主容器直接改写 qBittorrent.conf 以设置固定 WebUI 密码
       - ./qb-config:/qb-config:rw
       # webdav 凭据配置目录: 与 webdav 容器共享(网页改密码后主容器改写此文件)
@@ -79,8 +85,17 @@ services:
       - DOCKER_HOST=tcp://socket-proxy:2375
       # webdav 配置文件路径(宿主机 ./webdav-config/webdav.yml 挂到容器内 /webdav-config/)
       - WEBDAV_CONF=${WEBDAV_CONF:-/webdav-config/webdav.yml}
+      # 配置备份输出目录(M8): 默认 <data-dir> 同级的 backups/, 容器内即 /backups。
+      # 改到别处时记得同步改上面的 volumes 与宿主 chown。
+      - ISO_HUB_BACKUP_DIR=${ISO_HUB_BACKUP_DIR:-/backups}
       # 需要鉴权时在宿主机同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
+      # M10: 机密可以改走只读文件 —— 走环境变量会长期留在 `docker inspect` 的
+      # .Config.Env 与容器内 /proc/<pid>/environ 里。用法(挂在 /run/secrets 下):
+      #   volumes: - ./secrets/token:/run/secrets/iso_hub_token:ro
+      #   .env:     ISO_HUB_TOKEN_FILE=/run/secrets/iso_hub_token
+      # 两者都设时以 ISO_HUB_TOKEN 为准并告警(优先级与 ISO_HUB_SECRET_KEY 一致)。
+      - ISO_HUB_TOKEN_FILE=${ISO_HUB_TOKEN_FILE:-}
       # 可选: 对 data/settings.json 整文件做 AES-GCM 静态加密(不设则明文, 向后兼容)。
       # 与登录密码无关; 生产建议用 ISO_HUB_SECRET_KEY_FILE 从 Docker secret/只读文件读密钥。
       # 例: .env 里 ISO_HUB_SECRET_KEY=<随机字符串> 或 ISO_HUB_SECRET_KEY_FILE=/run/secrets/iso_hub_secret
@@ -88,10 +103,18 @@ services:
       - ISO_HUB_SECRET_KEY_FILE=${ISO_HUB_SECRET_KEY_FILE:-}
       # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
       - ISO_HUB_REQUIRE_LOGIN=${ISO_HUB_REQUIRE_LOGIN:-1}
+      # 反向代理支持(H1): 前置 nginx/Caddy/Traefik 时设 1, 从 X-Forwarded-For 取真实 IP。
+      # ⚠️ 没有反代不要开 —— 该头客户端可伪造, 开了等于允许自称 127.0.0.1。
+      - ISO_HUB_TRUST_PROXY=${ISO_HUB_TRUST_PROXY:-}
       # 管理员账号播种: 首次启动时用这两个变量自动创建管理员
       # 不设置的话, 公网访问登录会报"管理员账号未设置"(防抢注), 只能从服务器本机建号
       - ISO_HUB_ADMIN_USER=${ISO_HUB_ADMIN_USER:-}
       - ISO_HUB_ADMIN_PASS=${ISO_HUB_ADMIN_PASS:-}
+      # M10: 推荐改用只读文件(值不进 docker inspect 的 Env)。
+      # 两者都设时以 ISO_HUB_ADMIN_PASS 为准并告警 —— 想改走文件请把上面那行删掉。
+      #   volumes: - ./secrets/admin_pass:/run/secrets/iso_hub_admin_pass:ro
+      #   .env:     ISO_HUB_ADMIN_PASS_FILE=/run/secrets/iso_hub_admin_pass
+      - ISO_HUB_ADMIN_PASS_FILE=${ISO_HUB_ADMIN_PASS_FILE:-}
       # 订阅自动同步间隔(秒),默认 86400=每天;设 0 关闭自动调度,仅手动/定时调用
       - ISO_HUB_SYNC_INTERVAL=${ISO_HUB_SYNC_INTERVAL:-86400}
       - ISO_HUB_SOURCE_STRATEGY=${ISO_HUB_SOURCE_STRATEGY:-A}
@@ -169,6 +192,8 @@ services:
       - "${SAMBA_139:-1139}:139"
     volumes:
       - ./data:/srv/iso:ro          # 只读共享,ISO 不会被误改
+      # ⚠️ 绝不挂 ./backups: 那里是含 settings.json(会话 token/共享口令)的配置归档。
+      #    这正是 M8 把备份挪出 ./data 的原因, 加一行挂载就等于把它又交出去了。
       - ./samba-config:/samba-config:ro
       - ./docker/samba-entrypoint.sh:/etc/iso-hub/samba-entrypoint.sh:ro
     environment:
@@ -190,6 +215,7 @@ services:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
       - ./data:/data:ro             # 只读共享
+      # ⚠️ 绝不挂 ./backups(同 samba 处的说明): 归档里有 settings.json 明文。
       - ./webdav-config:/config     # 凭据配置目录(挂载目录避免单文件 bind 的坑; 配置文件 webdav.yml 在此目录内)
     environment:
       - TZ=Asia/Shanghai
@@ -198,6 +224,9 @@ services:
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
   # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
   # WebUI: http://<服务器IP>:8090
+  #   ⚠ qB 的 Host 头校验要求 Host 里的端口等于容器内端口(8080)。映射成 8090 时
+  #   浏览器直接访问会 401(v1.8.0 起恢复校验, 不再为这点便利关掉防护)。要用 qB
+  #   自己的界面就把映射改成 "8080:8080"(或设 QB_PORT=8080); 只用面板则不受影响。
   # 默认不部署, 需启用 compose profile "bt":  docker compose --profile bt up -d
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest@sha256:e887804fa9de4c60f5f0fb1f3a7e4febe40a8f69fe736f70c4e8589b1f868dab

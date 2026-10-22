@@ -45,3 +45,7 @@ QA_REPORT_*.md
 /gpg_ledger.json
 /settings.json
 /distributions.json
+# 跨进程锁的边车文件(M3): 上面这些账本被锁时, 旁边会出现 <name>.lock。
+# 内容是 1 字节种子, 只用于加锁, 没有任何状态, 绝不入库。
+/download_unverified.json.lock
+/download_failures.json.lock

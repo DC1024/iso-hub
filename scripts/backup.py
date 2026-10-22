@@ -14,15 +14,24 @@
 
 为什么用 tar 而不是 zip: 保留 mtime 与权限位, restore 时能原样回去。
 
+归档**不放在数据目录里**(M8):
+  /data 整块会被 Samba / WebDAV 只读共享给局域网, 而归档里就是 settings.json
+  —— 会话 token、SMTP 授权码、共享口令全在里面。0700/0600 挡的是"同机其他用户",
+  挡不住以 root(Samba 的 USERID=0)或同 uid(WebDAV 的 iso=10001)运行的共享进程。
+  所以默认写到 <data-dir> 的**同级** backups/, 容器内即 /backups, 且 compose 里
+  samba / webdav **不挂**这个卷。
+
 用法:
   docker exec iso-hub python /app/scripts/backup.py
   python scripts/backup.py --data-dir /path/to/data --keep 14
   python scripts/backup.py --json          # 给 cron / 监控消费
+  ISO_HUB_BACKUP_DIR=/mnt/nas/bk python scripts/backup.py   # 改输出目录
 
 退出码: 0 成功 / 2 参数错 / 3 没有可备份文件 / 4 写入失败
 """
 
 import argparse
+import errno
 import json
 import os
 import sys
@@ -46,6 +55,18 @@ TMP_SUFFIX = ".part.tar.gz"
 
 def _default_data_dir() -> Path:
     return Path(os.environ.get("ISO_DATA_DIR") or "/data")
+
+
+def _default_backup_dir(data_dir: Path) -> Path:
+    """备份输出目录: $ISO_HUB_BACKUP_DIR > <data-dir> 同级的 backups/。
+
+    刻意**不**回退到 data_dir 里面 —— 见模块 docstring 的 M8 说明。
+    与 web/app.py::_default_backup_dir 必须保持同一套规则(有测试盯着)。
+    """
+    env = (os.environ.get("ISO_HUB_BACKUP_DIR") or "").strip()
+    if env:
+        return Path(env)
+    return data_dir.parent / "backups"
 
 
 def _stamp() -> str:
@@ -96,6 +117,12 @@ def make_archive(data_dir: Path, out_dir: Path, files) -> Path:
         except OSError:
             pass
         print("错误: 备份写入失败: %s" % e, file=sys.stderr)
+        if e.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+            # 典型场景: 宿主 ./backups 由 root 建出来, 容器是 uid 10001 写不进去。
+            # 不说清楚的话, 用户只会看到一句 Permission denied 然后以为备份功能坏了。
+            print("提示: %s 不可写。绑定挂载的属主由宿主机决定(容器内 uid 10001 改不了),"
+                  " 请在宿主机执行: sudo chown -R 10001:10001 <该目录>" % out_dir,
+                  file=sys.stderr)
         raise SystemExit(4)
     return final
 
@@ -128,7 +155,7 @@ def main() -> int:
     ap.add_argument("--data-dir", default=str(_default_data_dir()),
                     help="数据目录(默认 $ISO_DATA_DIR 或 /data)")
     ap.add_argument("--out-dir", default="",
-                    help="备份输出目录(默认 <data-dir>/backups)")
+                    help="备份输出目录(默认 $ISO_HUB_BACKUP_DIR 或 <data-dir> 同级的 backups/)")
     ap.add_argument("--keep", type=int, default=7,
                     help="保留份数, 0=不清理(默认 7)")
     ap.add_argument("--json", action="store_true", help="输出机器可读的 JSON")
@@ -139,7 +166,7 @@ def main() -> int:
     if not data_dir.is_dir():
         print("错误: 数据目录不存在: %s" % data_dir, file=sys.stderr)
         return 2
-    out_dir = Path(args.out_dir) if args.out_dir else data_dir / "backups"
+    out_dir = Path(args.out_dir) if args.out_dir else _default_backup_dir(data_dir)
 
     files, skipped = collect(data_dir)
     if not files or not any(p.name == REQUIRED[0] for p in files):

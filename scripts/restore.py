@@ -6,13 +6,14 @@
   * **白名单校验**: 只接受 settings.json / distributions.json / gpg_ledger.json /
     download_unverified.json 四个文件名。归档里出现任何别的路径(含 `../` 穿越)
     直接拒绝, 不依赖 tarfile 的 filter 版本差异。
-  * **先存旧再覆盖**: 解压前把当前文件复制到 backups/pre-restore-<时间戳>/,
-    恢复错了还能退回去。
+  * **先存旧再覆盖**: 解压前把当前文件复制到 <备份目录>/pre-restore-<时间戳>/,
+    恢复错了还能退回去。备份目录与 backup.py 同一套规则($ISO_HUB_BACKUP_DIR >
+    <data-dir> 同级的 backups/), 因此**不在** Samba/WebDAV 的共享树里(M8)。
   * **默认只预览**: 不给 --yes 就只列归档内容, 不动磁盘。恢复是破坏性操作,
     不该因为多敲一个回车就发生。
 
 用法:
-  docker exec iso-hub python /app/scripts/restore.py /data/backups/isohub-backup-xxx.tar.gz
+  docker exec iso-hub python /app/scripts/restore.py /backups/isohub-backup-xxx.tar.gz
   docker exec iso-hub python /app/scripts/restore.py <archive> --yes
 
 退出码: 0 成功 / 2 参数或归档非法 / 3 写入失败
@@ -38,6 +39,14 @@ PRE_PREFIX = "pre-restore-"
 
 def _default_data_dir() -> Path:
     return Path(os.environ.get("ISO_DATA_DIR") or "/data")
+
+
+def _default_backup_dir(data_dir: Path) -> Path:
+    """与 scripts/backup.py、web/app.py 同一套规则(有测试盯着三者一致)。"""
+    env = (os.environ.get("ISO_HUB_BACKUP_DIR") or "").strip()
+    if env:
+        return Path(env)
+    return data_dir.parent / "backups"
 
 
 def _die(msg: str) -> NoReturn:
@@ -100,12 +109,17 @@ def main() -> int:
         return 0
 
     # 先存旧: 恢复错了还能退回去
-    pre = data_dir / "backups" / (PRE_PREFIX + time.strftime("%Y%m%d-%H%M%S"))
-    pre.mkdir(parents=True, exist_ok=True)
+    pre = _default_backup_dir(data_dir) / (PRE_PREFIX + time.strftime("%Y%m%d-%H%M%S"))
     try:
+        pre.mkdir(parents=True, exist_ok=True)
         pre.chmod(0o700)
-    except OSError:
-        pass
+    except OSError as e:
+        # 存不下旧文件就不该覆盖 —— 这道保险本身就是"恢复错了还能退回去"的前提。
+        # 常见原因: 宿主 ./backups 属主不是 10001(容器内改不了)。
+        print("错误: 无法创建恢复前的快照目录 %s: %s" % (pre, e), file=sys.stderr)
+        print("提示: 该目录由宿主机决定属主, 请执行 sudo chown -R 10001:10001 <备份目录>;"
+              " 或用 ISO_HUB_BACKUP_DIR 指到可写位置。", file=sys.stderr)
+        return 3
     saved = []
     for _m, name in members:
         src = data_dir / name

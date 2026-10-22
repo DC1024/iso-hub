@@ -12,7 +12,7 @@ services:
     # 镜像内已 USER 10001:10001, 这里再显式写一遍是给 `docker compose config` 一份
     # 可见的声明(也防止有人 build 了旧镜像却以为降权已生效)。
     # ⚠️ 升级到 1.5.0 前先在宿主机执行:
-    #      chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+    #      chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config
     #    否则启动自检会立即退出并打印这条命令。
     user: "10001:10001"
     # 根文件系统只读: 运行期唯一可写的是下面显式挂载的卷 + 内存盘 /tmp。
@@ -57,6 +57,12 @@ services:
     volumes:
       # 所有 ISO 与发行版清单持久化到宿主机 ./data
       - ./data:/data
+      # M8: 配置备份**必须在共享树之外**。./data 会整块经 Samba(:/srv/iso)与
+      # WebDAV(:/data)只读共享, 而归档里就是 settings.json —— 会话 token、SMTP
+      # 授权码、qB/共享口令全在里头。0700/0600 挡的是"同机其他用户", 挡不住以
+      # root(Samba 的 USERID=0)或同 uid(WebDAV 的 iso=10001)运行的共享进程。
+      # ⚠️ samba / webdav 服务**不得**挂载这个卷。
+      - ./backups:/backups
       # qBittorrent 配置目录: 主容器直接改写 qBittorrent.conf 以设置固定 WebUI 密码
       - ./qb-config:/qb-config:rw
       # webdav 凭据配置目录: 与 webdav 容器共享(网页改密码后主容器改写此文件)
@@ -72,8 +78,17 @@ services:
       - DOCKER_HOST=tcp://socket-proxy:2375
       # webdav 配置文件路径(宿主机 ./webdav-config/webdav.yml 挂到容器内 /webdav-config/)
       - WEBDAV_CONF=${WEBDAV_CONF:-/webdav-config/webdav.yml}
+      # 配置备份输出目录(M8): 默认 <data-dir> 同级的 backups/, 容器内即 /backups。
+      # 改到别处时记得同步改下面的 volumes 与宿主 chown。
+      - ISO_HUB_BACKUP_DIR=${ISO_HUB_BACKUP_DIR:-/backups}
       # 需要鉴权时在宿主机同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
+      # M10: 机密可以改走只读文件 —— 走环境变量会长期留在 `docker inspect` 的
+      # .Config.Env 与容器内 /proc/<pid>/environ 里。用法(挂在 /run/secrets 下):
+      #   volumes: - ./secrets/token:/run/secrets/iso_hub_token:ro
+      #   .env:     ISO_HUB_TOKEN_FILE=/run/secrets/iso_hub_token
+      # 两者都设时以 ISO_HUB_TOKEN 为准并告警(优先级与 ISO_HUB_SECRET_KEY 一致)。
+      - ISO_HUB_TOKEN_FILE=${ISO_HUB_TOKEN_FILE:-}
       # 可选: 对 data/settings.json 整文件做 AES-GCM 静态加密(不设则明文, 向后兼容)。
       # 与登录密码无关; 生产建议用 ISO_HUB_SECRET_KEY_FILE 从 Docker secret/只读文件读密钥。
       # 例: .env 里 ISO_HUB_SECRET_KEY=<随机字符串> 或 ISO_HUB_SECRET_KEY_FILE=/run/secrets/iso_hub_secret
@@ -81,10 +96,18 @@ services:
       - ISO_HUB_SECRET_KEY_FILE=${ISO_HUB_SECRET_KEY_FILE:-}
       # 强制登录门禁: 1=必须登录管理员账号才能使用(默认), 0=关闭登录门禁
       - ISO_HUB_REQUIRE_LOGIN=${ISO_HUB_REQUIRE_LOGIN:-1}
+      # 反向代理支持(H1): 前置 nginx/Caddy/Traefik 时设 1, 从 X-Forwarded-For 取真实 IP。
+      # ⚠️ 没有反代不要开 —— 该头客户端可伪造, 开了等于允许自称 127.0.0.1。
+      - ISO_HUB_TRUST_PROXY=${ISO_HUB_TRUST_PROXY:-}
       # 管理员账号播种: 首次启动时用这两个变量自动创建管理员
       # 不设置的话, 公网访问登录会报"管理员账号未设置"(防抢注), 只能从服务器本机建号
       - ISO_HUB_ADMIN_USER=${ISO_HUB_ADMIN_USER:-}
       - ISO_HUB_ADMIN_PASS=${ISO_HUB_ADMIN_PASS:-}
+      # M10: 推荐改用只读文件(值不进 docker inspect 的 Env)。
+      # 两者都设时以 ISO_HUB_ADMIN_PASS 为准并告警 —— 想改走文件请把上面那行删掉。
+      #   volumes: - ./secrets/admin_pass:/run/secrets/iso_hub_admin_pass:ro
+      #   .env:     ISO_HUB_ADMIN_PASS_FILE=/run/secrets/iso_hub_admin_pass
+      - ISO_HUB_ADMIN_PASS_FILE=${ISO_HUB_ADMIN_PASS_FILE:-}
       # 订阅自动同步间隔(秒),默认 86400=每天;设 0 关闭自动调度,仅手动/定时调用
       - ISO_HUB_SYNC_INTERVAL=${ISO_HUB_SYNC_INTERVAL:-86400}
       - ISO_HUB_SOURCE_STRATEGY=${ISO_HUB_SOURCE_STRATEGY:-A}
@@ -113,7 +136,8 @@ services:
   # ---------- Docker socket 代理: 收窄主容器对 Docker API 的访问权限 ----------
   # 主容器不再持有裸 /var/run/docker.sock(等价宿主机 root), 而是经此代理按白名单调用。
   # 白名单写在 docker/socket-proxy/haproxy.cfg, 只有四类:
-  #   GET /_ping|/version, GET /containers/*, POST .../(start|stop|restart|update), 其余 403
+  #   GET /_ping|/version、GET /containers/<三个 sidecar>/json、
+  #   POST /containers/<三个 sidecar>/(start|stop|restart|update), 其余 403
   # 为什么不用 tecnativa/docker-socket-proxy 的 env 开关: 它的 ACL 是"方法 + 路径前缀"两档,
   # POST=1 会把 /containers 前缀整体放行 —— 连带 open 了 POST /containers/create(足以创建
   # 挂载宿主根目录的特权容器)与 DELETE /containers/<id>; 而 POST=0 会在第一条规则
@@ -127,6 +151,38 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+    # ---- 必须显式以 root 运行, 否则代理形同虚设 ----
+    # 官方 haproxy 镜像的默认用户是 uid 99(haproxy), 不是 root。而宿主
+    # /var/run/docker.sock 通常是 root:docker 0660 —— uid 99 既不是属主、也不在
+    # docker 组, 权限位是 `---`, connect() 直接 EACCES。
+    #
+    # 表现极具欺骗性(CI 逐 flag 对照实测确认, 与下面的加固无关, 不加也是 503):
+    #   haproxy 正常启动、ACL 正常放行、日志里没有任何 ACL 错误,
+    #   但每个请求都是 `503 SC--`(连不上后端), 面板上三个 sidecar 全 unknown。
+    #
+    # 为什么选 root 而不是 group_add:
+    #   group_add 需要宿主的 docker 组 gid, 而它每台机器都不一样(CI 上是 113,
+    #   Debian/Ubuntu 常见 998/999, NAS 上又是别的)。写死一个默认值 = 换个宿主
+    #   就静默坏掉; 写成必填变量 = 老用户升级时 compose 直接报错起不来。
+    #   root 是唯一"在任何宿主上都成立"的选择, 而它在这里的权限已经被下面四项
+    #   (只读根/零能力/禁提权/无端口发布)压到只剩"能打开这个 socket"。
+    #
+    # 想改成非 root(可选, 需要你在部署机执行):
+    #   stat -c '%g' /var/run/docker.sock        # 拿到 docker 组 gid, 例如 999
+    #   然后删掉下面这行 user, 换成:  group_add: ["999"]
+    #   并实测三个 sidecar 的启停仍然正常。
+    user: "0:0"
+    # ---- M9(审查 2026-10): 与主容器同级别的纵深防御 ----
+    read_only: true          # 根文件系统只读: 被拿下也写不进后门/替换二进制
+    tmpfs:
+      - /tmp
+      # 这里**绝不能**加 /run。容器里 /var/run 是 /run 的软链接, 而 docker.sock
+      # 是按 /var/run/docker.sock 挂进来的 —— 一旦给 /run 挂上 tmpfs, 那个空 tmpfs
+      # 会把 socket 整个遮住, 症状与上面权限问题一模一样(503 SC--)。
+    cap_drop:
+      - ALL                  # 只监听 2375(>1024), 不需要任何 capability
+    security_opt:
+      - no-new-privileges:true
     volumes:
       # ACL 配置: 显式 allowlist, 见文件头注释
       - ./docker/socket-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
@@ -134,7 +190,14 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
       # 用容器内自带的 wget 探 /_ping(白名单放行), 代理未就绪则 unhealthy
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:2375/_ping || exit 1"]
+      #
+      # 必须是 127.0.0.1, 不能写 localhost: 容器 /etc/hosts 里同时有
+      # `127.0.0.1 localhost` 与 `::1 localhost`, musl 按 RFC 3484 的优先级
+      # (::1 为 50, IPv4 映射为 10) 会**先**解析到 ::1; 而 haproxy 的
+      # `bind *:2375` 只监听 IPv4。于是 healthcheck 永远 "connection refused"。
+      # 后果不是"少个绿灯": 主容器是 depends_on: service_healthy, 全新部署时
+      # compose 会直接报 dependency failed to start, 面板根本起不来。
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/_ping || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -168,6 +231,8 @@ services:
       - "${SAMBA_139:-1139}:139"
     volumes:
       - ./data:/srv/iso:ro          # 只读共享,ISO 不会被误改
+      # ⚠️ 绝不挂 ./backups: 那里是含 settings.json(会话 token/共享口令)的配置归档。
+      #    这正是 M8 把备份挪出 ./data 的原因, 加一行挂载就等于把它又交出去了。
       - ./samba-config:/samba-config:ro
       - ./docker/samba-entrypoint.sh:/etc/iso-hub/samba-entrypoint.sh:ro
     environment:
@@ -189,6 +254,7 @@ services:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
       - ./data:/data:ro             # 只读共享
+      # ⚠️ 绝不挂 ./backups(同 samba 处的说明): 归档里有 settings.json 明文。
       - ./webdav-config:/config     # 凭据配置目录(挂载目录避免单文件 bind 的坑; 配置文件 webdav.yml 在此目录内)
     environment:
       - TZ=Asia/Shanghai
@@ -198,6 +264,9 @@ services:
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
   # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
   # WebUI: http://<服务器IP>:8090
+  #   ⚠ qB 的 Host 头校验要求 Host 里的端口等于容器内端口(8080)。映射成 8090 时
+  #   浏览器直接访问会 401(v1.8.0 起恢复校验, 不再为这点便利关掉防护)。要用 qB
+  #   自己的界面就把映射改成 "8080:8080"(或设 QB_PORT=8080); 只用面板则不受影响。
   # 默认不部署, 需启用 compose profile "bt":  docker compose --profile bt up -d
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest@sha256:e887804fa9de4c60f5f0fb1f3a7e4febe40a8f69fe736f70c4e8589b1f868dab

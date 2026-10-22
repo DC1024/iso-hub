@@ -10,11 +10,32 @@ v1.7.0 从 app.py 按域迁出，只做搬移不改行为。两条铁律：
    仍是 app.py 的 before_request / after_request 钩子，对蓝图路由一视同仁。
 """
 from flask import Blueprint, jsonify, request
+import functools
 import re
 
 from api._ctx import core
 
 bp = Blueprint("custom_sources", __name__)
+
+
+def _serialized(fn):
+    """把整个视图函数放进 custom_sources.json 的文件锁里执行。
+
+    M2 修复(审查 2026-10): 这两个写接口都是 `load → 改 → save` 的读-改-写。
+    只把 save 改成原子写只能防"半截文件", 防不住**丢失更新** —— 两个并发请求
+    各自读到同一份旧列表, 各自 append, 后写的那个把先写的覆盖掉, 用户看到的是
+    "加了两条只成功一条"。
+    所以锁的范围必须覆盖整个读-改-写。用装饰器而不是缩进整个函数体: 后者会产生
+    一大片纯缩进 diff, 真正改动的地方反而看不见。
+
+    save_custom_sources 内部还会再取同一把锁 —— file_lock 返回的是
+    按路径共享的 RLock, 同线程可重入, 不会自锁。
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with core.config_files.file_lock(core.CUSTOM_JSON):
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 
@@ -24,6 +45,7 @@ def api_custom_sources():
 
 
 @bp.post("/api/custom-sources")
+@_serialized
 def api_custom_sources_add():
     body = request.get_json(force=True, silent=True) or {}
     distribution = (body.get("distribution") or "").strip()
@@ -105,6 +127,7 @@ def api_custom_sources_add():
 
 
 @bp.delete("/api/custom-sources")
+@_serialized
 def api_custom_sources_del():
     url = request.args.get("url", "")
     distribution = request.args.get("distribution", "")

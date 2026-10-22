@@ -38,20 +38,33 @@ app.py 会 import distro_torrents, 反向引用会形成循环 import。
 ----------------------
 * **读取路径不做备份。** 读取可能发生在任何请求线程里, 挪文件这种写副作用不可预测,
   并发读还会抢着备份。备份只在 update_json 真正要覆盖它之前做一次。
-* **download_failures.json 的跨进程竞争。** 它的另一个写方是 iso_runner **子进程**
-  (直接落盘), 和本进程不共享任何线程锁 —— 线程锁治不了。要修得引入 filelock 依赖
-  (改 requirements + 镜像); 不修的最坏情况只是一次"下载失败/停止"标记错位,
-  下次下载成功时 clear_failure 会把它清掉。
+* **读取路径不加跨进程锁。** 写入走 tmp+replace, 读者要么看到旧内容要么看到完整新内容,
+  加锁只会让高频读路径无谓排队。需要串行化的是"读-改-写", 见 cross_process_lock。
+
+download_failures.json 的跨进程竞争(M3, 已修)
+---------------------------------------------
+它的另一个写方是 iso_runner **子进程**(直接落盘), 和本进程不共享任何线程锁 ——
+threading.RLock 治不了。原先的结论是"要修得引入 filelock 依赖", 后来发现标准库
+就够: POSIX 的 fcntl.flock / Windows 的 msvcrt.locking 包一层即可, 不必加依赖。
+实现见 cross_process_lock(); 加锁失败一律降级为"只有进程内锁"(= 修复前的行为)。
 """
 from __future__ import annotations
 
 import base64  # noqa: F401  (保留: 将来若改 base64 封装便于迁移)
+import contextlib
 import hashlib
 import json
 import os
 import threading
 import time
 from pathlib import Path
+
+# 跨进程文件锁: POSIX 用 flock, Windows 用 msvcrt.locking。
+# 只在对应平台导入, 另一个名字不会存在 —— 由 _os_lock_acquire 按 os.name 分支调用。
+if os.name == "nt":                       # pragma: no cover - 平台分支
+    import msvcrt
+else:                                     # pragma: no cover - 平台分支
+    import fcntl
 
 __all__ = [
     "CorruptJsonFile",
@@ -168,6 +181,9 @@ def file_lock(path) -> threading.RLock:
 
     刻意用 str(path) 而不是 os.path.abspath(): 后者要读 cwd, 而容器里 DATA_DIR
     本来就是绝对路径; 测试把 SETTINGS_JSON 换成临时目录时也能自动得到独立分组。
+
+    **这把锁只管本进程内的线程**。要挡住另一个进程(下载 runner 子进程、
+    sync_subscriptions 脚本、独立 CLI)必须用 cross_process_lock()。
     """
     key = str(path)
     with _locks_guard:
@@ -176,6 +192,197 @@ def file_lock(path) -> threading.RLock:
             lk = threading.RLock()
             _locks[key] = lk
         return lk
+
+
+# --------------------------------------------------------------------------- 跨进程锁
+# 为什么还需要另一把锁(M3)
+# --------------------------
+# download_failures.json / download_unverified.json 是**多个进程共写**的账本:
+#   * web 进程(waitress 线程)         —— 下载结束后补记录 / 清理记录
+#   * iso_runner.py 子进程(可多个并行) —— 每个文件下载完立刻写一条
+#   * sync_subscriptions.py 子进程      —— 同步订阅时写失败记录
+# 三者的写法都是 "读全量 → 改一条 → tmp+replace 写全量"。原子写只保证"没有半截
+# 文件", **不保证不丢更新**: A 读到 {x}, B 读到 {x}, A 写 {x,a}, B 写 {x,b} —— a 没了。
+# threading.RLock 对此完全无效(它连另一个进程的边都碰不到)。
+#
+# 代价与降级
+# ----------
+# 临界区就是读一个小 JSON + 写一个小 JSON(毫秒级), 加一次 flock 的开销可以忽略。
+# 但**绝不能因为锁失败就让下载流程失败**:
+#   * 拿不到锁(超过 timeout) → 照旧往下走, 事后回调 on_degraded 让调用方记日志;
+#   * 建不了锁文件 / 文件系统不支持 flock(NFS、某些 FUSE) → 同上。
+# 也就是说"加锁失败"退回的是**修复前的行为**, 不会比现在更差。
+_LOCK_SUFFIX = ".lock"
+LOCK_TIMEOUT = 5.0
+
+
+def lock_file_for(path) -> Path:
+    """与 path 配套的锁文件路径: 同目录下 `<name>.lock`。
+
+    单独一个文件而不是锁数据文件本身: 数据文件会被 os.replace 换掉, inode 变了,
+    锁就跟着丢了 —— 两边锁的其实是不同 inode, 等于没锁。
+    """
+    p = Path(path)
+    return p.parent / (p.name + _LOCK_SUFFIX)
+
+
+def _oserr(e: OSError) -> str:
+    """OSError 的可读描述。Windows 上把 winerror 也带上 —— errno 13 既可能是
+    "拒绝访问"(5) 也可能是"共享冲突"(32), 两者的处置完全不同, 不带就分不清。"""
+    w = getattr(e, "winerror", None)
+    return "%s%s" % (e, (" (winerror=%s)" % w) if w else "")
+
+
+def _ensure_lock_file(lp: Path) -> None:
+    """保证锁文件存在, 且在 Windows 上**至少 1 字节**。
+
+    为什么非要 1 个字节: Windows 的字节范围锁对"文件末尾之外"的区域不生效 ——
+    对 0 字节文件加锁会返回成功, 而另一个进程同样能加锁成功, 等于没锁
+    (实测: 0 字节时两个进程都拿到锁; 1 字节时第二个被 errno 13 挡住)。
+
+    为什么用临时文件 + 原子改名, 而不是"不存在就 open(O_CREAT) 再写":
+    两个进程会同时看到"文件存在但 0 字节", 抢着写同一个字节; 而此刻对方可能
+    已经对 byte 0 加了锁, 后写的那次被强制锁挡成 EACCES → 静默降级 → 丢更新。
+    先写临时文件再 rename, 文件一出现就是 1 字节, 没有 0 字节窗口。
+    (这个问题是实测出来的: 50 条并发写里稳定丢 1 条, 全部发生在锁文件刚诞生那几次。)
+    """
+    with contextlib.suppress(OSError):
+        lp.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if lp.exists():
+            # POSIX 的 flock 不看文件大小; Windows 才需要补字节(兼容旧版本留下的空文件)
+            if os.name == "nt" and lp.stat().st_size == 0:
+                with contextlib.suppress(OSError):
+                    with open(lp, "r+b") as f:
+                        f.write(b"\0")
+            return
+    except OSError:
+        pass
+    tmp = lp.parent / (".%s.%d.seed" % (lp.name, os.getpid()))
+    try:
+        with open(tmp, "wb") as f:
+            f.write(b"\0")
+        os.replace(tmp, lp)
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+def _os_lock_once(fh) -> bool:
+    """对已打开的锁文件做**一次**非阻塞加锁尝试; 拿不到返回 False。"""
+    try:
+        if os.name == "nt":
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _open_and_lock(lp: Path, timeout: float):
+    """在超时前反复尝试"打开锁文件 + 加锁", 返回 (fh, 是否拿到, 失败原因)。
+
+    为什么**打开失败也要重试**: 另一个进程正在 os.replace 生成锁文件的那一瞬间,
+    这边的 open 会拿到 EACCES / 共享冲突 —— 那是毫秒级的瞬时状态。把它直接判成
+    "没有跨进程锁"就会丢更新(实测: 50 条并发写里稳定丢 1 条, 全部发生在锁文件
+    刚诞生那几次)。重试 50ms 之后再来一次就好。
+    """
+    deadline = time.monotonic() + max(0.0, timeout)
+    last = "超时"
+    while True:
+        fh = None
+        try:
+            _ensure_lock_file(lp)
+            fh = open(lp, "r+b")           # 不用 "a+b": 追加写会撞上别人的强制锁
+        except OSError as e:
+            last = "无法打开锁文件 %s: %s" % (lp, _oserr(e))
+        else:
+            if _os_lock_once(fh):
+                return fh, True, ""
+            last = "等待跨进程锁 %s 超过 %.1fs" % (lp, timeout)
+        if fh is not None:
+            with contextlib.suppress(OSError):
+                fh.close()
+        if time.monotonic() >= deadline:
+            return None, False, last
+        time.sleep(0.05)
+
+
+def _os_lock_release(fh) -> None:
+    try:
+        if os.name == "nt":
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass   # 关闭句柄时内核也会释放, 这里失败不影响正确性
+
+
+# 同线程重入计数: 键是锁文件路径。
+# 为什么必须自己数: flock 是"按打开的文件描述"加锁的, 同一进程再 open 一次拿到的
+# 是另一个描述, 会**自己把自己锁住**(直接死等)。所以重入只能靠线程本地计数短路。
+_cp_held = threading.local()
+
+
+def _cp_held_map() -> dict:
+    m = getattr(_cp_held, "map", None)
+    if m is None:
+        m = {}
+        _cp_held.map = m
+    return m
+
+
+@contextlib.contextmanager
+def cross_process_lock(path, timeout: float = LOCK_TIMEOUT, on_degraded=None):
+    """对 path 加**跨进程**排他锁(同时含进程内线程锁)。用法::
+
+        with config_files.cross_process_lock(jf):
+            data = ...读...
+            write_json_atomic(jf, data)
+
+    可重入: 同一线程嵌套进入不会死锁(内层直接短路), 进程内不同线程按 file_lock 排队。
+
+    on_degraded(reason: str) 在**锁全部释放之后**调用, 且只在这一种情况下调用:
+    没能拿到跨进程锁, 于是退化为"只有进程内锁"。之所以放到锁外, 是本模块的硬约束
+    3 —— 回调里可能去拿 app._lock 打日志, 持着 json 锁回调会构成环路死锁。
+    不传回调则静默降级(等于修复前的行为)。
+    """
+    p = Path(path)
+    lp = lock_file_for(p)
+    held = _cp_held_map()
+    key = str(lp)
+    degraded = None
+
+    try:
+        with file_lock(p):                  # 先过进程内这一关(可重入)
+            depth = held.get(key)
+            if depth is not None:           # 同线程重入
+                held[key] = depth + 1
+                try:
+                    yield
+                finally:
+                    held[key] -= 1
+            else:
+                fh, got, why = _open_and_lock(lp, timeout)
+                if not got:
+                    degraded = "%s, 本次仅用进程内锁" % why
+                held[key] = 1
+                try:
+                    yield
+                finally:
+                    held.pop(key, None)
+                    if fh is not None:
+                        if got:
+                            _os_lock_release(fh)
+                        with contextlib.suppress(OSError):
+                            fh.close()
+    finally:
+        # 必须在 file_lock 释放之后回调: 回调里可能去打日志(要 app._lock)
+        if degraded and on_degraded is not None:
+            on_degraded(degraded)
 
 
 def read_json_raw(path) -> dict:
@@ -203,13 +410,17 @@ def read_json_raw(path) -> dict:
     return data
 
 
-def write_json_atomic(path, data: dict) -> None:
+def write_json_atomic(path, data: dict | list) -> None:
     """原子写 JSON: 先落同目录临时文件, 再 os.replace 替换。
 
     读者永远只能看到"旧内容"或"完整的新内容", 不会读到被写了一半的 JSON
     (进程在 write_text 中途被 kill / 磁盘满, 都会留下半截文件 —— 那正是过去
     不得不靠 try/except 兜底的原因)。临时文件以 . 开头, 且在异常时清理,
     正常情况下不会残留在数据目录里。
+
+    data 允许 dict 也允许 list: custom_sources.json / subscriptions.json 顶层
+    就是数组(M2)。这两个文件**不能**走 update_json —— 那个函数为 dict 设计,
+    遇到 list 会抛 CorruptJsonFile 并把文件当损坏件隔离。
 
     settings.json 在启用密钥时先整文件 AES-GCM 加密再落盘; 写完后 chmod 600(档位 A),
     收窄"能读 data 卷的进程/用户"范围(对 root 容器只能挡非 root 读者, 但仍有意义)。

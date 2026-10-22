@@ -39,8 +39,8 @@ ISO Hub 是一个带网页界面的 Docker 化 Linux 发行版 ISO 自动更新�
 mkdir iso-hub && cd iso-hub
 curl -O https://raw.githubusercontent.com/DC1024/iso-hub/master/docker-compose.acr.yml
 # 容器以 uid 10001 非 root 运行, 先把挂载目录交给它(见下方「非 root 运行」)
-mkdir -p data qb-config webdav-config samba-config
-sudo chown -R 10001:10001 data qb-config webdav-config samba-config
+mkdir -p data backups qb-config webdav-config samba-config
+sudo chown -R 10001:10001 data backups qb-config webdav-config samba-config
 
 docker compose -f docker-compose.acr.yml up -d                    # 核心（必启）
 docker compose -f docker-compose.acr.yml --profile share up -d    # + SMB/WebDAV 共享（可选）
@@ -53,8 +53,8 @@ docker compose -f docker-compose.acr.yml --profile bt up -d       # + 种子下�
 
 ```bash
 git clone https://github.com/DC1024/iso-hub.git && cd iso-hub
-mkdir -p data qb-config webdav-config samba-config
-sudo chown -R 10001:10001 data qb-config webdav-config samba-config
+mkdir -p data backups qb-config webdav-config samba-config
+sudo chown -R 10001:10001 data backups qb-config webdav-config samba-config
 docker compose up -d --build
 ```
 
@@ -115,9 +115,12 @@ docker compose up -d   # 改 .env 后重启生效
 |---|---|---|
 | `ISO_HUB_PORT` | `8899` | Web 端口（映射到容器 8080） |
 | `ISO_HUB_ADMIN_USER` / `ISO_HUB_ADMIN_PASS` | 空 | 管理员播种：用户表为空时自动创建；**公网部署必设** |
+| `ISO_HUB_ADMIN_PASS_FILE` / `ISO_HUB_TOKEN_FILE` | 空 | 上面两项的只读文件版本（推荐）。值不进 `docker inspect` 的 `.Config.Env`；两者都设时环境变量优先并告警 |
 | `ISO_HUB_REQUIRE_LOGIN` | `1` | `1`=强制登录才能使用；`0`=关闭门禁 |
+| `ISO_HUB_TRUST_PROXY` | 空 | 前置反向代理时设 `1`（从 `X-Forwarded-For` 取真实 IP）。**没有反代不要开**，否则客户端可自称 `127.0.0.1` |
 | `ISO_HUB_TOKEN` | 空 | 附加访问令牌（所有写操作需携带）；建议公网环境开启或置于反代之后 |
 | `ISO_HUB_SYNC_INTERVAL` | `86400` | 订阅自动同步间隔（秒）；`0`=关闭内置调度器 |
+| `ISO_HUB_BACKUP_DIR` | `/backups` | 配置备份输出目录。刻意在 `./data` 之外（共享树里就是 `settings.json` 明文），改这里要同步 compose 挂载 |
 | `SAMBA_PORT` | `1445` | SMB 映射端口（原 445） |
 | `SAMBA_USER` / `SAMBA_PASS` | `iso` / 空 | SMB 账号/密码（**密码必填**，为空时拒绝启用共享） |
 | `WEBDAV_PORT` | `8081` | WebDAV 端口 |
@@ -147,13 +150,13 @@ data/
 |---|---|---|
 | 进程身份 | root（`cap_drop: ALL`） | **uid/gid 10001**（+ `cap_drop: ALL` + `no-new-privileges`） |
 | 根文件系统 | 可写 | **只读**（写不了 `/app`、site-packages） |
-| 可写位置 | 任意 | 仅 `./data` `./qb-config` `./webdav-config` `./samba-config`，外加两块内存盘 `/tmp`、`/home/isohub` |
+| 可写位置 | 任意 | 仅 `./data` `./backups` `./qb-config` `./webdav-config` `./samba-config`，外加两块内存盘 `/tmp`、`/home/isohub` |
 
 **从 v1.4.x 升级（breaking change）：** 绑定挂载的属主由**宿主机**决定，容器内改不了。升级前必须先在 compose 所在目录执行：
 
 ```bash
 docker compose down
-sudo chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+sudo chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config
 docker compose pull && docker compose up -d
 ```
 
@@ -162,7 +165,8 @@ docker compose pull && docker compose up -d
 **几个容易踩的点：**
 
 - **qBittorrent 必须同 uid**：`qbittorrent` 服务的 `QB_PUID` / `QB_PGID` 默认已改为 `10001`。若仍让它在 root 下写 `/data`，主容器（uid 10001 且无 `DAC_OVERRIDE`）既校验不了也删不掉那些 ISO。老部署在 `.env` 里显式写死了 `QB_PUID=0` 的，请一并改掉。
-- **`read_only` 依赖的路径**：gpg 验签全部走 `tempfile.TemporaryDirectory()`（落在 `/tmp` 内存盘）并显式指定 `GNUPGHOME`，不碰 `$HOME/.gnupg`；业务写盘全部落在上面四个挂载卷。日志在 `./data/logs/`。`/home/isohub` 也挂了一块 8MB 内存盘兜底 —— `gpg --show-keys` 这类"看起来只读"的调用仍会在 homedir 里建 `pubring.kbx`，不可写时它会 `Fatal` 且不输出指纹（表现为"缓存 keyring 指纹不匹配、每轮重建"）。
+- **`read_only` 依赖的路径**：gpg 验签全部走 `tempfile.TemporaryDirectory()`（落在 `/tmp` 内存盘）并显式指定 `GNUPGHOME`，不碰 `$HOME/.gnupg`；业务写盘全部落在上面五个挂载卷。日志在 `./data/logs/`。`/home/isohub` 也挂了一块 8MB 内存盘兜底 —— `gpg --show-keys` 这类"看起来只读"的调用仍会在 homedir 里建 `pubring.kbx`，不可写时它会 `Fatal` 且不输出指纹（表现为"缓存 keyring 指纹不匹配、每轮重建"）。
+- **备份为什么单独一个卷**：`./data` 会整块经 Samba/WebDAV 只读共享给局域网，而配置备份归档里就是 `settings.json`（会话 token / SMTP 授权码 / 共享口令）。所以备份写到 `./backups`，`samba` / `webdav` 两个服务**不挂**它。1.8.0 之前留下的 `./data/backups/` 不会自动搬家，启动日志会点名提醒。
 - **NFS / SMB 挂载的 data 目录**：需在服务端把 uid 映射成 10001（或 `all_squash` + `anonuid=10001`），否则本机 `chown` 无效。
 - **Podman / rootless Docker**：没有真正的 uid 0，用 `userns_mode: keep-id`，或把宿主目录直接交给容器内的映射用户。
 - **临时回退**：实在来不及迁移，可在 compose 里给 `iso-hub` 加 `user: "0:0"` 并删掉 `read_only: true`，即可回到 v1.4.x 的行为——但这会同时失去本次的全部收益，仅作应急。
@@ -196,7 +200,7 @@ docker compose pull && docker compose up -d   # 升级到最新镜像
 该文件被 🔒 锁定保护，先在列表里解锁；保护列表也可在「设置」里批量管理。
 
 **启动就退出，日志里写着「启动中止: 数据目录不可写」？**<br>
-v1.5.0 起容器以 uid 10001 运行，宿主挂载目录的属主对不上。按日志提示执行 `sudo chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config` 后重启即可，详见「[非 root 运行与升级迁移](#非-root-运行与升级迁移v150-起)」。
+v1.5.0 起容器以 uid 10001 运行，宿主挂载目录的属主对不上。按日志提示执行 `sudo chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config` 后重启即可，详见「[非 root 运行与升级迁移](#非-root-运行与升级迁移v150-起)」。
 
 **面板能打开，但下载/删除都报 Permission denied？**<br>
 同上，属主没迁移。也可能是 qBittorrent 仍以 root 写盘（`.env` 里 `QB_PUID=0`），改成 `10001`。`curl http://127.0.0.1:8899/api/health` 的 `writable` 字段会直接标出哪个挂载点写不了。

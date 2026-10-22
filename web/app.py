@@ -29,6 +29,7 @@ import shlex
 import base64
 import hashlib
 import configparser
+import ipaddress
 from time import struct_time  # 供 _sched_matches 类型注解
 import threading
 import subprocess
@@ -87,6 +88,10 @@ UNVERIFIED_JSON = DATA_DIR / "download_unverified.json"
 # 下载中的半成品后缀: 下载器一律写 <最终名>.part, 校验通过后才原子改名为最终名。
 # 必须与 web/iso_runner.py 的 PART_SUFFIX、iso_download/download_linux.py 保持一致。
 PART_SUFFIX = ".part"
+# M4: 半成品的「来源标记」(<part>.src), 记录这个 .part 是从哪个 URL 下的。
+# 它不是文件、不是半成品, 扫描磁盘时必须跳过 —— 否则会被当成"不在清单中"的
+# 过期文件显示在 UI 上, 还附一个「清理过期」按钮。必须与 iso_runner 的同名常量一致。
+PART_SRC_SUFFIX = ".part.src"
 SHARE_CONTAINERS = {"samba": "iso-hub-samba", "webdav": "iso-hub-webdav"}
 ISO_SUFFIXES = {".iso", ".img", ".qcow2", ".vmdk"}
 # 下载目录类型白名单(路径穿越防护)
@@ -256,6 +261,22 @@ LOG_TO_FILE = os.environ.get("ISO_HUB_LOG_TO_FILE", "1").strip().lower() in (
     "1", "true", "yes", "on")
 
 
+def _default_backup_dir(data_dir: Path) -> Path:
+    """配置备份的输出目录: $ISO_HUB_BACKUP_DIR > <data-dir> 同级的 backups/。
+
+    M8 修复: 备份**不能**落在 /data 里。settings.json 的归档会经 Samba(USERID=0)
+    与 WebDAV(iso=10001) 只读共享给整个局域网, 0700/0600 挡不住这两个"合法"读者。
+    与 scripts/backup.py、scripts/restore.py 必须同一套规则(有测试盯着三者一致)。
+    """
+    env = (os.environ.get("ISO_HUB_BACKUP_DIR") or "").strip()
+    if env:
+        return Path(env)
+    return data_dir.parent / "backups"
+
+
+BACKUP_DIR = _default_backup_dir(DATA_DIR)
+
+
 def _log_file_path(ts: float | None = None) -> Path:
     day = time.strftime("%Y-%m-%d", time.localtime(ts if ts is not None else time.time()))
     return LOG_DIR / f"iso-hub-{day}.log"
@@ -347,21 +368,27 @@ def write_fail_record(rel: str, kind: str = "hard", err: str = "", url: str = ""
       * "stopped" — 已停止/被中断, 半成品保留, 下次可续传 → 下载停止
 
     v1.3.17: 新增 err/url 两个诊断字段, 并在写入时按 TTL 清理过期记录。
+
+    M3(审查 2026-10): 读-改-写全程持有**跨进程**文件锁。这个文件由 web 线程、
+    iso_runner 子进程、sync_subscriptions 子进程三方共写, 只靠 tmp+replace 的
+    原子写挡不住"后写的覆盖先写的"(丢的是别人的失败记录, 表现为 UI 状态莫名消失)。
     """
     try:
-        data = {}
-        if FAILURES_JSON.exists():
-            data = json.loads(FAILURES_JSON.read_text(encoding="utf-8")) or {}
-        data = drop_expired_failures(data)
-        data[rel] = {
-            "at": int(time.time()),
-            "kind": kind,
-            **({"err": err[:300]} if err else {}),
-            **({"url": url[:500]} if url else {}),
-        }
-        tmp = FAILURES_JSON.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(FAILURES_JSON)
+        with config_files.cross_process_lock(
+                FAILURES_JSON, on_degraded=lambda m: log(f"[WARN] {m}")):
+            data = {}
+            if FAILURES_JSON.exists():
+                data = json.loads(FAILURES_JSON.read_text(encoding="utf-8")) or {}
+            data = drop_expired_failures(data)
+            data[rel] = {
+                "at": int(time.time()),
+                "kind": kind,
+                **({"err": err[:300]} if err else {}),
+                **({"url": url[:500]} if url else {}),
+            }
+            tmp = FAILURES_JSON.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(FAILURES_JSON)
     except errs.JSON_WRITE as e:
         log(f"[WARN] 写下载失败记录失败: {e}")
 
@@ -467,6 +494,9 @@ def disk_inventory() -> dict:
                 for f in ddir.iterdir():
                     if not f.is_file():
                         continue
+                    # 半成品的来源标记既不是文件也不是半成品, 直接无视
+                    if f.name.endswith(PART_SRC_SUFFIX):
+                        continue
                     # 半成品交给下一趟统一处理(跳过其原始名)
                     if _partial_base_name(f.name):
                         continue
@@ -479,6 +509,8 @@ def disk_inventory() -> dict:
                 # 半成品: 单独一趟, 把 xxx.iso.part 归到 xxx.iso 名下
                 for f in ddir.iterdir():
                     if not f.is_file():
+                        continue
+                    if f.name.endswith(PART_SRC_SUFFIX):
                         continue
                     base = _partial_base_name(f.name)
                     if not base:
@@ -519,6 +551,8 @@ def _flat_disk_inventory() -> dict:
     for f in iso_dir.iterdir():
         if not f.is_file():
             continue
+        if f.name.endswith(PART_SRC_SUFFIX):
+            continue   # 来源标记, 不是 ISO 也不是半成品
         partial = _partial_base_name(f.name)
         base = partial or f.name
         key = fname_key.get(base)
@@ -562,9 +596,19 @@ def load_custom_sources() -> list:
 
 
 def save_custom_sources(items: list) -> None:
-    CUSTOM_JSON.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    """原子写入自定义镜像源。
+
+    M2 修复(审查 2026-10): 旧实现是裸 write_text —— 进程中途被 kill / 磁盘满 /
+    容器重启都会留下**截断的 JSON**, 下次 load_custom_sources 解析失败返回 [],
+    用户的全部自定义源就静默永久丢失。并发 POST 的 read-modify-write 也会互相覆盖。
+    这里与项目其余 JSON 落盘保持一致: file_lock + write_json_atomic。
+
+    注意**不能**用 config_files.update_json(): 它是为 dict 设计的, 内部
+    read_json_raw 对 list 会抛 CorruptJsonFile 并把文件当损坏件隔离 ——
+    这两个文件都是 list 形状。
+    """
+    with config_files.file_lock(CUSTOM_JSON):
+        config_files.write_json_atomic(CUSTOM_JSON, items)
 
 
 # ---------- 自定义源自动刷新设置 (独立开关, 默认关闭不主动访问源服务器) ----------
@@ -619,9 +663,9 @@ def load_subscriptions() -> list:
 
 
 def save_subscriptions(items: list) -> None:
-    SUBS_JSON.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    """原子写入订阅配置(理由同 save_custom_sources, 见 M2)。"""
+    with config_files.file_lock(SUBS_JSON):
+        config_files.write_json_atomic(SUBS_JSON, items)
 
 
 # 自定义源展开结果采用「持久化落盘缓存」, 请求线程内只读缓存、绝不发起网络请求。
@@ -1344,10 +1388,51 @@ def save_users(users: dict) -> None:
     save_settings_all({USER_STORE_KEY: users})
 
 
+def _read_secret_file(path: str, what: str) -> str:
+    """读只读文件里的机密, 去掉首尾空白(主要是 `echo pw > f` 带出来的换行)。
+
+    读不到返回空串并告警, 调用方按"未设置"处理。刻意**不**回退到环境变量:
+    "设了文件却读不到"说明路径或权限配错了, 这时悄悄用另一份旧值, 会让人以为
+    自己改的那份生效了 —— 排查成本远高于直接说"没读到"。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError as e:
+        log(f"[安全] ⚠ 无法读取 {what} 文件 {path}: {e} —— 按未设置处理")
+        return ""
+
+
+def _secret_env(name: str, what: str) -> str:
+    """`<NAME>` 优先, 其次 `<NAME>_FILE`。
+
+    M10: 口令/密钥走环境变量会长期留在两处 —— `docker inspect` 的 `.Config.Env`
+    与容器内 `/proc/<pid>/environ`, 任何能读到其中之一的人直接拿到明文。
+    改成只读文件挂载后, 值不再进容器的环境块。
+
+    优先级刻意与 `config_files._resolve_secret_key()`(settings.json 加密密钥)
+    保持一致: 同一类变量两套优先级, 用户永远记不住哪个生效。
+    两者同时设时告警 —— 环境变量那份已经泄露了, 只改文件而不删环境变量等于白改。
+    """
+    raw = (os.environ.get(name) or "").strip()
+    fp = (os.environ.get(name + "_FILE") or "").strip()
+    if raw and fp:
+        log(f"[安全] ⚠ {name} 与 {name}_FILE 同时设置, 以 {name} 为准;"
+            f" 想改走文件请把 {name} 从 .env / compose 里删掉")
+    if raw:
+        return raw
+    if fp:
+        return _read_secret_file(fp, what)
+    return ""
+
+
 def seed_admin():
-    """若未播种管理员且设置了 ISO_HUB_ADMIN_USER/PASS, 则创建之。"""
-    u = os.environ.get("ISO_HUB_ADMIN_USER", "").strip()
-    p = os.environ.get("ISO_HUB_ADMIN_PASS", "").strip()
+    """若未播种管理员且设置了 ISO_HUB_ADMIN_USER/PASS, 则创建之。
+
+    口令支持 `ISO_HUB_ADMIN_PASS_FILE`(M10); 用户名不是机密, 只认环境变量。
+    """
+    u = (os.environ.get("ISO_HUB_ADMIN_USER") or "").strip()
+    p = _secret_env("ISO_HUB_ADMIN_PASS", "管理员初始口令")
     if not u or not p:
         return
     users = load_users()
@@ -1705,7 +1790,16 @@ def _make_qb_pbkdf2(password: str) -> str:
 
 
 def _set_qb_password(username: str, password: str) -> bool:
-    """把用户名/密码写入挂载的 qBittorrent.conf, 禁用 LocalHostAuth/HostHeaderValidation。"""
+    """把用户名/密码写入挂载的 qBittorrent.conf。
+
+    * ``LocalHostAuth=false`` —— **取消** localhost 免密(默认 true = 本机访问不验
+      密码)。iso-hub 从容器网络访问 qB, 不该享受免密, 这是收紧。
+    * ``HostHeaderValidation=true`` —— 旧版本这里写 false, 只为让浏览器经映射端口
+      打开 WebUI, 代价是把 DNS rebinding 防护整个拆掉(L1)。qB 的规则是「Host 里
+      的端口必须等于连接落在的本端端口」, 所以后端走 http://qbittorrent:8080 不受
+      影响; 浏览器若经 8090 访问会 401, 需要把映射改成 8080:8080 或只用面板。
+      必须显式写 true: 老部署的 conf 里已经是 false, 不写不会自愈。
+    """
     if not QB_CONF_PATH.exists():
         return False
     try:
@@ -1717,7 +1811,8 @@ def _set_qb_password(username: str, password: str) -> bool:
         c.set("Preferences", "WebUI\\Username", username)
         c.set("Preferences", "WebUI\\Password_PBKDF2", _make_qb_pbkdf2(password))
         c.set("Preferences", "WebUI\\LocalHostAuth", "false")
-        c.set("Preferences", "WebUI\\HostHeaderValidation", "false")
+        # L1: 不再关闭 Host 头校验。理由见 _set_qb_password 的 docstring。
+        c.set("Preferences", "WebUI\\HostHeaderValidation", "true")
         with open(QB_CONF_PATH, "w", encoding="utf-8") as f:
             c.write(f)
         return True
@@ -2050,6 +2145,58 @@ def _yaml_quote(value: str) -> str:
     return inner
 
 
+# L2 修复(审查 2026-10): 这些是"看起来像口令"的占位值 —— 它们不会让共享变安全,
+# 只会让部署者以为已经设过了。iso123 是 1.3.21 之前的内置默认口令, 一并列上以
+# 覆盖从旧版本升级上来、文件没被重写的情况。
+_WEBDAV_WEAK_PASSWORDS = frozenset({"", "change-me-please", "CHANGE-ME-BEFORE-USE", "iso123"})
+
+
+def _yaml_scalar_value(line: str) -> str:
+    """从 `password: "xxx"  # 注释` 这样的行里取出标量值。
+
+    只处理本项目自己会写出的形态(可选引号 + 可选行尾注释), **不是** YAML 解析器。
+    为什么不用 PyYAML: 它只是测试依赖, 运行时不装 —— 为了读一行口令去加运行时
+    依赖不值得。
+
+    注意: 必须先剥行尾注释再剥引号。反过来会把 `"abc"  # 注释` 读成
+    `abc"  # 注释`, 占位口令就永远识别不出来(这个 bug 被 batch1 的测试抓到过)。
+    """
+    val = line.split(":", 1)[1].strip()
+    if val[:1] in ('"', "'"):
+        q = val[0]
+        end = val.find(q, 1)
+        return val[1:end] if end != -1 else val[1:]
+    for sep in (" #", "\t#"):
+        idx = val.find(sep)
+        if idx != -1:
+            val = val[:idx]
+    return val.strip()
+
+
+def _warn_if_webdav_conf_weak(cfg_path: Path) -> None:
+    """webdav.yml 仍是占位/空口令时在日志里告警(只告警, 不改文件)。
+
+    为什么需要: 面板"启用共享"那条路径会拒绝空口令(api/shares.py), 但**手工复制
+    仓库里的 webdav.yml 示例**这条路径绕过了它 —— 文件一存在, _ensure_webdav_conf
+    就不再生成模板, sidecar 直接按占位口令起来。这里不猜 hacdias/webdav 对空口令
+    的处理语义, 只把"你正在用占位口令"这个事实喊出来, 让人能看见。
+    """
+    try:
+        text = cfg_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("- "):
+            s = s[2:].strip()
+        if not s.startswith("password:"):
+            continue
+        if _yaml_scalar_value(s) in _WEBDAV_WEAK_PASSWORDS:
+            log("[共享] ⚠ webdav.yml 用的是占位/空口令, WebDAV 等同不设防; "
+                "请在面板「共享」里设置凭据(会自动重写该文件)")
+            return
+
+
 def _ensure_webdav_conf(username: str, password: str) -> bool:
     """webdav.yml 不存在或为空文件时按内置模板生成一份; 已存在且非空则原样保留。
 
@@ -2057,6 +2204,7 @@ def _ensure_webdav_conf(username: str, password: str) -> bool:
     """
     cfg_path = _webdav_conf_path()
     if cfg_path.exists() and cfg_path.stat().st_size > 0:
+        _warn_if_webdav_conf_weak(cfg_path)
         return True
     if not username or not password:
         log("[共享] webdav 配置缺失且无可用凭据, 跳过自动生成")
@@ -2439,9 +2587,114 @@ def stop_task() -> bool:
 
 # --------------------------------------------------------------------------- flask app
 app = Flask(__name__, static_folder="static", static_url_path="/static")
-AUTH_TOKEN = os.environ.get("ISO_HUB_TOKEN", "").strip()
+
+# H1: 反向代理支持。默认关闭 —— 没有代理时 X-Forwarded-For 是客户端自己填的,
+# 信了它就等于让任何人自称 127.0.0.1(既能绕过"仅内网可建号", 也能绕过登录限速)。
+# 前面确实挂了 nginx/Caddy/Traefik 时才设 ISO_HUB_TRUST_PROXY=1。
+# x_for=1 表示"只信任最近一跳", 即取 X-Forwarded-For 的**最后**一项 ——
+# nginx 的 $proxy_add_x_forwarded_for 会把真实来源追加在末尾, 前面的项客户端可伪造。
+TRUST_PROXY = os.environ.get("ISO_HUB_TRUST_PROXY", "").strip().lower() in (
+    "1", "true", "yes", "on")
+if TRUST_PROXY:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+
+AUTH_TOKEN = _secret_env("ISO_HUB_TOKEN", "访问令牌")
 # 强制登录开关: ISO_HUB_REQUIRE_LOGIN=1 时, 除登录/自身状态接口外所有 API 均需登录会话或 X-Auth-Token
 REQUIRE_LOGIN = os.environ.get("ISO_HUB_REQUIRE_LOGIN", "1").strip().lower() in ("1", "true", "yes", "on")
+
+# L3 修复(审查 2026-10): 两个开关同时关闭 = 所有 API 完全开放(局域网内任何设备
+# 都能改配置/删文件/触发下载)。这是文档里写明的行为, 但它的触发条件很隐蔽 ——
+# 必须显式设 ISO_HUB_REQUIRE_LOGIN=0 **且**不设 ISO_HUB_TOKEN 才会走到这里。
+# 后果是"以为还开着, 其实早就裸奔了"。这里在启动日志里喊出来, 让它在面板日志
+# 第一屏就能看见。
+def _warn_if_auth_disabled() -> bool:
+    """鉴权全关时打印醒目横幅。返回是否真的打印了(便于测试断言)。"""
+    if REQUIRE_LOGIN or AUTH_TOKEN:
+        return False
+    log("!" * 70)
+    log("[安全] ⚠ 鉴权已完全关闭: ISO_HUB_REQUIRE_LOGIN=0 且未设置 ISO_HUB_TOKEN")
+    log("[安全]    当前局域网内任何设备都可读写全部 API(改配置/删文件/触发下载)")
+    log("[安全]    只想免登录浏览请设 ISO_HUB_TOKEN; 想恢复鉴权请置 REQUIRE_LOGIN=1")
+    log("!" * 70)
+    return True
+
+
+_warn_if_auth_disabled()
+
+
+def _warn_if_legacy_backup_dir() -> bool:
+    """旧版备份目录(<data-dir>/backups)里还有归档时, 提醒迁移。
+
+    M8 把备份挪到了共享树之外, 但**升级前生成的归档不会自己搬家** —— 它们仍然躺在
+    Samba/WebDAV 读得到的地方。"我已经改过了"这种印象比没改更危险, 所以启动时点名。
+    返回是否真的打印了(便于测试断言)。
+    """
+    legacy = DATA_DIR / "backups"
+    if legacy == BACKUP_DIR or not legacy.is_dir():
+        return False
+    archives = list(legacy.glob("isohub-backup-*.tar.gz"))
+    if not archives:
+        return False
+    log("!" * 70)
+    log(f"[安全] ⚠ 旧备份目录仍在共享树内: {legacy} ({len(archives)} 份归档)")
+    log("[安全]    归档里的 settings.json 含会话 token / SMTP 授权码 / 共享口令,")
+    log("[安全]    而 /data 整块会经 Samba/WebDAV 只读共享。新版已改写到 "
+        f"{BACKUP_DIR},")
+    log("[安全]    请把旧归档移过去后删除该目录:")
+    log(f"[安全]        mkdir -p {BACKUP_DIR} && mv {legacy}/*.tar.gz {BACKUP_DIR}/"
+        f" && rmdir {legacy}")
+    log("!" * 70)
+    return True
+
+
+def _client_ip() -> str:
+    """当前请求的客户端 IP。
+
+    启用 ISO_HUB_TRUST_PROXY 后 ProxyFix 已经把 remote_addr 换成真实来源,
+    所以这里不需要再自己解析 X-Forwarded-For —— 只解析一次, 只有一个真相。
+    """
+    return (request.remote_addr or "").strip()
+
+
+def _ip_is_lan(ip: str) -> bool:
+    """是否属于"本机或私有网段"(公网不可路由的那一类)。
+
+    is_loopback / is_private / is_link_local 合起来覆盖: 127.0.0.0/8、::1、
+    10/8、172.16/12、192.168/16、fc00::/7、169.254/16、fe80::/10。
+    IPv4-mapped IPv6(::ffff:192.168.1.5)先还原成 IPv4 再判 —— 否则它落在
+    ::ffff:0:0/96 里, 按 v6 判会得出与直觉相反的结论。
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:      # 空串 / 非法值 / 上游给的怪字符串
+        return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return bool(addr.is_loopback or addr.is_private or addr.is_link_local)
+
+
+def _bootstrap_denied_reason() -> str:
+    """首次建号(用户表为空时由首个访客创建管理员)的准入判定。空串 = 放行。
+
+    H1: 原判定是"仅 127.0.0.1 / ::1", 部署在局域网时其他设备根本建不了号,
+    只能去 SSH 隧道。现在放宽到"本机或私有网段", 公网来源仍然 403。
+
+    为什么不能只是把字符串比对改宽: 反向代理部署时容器内的 remote_addr 恒为
+    代理地址(127.0.0.1 或 docker 网关), 无脑放宽等于把公网客户端当成内网放行
+    —— 谁先打开登录页谁就是管理员。所以:
+      · 用反代必须显式设 ISO_HUB_TRUST_PROXY=1, 由 ProxyFix 取真实 IP;
+      · 没设却收到了 X-Forwarded-For, 说明前面有我们看不穿的代理, 一律拒绝,
+        并把该设哪个变量直接写在错误里。宁可拒绝, 也不靠猜。
+    """
+    ip = _client_ip()
+    if not TRUST_PROXY and request.headers.get("X-Forwarded-For"):
+        return ("检测到反向代理转发头, 但未启用 ISO_HUB_TRUST_PROXY=1。"
+                "请设置该变量后重启(或改用 ISO_HUB_ADMIN_USER/PASS 播种管理员)")
+    if _ip_is_lan(ip):
+        return ""
+    return ("管理员账号未设置, 请先在服务器本机或局域网内建号,"
+            " 或设置 ISO_HUB_ADMIN_USER/PASS")
 
 
 @app.before_request
@@ -2889,8 +3142,11 @@ def _torrent_file_names(t: dict) -> list:
 def _writable_targets():
     """运行期需要可写的路径: [(key, 标签, Path|None, 是否必需)]。
 
-    只有数据目录是必需的 —— 其余三项对应可选 sidecar(qB/WebDAV/Samba), 老部署或
-    只用核心功能时根本没挂载, 目录不存在属于正常, 只提示不拦启动。
+    只有数据目录是必需的 —— 其余四项对应可选 sidecar(qB/WebDAV/Samba)与可选的
+    备份卷, 老部署或只用核心功能时根本没挂载, 目录不存在属于正常, 只提示不拦启动。
+
+    backups 这一项存在的意义: 宿主 ./backups 若由 root 创建, 容器(uid 10001)写不进去,
+    backup.py 要等到真的有人手动跑备份才会失败。启动时喊一声, 比事后翻日志便宜。
 
     webdav 项可能是 None: 没有配置 WEBDAV_CONF 就没有独立的配置挂载点(见
     _webdav_conf_dir), 此时状态记 not_configured, 而不是去探 /data 报一个恒真的值。
@@ -2898,6 +3154,7 @@ def _writable_targets():
     return (
         ("data", "数据目录", DATA_DIR, True),
         ("logs", "日志目录", LOG_DIR, False),
+        ("backups", "备份目录", BACKUP_DIR, False),
         # qBittorrent.conf 落在 /qb-config/qBittorrent/ 下, 探测其上一层更稳定
         # (子目录由 qB 自己创建, 首次启动前不存在)。
         ("qb_config", "qBittorrent 配置", QB_CONF_PATH.parent.parent, False),
@@ -2988,7 +3245,7 @@ _PREFLIGHT_HINT = """
   v1.5.0 起容器以非 root(uid/gid 10001)运行, 绑定挂载的属主由**宿主机**决定,
   容器内改不了。首次部署/升级时请在 docker-compose.yml 所在目录执行:
 
-      chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+      chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config
 
   · Podman / rootless Docker: 没有真正的 uid 0, 请改用 `userns_mode: keep-id`
     或把宿主目录交给该用户 (见 wiki/部署-快速开始.md「非 root 运行与目录属主」)。
@@ -3067,6 +3324,7 @@ if __name__ == "__main__":
     log(f"ISO Hub 启动  |  清单: {JSON_FILE}  数据目录: {DATA_DIR}")
     _sessions_load()  # 从磁盘恢复持久化会话(容器重建后 token 仍有效)
     seed_admin()  # 若设置 ISO_HUB_ADMIN_USER/PASS 则播种管理员
+    _warn_if_legacy_backup_dir()  # M8: 旧备份目录还在共享树里就喊一声
     # 启动收敛: compose 并发拉起 sidecar 存在时序竞态, 用后台线程重试直到状态一致,
     # 替代旧的一次性快照(_sync_disabled_shares/_sync_disabled_qb 仍保留供手动/测试调用)
     _bootstrap_webdav_conf()  # 首次部署时 ./webdav-config 为空, 按当前设置生成 webdav.yml
