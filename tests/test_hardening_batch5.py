@@ -19,12 +19,17 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import requests
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WEB = REPO_ROOT / "web"
 sys.path.insert(0, str(WEB))
 
+import app  # noqa: E402
 import config_files  # noqa: E402
+import iso_runner  # noqa: E402
 
 
 class _TmpDirCase(unittest.TestCase):
@@ -218,6 +223,163 @@ class LedgerLockWiringTest(_TmpDirCase):
         data = json.loads(self.ledger.read_text(encoding="utf-8"))
         self.assertEqual(len(data), 50,
                          "并发写丢了记录: 期望 50 条, 实得 %d 条" % len(data))
+
+
+# --------------------------------------------------------------------------- M4
+NAME = "ubuntu-24.04.iso"
+PAYLOAD = bytes(range(256)) * 16          # 4096 字节, 内容可辨认
+
+
+class _Resp:
+    """requests.get 的最小替身(只实现 failover 用到的那几个接口)。"""
+
+    def __init__(self, status_code, headers=None, chunks=None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._chunks = chunks or []
+        self.closed = False
+
+    def iter_content(self, chunk_size=8192):
+        for c in self._chunks:
+            yield c
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError("HTTP %d" % self.status_code)
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeDownloader:
+    def __init__(self, verify_result=(True, "ok")):
+        self.headers = {}
+        self.verify_result = verify_result
+
+    def verify_checksum_smart(self, filepath, checksum_url, stored, dist=None):
+        return self.verify_result
+
+
+class PartSourceIsolationTest(unittest.TestCase):
+    """M4: 同一个 .part 不能被两个镜像的字节拼起来。"""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.dir = Path(self._td.name)
+        self.filepath = self.dir / NAME
+        self.part = self.dir / (NAME + ".part")
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _run(self, url, resp, verify=(True, "ok")):
+        seen = {}
+
+        def _get(u, **kw):
+            seen["range"] = (kw.get("headers") or {}).get("Range")
+            return resp
+
+        with patch.object(iso_runner.requests, "get", _get):
+            ok, _used = iso_runner._download_file_with_failover(
+                _FakeDownloader(verify), {"checksum": ""}, [(url, "")],
+                NAME, self.dir, self.filepath, head_total=len(PAYLOAD))
+        return ok, seen
+
+    def test_switching_source_restarts_from_zero(self):
+        """半成品来自 A, 现在要下 B —— 必须不带 Range, 从头下。"""
+        self.part.write_bytes(b"X" * 100)
+        iso_runner._write_part_src(self.part, "https://a/" + NAME)
+
+        ok, seen = self._run("https://b/" + NAME,
+                             _Resp(200, {"Content-Length": str(len(PAYLOAD))},
+                                   [PAYLOAD]))
+        self.assertTrue(ok)
+        self.assertIsNone(seen["range"], "换源不得续传: 请求里不该有 Range")
+        self.assertEqual(self.filepath.read_bytes(), PAYLOAD,
+                         "落盘内容必须是 B 的完整字节, 不能混入 A 的前缀")
+
+    def test_same_source_still_resumes(self):
+        """同一个源必须照旧续传 —— 否则每次断线都要重下 6GB。"""
+        self.part.write_bytes(PAYLOAD[:100])
+        iso_runner._write_part_src(self.part, "https://a/" + NAME)
+
+        ok, seen = self._run(
+            "https://a/" + NAME,
+            _Resp(206, {"Content-Range": "bytes 100-4095/4096"},
+                  [PAYLOAD[100:]]))
+        self.assertTrue(ok)
+        self.assertEqual(seen["range"], "bytes=100-")
+        self.assertEqual(self.filepath.read_bytes(), PAYLOAD)
+
+    def test_legacy_part_without_marker_is_not_destroyed(self):
+        """升级前留下的 .part 没有来源标记。
+
+        无法证明同源, 但也不能把用户已经下了一半的 6GB 直接删掉 ——
+        保持旧行为(续传), 由最终 SHA256 兜底。
+        """
+        self.part.write_bytes(PAYLOAD[:100])
+        self.assertFalse(iso_runner._part_src_path(self.part).exists())
+
+        ok, seen = self._run(
+            "https://a/" + NAME,
+            _Resp(206, {"Content-Range": "bytes 100-4095/4096"},
+                  [PAYLOAD[100:]]))
+        self.assertTrue(ok)
+        self.assertEqual(seen["range"], "bytes=100-")
+
+    def test_marker_removed_after_landing(self):
+        self.part.write_bytes(PAYLOAD[:100])
+        iso_runner._write_part_src(self.part, "https://a/" + NAME)
+        self._run("https://a/" + NAME,
+                  _Resp(206, {"Content-Range": "bytes 100-4095/4096"},
+                        [PAYLOAD[100:]]))
+        self.assertFalse(iso_runner._part_src_path(self.part).exists(),
+                         "落定后来源标记必须清掉, 否则污染下一次续传")
+
+    def test_416_without_marker_is_not_landed_unverified(self):
+        """L4: 416 把 .part 当完整文件, 但同源性无法证明且没有校验和兜底。
+
+        这时不能落定成"未验签" —— 那等于把来源不明的内容标成"只是没验",
+        用户会当它是好的。宁可丢弃重下。
+        """
+        self.part.write_bytes(PAYLOAD)
+        ok, _seen = self._run("https://a/" + NAME, _Resp(416, {}),
+                              verify=(None, "校验源不可达"))
+        self.assertFalse(ok, "无法证明同源又验不了, 不该判成功")
+        self.assertFalse(self.filepath.exists(), "不得落定成未验签文件")
+        self.assertFalse(self.part.exists(), "不可信的半成品应被丢弃")
+
+    def test_416_with_checksum_still_lands(self):
+        """有校验和时照旧: 校验通过就说明内容是对的, 与来源无关。"""
+        self.part.write_bytes(PAYLOAD)
+        ok, _seen = self._run("https://a/" + NAME, _Resp(416, {}))
+        self.assertTrue(ok)
+        self.assertEqual(self.filepath.read_bytes(), PAYLOAD)
+
+
+class PartSrcInventoryTest(unittest.TestCase):
+    """M4: 来源标记不能被当成"过期文件"显示在 UI 上。"""
+
+    def test_suffix_constants_match(self):
+        self.assertEqual(iso_runner.PART_SRC_SUFFIX, app.PART_SRC_SUFFIX)
+        self.assertEqual(app.PART_SRC_SUFFIX, ".part.src")
+
+    def test_disk_inventory_skips_source_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ddir = root / "linux" / "ubuntu"
+            ddir.mkdir(parents=True)
+            (ddir / NAME).write_bytes(b"x")
+            (ddir / (NAME + ".part")).write_bytes(b"y")
+            (ddir / (NAME + ".part.src")).write_text("https://a/" + NAME,
+                                                     encoding="utf-8")
+            with patch.object(app, "DATA_DIR", root), \
+                    patch.object(app, "load_storage_mode", lambda: "classified"):
+                inv = app.disk_inventory()
+            files = inv[("linux", "ubuntu")]
+            names = sorted({f.get("partial_name") or f["name"] for f in files})
+            self.assertNotIn(NAME + ".part.src", names)
+            self.assertEqual(len(files), 2, "只应有一条完整文件 + 一条半成品: %r" % (files,))
 
 
 if __name__ == "__main__":

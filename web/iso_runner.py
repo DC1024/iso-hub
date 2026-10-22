@@ -28,6 +28,12 @@ except ImportError:  # pragma: no cover - 仅当以 web.iso_runner 形式导入�
 
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 PART_SUFFIX = ".part"
+# M4: 半成品的「来源标记」—— 记住这个 .part 是从哪个 URL 下的。
+# 续传只能续**同一个源**的字节: 两个镜像上的同名文件可能是不同版本/不同构建,
+# 前 50% 来自 A、后 50% 来自 B 拼出来的文件, 只能靠最终 SHA256 兜底;
+# 而校验源不可达(success is None)时这种文件还会被当作"未验签"直接落定。
+# 必须与 web/app.py 的 PART_SRC_SUFFIX 保持一致(有测试盯着)。
+PART_SRC_SUFFIX = ".part.src"
 # ISO 存放模式: classified=<type>/<发行版>/ 分类存放; flat=统一单目录。
 # 必须与 web/app.py 的 STORAGE_MODES / FLAT_ISO_DIRNAME 保持一致。
 STORAGE_MODES = ("classified", "flat")
@@ -276,6 +282,43 @@ def _warn(msg: str) -> None:
     混进一行中文告警有概率被当成标记。
     """
     print(f"[WARN] {msg}", file=sys.stderr)
+
+
+def _part_src_path(part) -> Path:
+    """半成品来源标记的路径: ``<part>.src``。"""
+    return Path(str(part) + PART_SRC_SUFFIX)
+
+
+def _read_part_src(part) -> str:
+    """读取半成品是从哪个 URL 下的; 没有标记(旧版本留下的 .part)返回空串。"""
+    try:
+        return _part_src_path(part).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _write_part_src(part, url: str) -> None:
+    """记下当前半成品的来源。写不进去只是失去同源判定, 不影响下载本身。"""
+    try:
+        _part_src_path(part).write_text((url or "") + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _forget_part_src(part) -> None:
+    try:
+        _part_src_path(part).unlink()
+    except OSError:
+        pass
+
+
+def _discard_part(part) -> None:
+    """删半成品, 连同它的来源标记 —— 留着标记会污染下一次续传的判断。"""
+    for p in (Path(part), _part_src_path(part)):
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 def _record_failure(data_dir, typ: str, name: str, fname: str, kind: str,
@@ -616,8 +659,13 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
     for idx, (url, checksum_url) in enumerate(candidates):
         print(f"  候选源 {idx + 1}/{len(candidates)}: {url}")
         # 断点续传: 已存在的 .part 就是本源的断点位置。
-        # 注意每个候选源都要重新评估(不同镜像上的文件可能不同, 故续传只在本源
-        # 首次失败后保留, 换源时从该源的断点重新开始)。
+        # M4: 但只能续**同一个源**的字节 —— 半成品的来源记在 <part>.src 里,
+        # 与当前候选源不一致就丢弃重下。跨源拼接出来的文件要么被最终 SHA256
+        # 拦下(白下), 要么在校验源不可达时被当成"未验签"落定(更糟)。
+        prev_src = _read_part_src(part)
+        if part.exists() and prev_src and prev_src != url:
+            print(f"  ⚠ 半成品来自另一个源, 不跨源续传, 从头下载: {prev_src}")
+            _discard_part(part)
         try:
             have = part.stat().st_size if part.exists() else 0
             headers = dict(downloader.headers or {})
@@ -689,6 +737,7 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
 
             if not already_complete:
                 # 下载到 .part; 下载途中被 kill 也会留下 .part 供识别
+                _write_part_src(part, url)   # 先记来源, 再落第一个字节
                 with open(part, mode) as f:
                     for chunk in resp.iter_content(chunk_size=8192):
                         if chunk:
@@ -722,6 +771,7 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                 if filepath.exists():
                     filepath.unlink()
                 os.replace(part, filepath)
+                _forget_part_src(part)   # 半成品已变成正式文件, 标记没用了
                 # P2: 曾经"未验签落定"的文件这次真验过了 —— 撤掉警告标记
                 if data_dir is not None:
                     _clear_unverified(data_dir, _typ, _name, filename)
@@ -735,12 +785,21 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
                 #   * 尺寸已达标 → 尽最大努力验证后落定(留告警, 提示检查 checksum 源)
                 #   * 尺寸未知   → 保留 .part, 不删不重下(避免坏数据判别与无谓流量)
                 print(f"  ⚠ 完整性无法判定: {msg}")
+                if already_complete and prev_src != url:
+                    # L4: 416 把 .part 直接当完整文件, 但没有任何证据证明它和当前
+                    # 源同源(旧版本留下的 .part 根本没有来源标记)。有校验和时还好,
+                    # 校验和本身就能证明内容对不对; 而这里恰恰是"验不了"的分支 ——
+                    # 再落定成"未验签", 等于把来源不明的内容标成"只是没验",
+                    # 用户会当它是好的。丢弃重下。
+                    raise CorruptPayload(
+                        "416 判定为完整, 但半成品无法确认与当前源同源, 且无校验和可兜底")
                 if total and written == total:
                     print("    长度已与服务器声明一致, 按无法校验处理并落定"
                           "(请检查该发行版的 checksum 源配置)")
                     if filepath.exists():
                         filepath.unlink()
                     os.replace(part, filepath)
+                    _forget_part_src(part)
                     # P2 修复: 记下"这个文件一次都没验过" —— UI 需要区别于校验通过的条目
                     if data_dir is not None:
                         _record_unverified(data_dir, _typ, _name, filename, msg)
@@ -752,11 +811,7 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
             print(f"  ✗ 校验和验证失败: {msg}")
             if total:
                 # 尺寸与预期一致却校验不过 → 内容确实损坏, 丢弃避免坏数据被续传
-                try:
-                    if part.exists():
-                        part.unlink()
-                except OSError:
-                    pass
+                _discard_part(part)
                 print("  半成品尺寸正确但内容校验不符, 已丢弃(避免坏数据被续传)")
             else:
                 # 尺寸未知: 可能是截断(可续传)也可能是损坏, 无法区分 → 保守保留
@@ -775,11 +830,7 @@ def _download_file_with_failover(downloader, target_dist: dict, candidates, file
         except CorruptPayload as e:
             last_err = e
             print(f"  ✗ 响应内容不可信, 丢弃半成品: {e}")
-            try:
-                if part.exists():
-                    part.unlink()
-            except OSError:
-                pass
+            _discard_part(part)
         except Exception as e:  # noqa: BLE001 - 边界: 换源重试兜底, 单源的未预期异常应 failover 到下一候选
             last_err = e
             print(f"  ✗ 候选源失败, 尝试下一源: {e}")

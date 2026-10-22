@@ -88,6 +88,10 @@ UNVERIFIED_JSON = DATA_DIR / "download_unverified.json"
 # 下载中的半成品后缀: 下载器一律写 <最终名>.part, 校验通过后才原子改名为最终名。
 # 必须与 web/iso_runner.py 的 PART_SUFFIX、iso_download/download_linux.py 保持一致。
 PART_SUFFIX = ".part"
+# M4: 半成品的「来源标记」(<part>.src), 记录这个 .part 是从哪个 URL 下的。
+# 它不是文件、不是半成品, 扫描磁盘时必须跳过 —— 否则会被当成"不在清单中"的
+# 过期文件显示在 UI 上, 还附一个「清理过期」按钮。必须与 iso_runner 的同名常量一致。
+PART_SRC_SUFFIX = ".part.src"
 SHARE_CONTAINERS = {"samba": "iso-hub-samba", "webdav": "iso-hub-webdav"}
 ISO_SUFFIXES = {".iso", ".img", ".qcow2", ".vmdk"}
 # 下载目录类型白名单(路径穿越防护)
@@ -490,6 +494,9 @@ def disk_inventory() -> dict:
                 for f in ddir.iterdir():
                     if not f.is_file():
                         continue
+                    # 半成品的来源标记既不是文件也不是半成品, 直接无视
+                    if f.name.endswith(PART_SRC_SUFFIX):
+                        continue
                     # 半成品交给下一趟统一处理(跳过其原始名)
                     if _partial_base_name(f.name):
                         continue
@@ -502,6 +509,8 @@ def disk_inventory() -> dict:
                 # 半成品: 单独一趟, 把 xxx.iso.part 归到 xxx.iso 名下
                 for f in ddir.iterdir():
                     if not f.is_file():
+                        continue
+                    if f.name.endswith(PART_SRC_SUFFIX):
                         continue
                     base = _partial_base_name(f.name)
                     if not base:
@@ -542,6 +551,8 @@ def _flat_disk_inventory() -> dict:
     for f in iso_dir.iterdir():
         if not f.is_file():
             continue
+        if f.name.endswith(PART_SRC_SUFFIX):
+            continue   # 来源标记, 不是 ISO 也不是半成品
         partial = _partial_base_name(f.name)
         base = partial or f.name
         key = fname_key.get(base)
