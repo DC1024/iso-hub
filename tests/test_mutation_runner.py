@@ -205,23 +205,24 @@ class RunMutationTest(unittest.TestCase):
 
         这是最容易漏的分支：`except TimeoutExpired` 里若忘了写文件，
         只有 finally 兜底；而 finally 存在的前提是有人记得写。
+
+        这里让替身直接抛 TimeoutExpired，而不是真起一个 sleep 子进程去撞
+        0.2s 超时。后者在 Windows 上偶发永久卡死：subprocess.run 在 kill()
+        之后还要 communicate() 一次去收读线程，等不到管道 EOF 就无限 join
+        （全量套件里连挡了三批门禁，隔离单跑却 4.6s 全过）。被测的分支就是
+        `except subprocess.TimeoutExpired`，替身抛出来一样能走到。
         """
         original = self.BASE + "KEEP THIS EXACT\n"
         target = self._write("target.py", original)
-        hang = self._write("hang.py", "import time; time.sleep(30)\n")
-
-        real_run = subprocess.run
 
         def fake_run(cmd, **kw):
-            # 把 600s 的超时压到 0.2s，避免测试真等
-            kw["timeout"] = 0.2
-            return real_run(cmd, **kw)
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 600))
 
         orig = mt.subprocess.run
         mt.subprocess.run = fake_run
         try:
             _mid, killed, detail = mt.run_mutation(
-                self._mut(), "{python} " + str(hang), sys.executable)
+                self._mut(), "{python} -m unittest fake_module", sys.executable)
         finally:
             mt.subprocess.run = orig
 
