@@ -37,6 +37,22 @@ FLAT_DIRNAME = "iso"
 ALLOWED_TYPES = {"linux", "bsd", "windows", "macos"}
 
 
+def has_fingerprint(entry: dict) -> bool:
+    """条目是否配置了公钥指纹锚定(gpg_key_fingerprint, 字符串或字符串数组)。
+
+    M6(审查 2026-10): 指纹是**本地信任锚**, 不是来源提供的材料 —— 所以
+    "没配指纹"绝不能导致拒绝下载(那是 TOFU, 项目有意保留的降级路径),
+    但必须能被观测到, 否则"已锚定且验签通过"与"只是首次信任"在 health 上
+    长得一模一样。
+    """
+    fp = entry.get("gpg_key_fingerprint")
+    if isinstance(fp, str):
+        return bool(fp.strip())
+    if isinstance(fp, (list, tuple)):
+        return any(isinstance(x, str) and x.strip() for x in fp)
+    return False
+
+
 def data_dir() -> Path:
     return Path(os.environ.get("ISO_DATA_DIR", "/data"))
 
@@ -171,6 +187,10 @@ def build_summary(json_path=None, path=None, download_dir=None) -> dict:
         states[state] - stale_by_state[state]
     判定 stale 需要**能确定文件确实没了**: 缺文件名(无法拼候选路径)或
     下载根目录不可访问时宁可不算, 不能把"没扫到盘"当成"文件丢了"。
+
+    unpinned(M6, v1.8.0): 配置了 gpg_verify 但没配 gpg_key_fingerprint 的条目。
+    它们靠 TOFU(首次信任即信任)工作 —— 项目有意保留的降级路径, **不阻塞下载**,
+    但必须可见: 否则"已锚定且验签通过"与"只是首次信任"在 health 上无法区分。
     """
     jp = Path(json_path) if json_path else data_dir() / "distributions.json"
     lp = Path(path) if path else ledger_path()
@@ -188,6 +208,13 @@ def build_summary(json_path=None, path=None, download_dir=None) -> dict:
     by_key = {}
     for e in entries:
         by_key.setdefault(key_for(e), []).append(e)
+
+    # M6(审查 2026-10): 未配置指纹的条目 —— 它们只靠 TOFU(首次信任即信任)。
+    # 这是**可见性**输出, 不是判定结果: 这些条目依然正常下载、正常验签,
+    # 只是"验签通过"背后的信任根来自首次拉取而非本地锚定。
+    # 判据取"整组都没配" —— 镜像组里只要有一条锚定, 该组就有锚可依。
+    unpinned = [k for k, group in by_key.items()
+                if not any(has_fingerprint(e) for e in group)]
 
     ledger = _load(lp)
     disk_ok = root.is_dir()
@@ -226,6 +253,9 @@ def build_summary(json_path=None, path=None, download_dir=None) -> dict:
         "stale_by_state": stale_by_state,
         "never_invoked": never_invoked,
         "not_downloaded": not_downloaded,
+        # M6: 只靠 TOFU、没有本地指纹锚的条目。仅作可见性, 不影响 ok / 不阻塞下载。
+        "unpinned": unpinned,
+        "unpinned_count": len(unpinned),
         "ledger_total": len(ledger),
         "disk_available": disk_ok,
     }
