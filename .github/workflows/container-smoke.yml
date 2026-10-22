@@ -154,6 +154,73 @@ jobs:
           print("  ok tmpfs:", ", ".join(sorted(tmpfs)))
           PY
 
+      # ---- 第 3 批(H2/M9)验收: socket-proxy 的放行范围必须"恰好等于"应用用到的范围 ----
+      # 为什么必须放在这里跑, 而不是只写文本断言: haproxy.cfg 与 compose 都是部署面配置,
+      # 写错了单元测试照样全绿(它们只能 grep 文本), 而线上的表现是"三个 sidecar 全部失联"
+      # 或者"整个 Docker API 暴露给内网"。这里用**生产同款 compose 服务**起代理, 逐条打
+      # 真实 HTTP, 顺便也证明 M9 的 read_only + cap_drop 没有把 haproxy 自己搞死。
+      - name: Validate compose file
+        run: docker compose config -q
+
+      - name: Verify socket-proxy ACL
+        run: |
+          set -uo pipefail
+          docker compose up -d --no-deps socket-proxy
+
+          # 等 healthy 再探: 代理没起来时所有请求都是"连接失败", 无法区分 403 与 200,
+          # 那样的断言等于没断言(会因 got 为空而误报)。
+          st=""
+          for _ in $(seq 1 40); do
+            st=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+                 iso-hub-socket-proxy 2>/dev/null || echo missing)
+            [ "$st" = "healthy" ] && break
+            [ "$st" = "missing" ] && break
+            sleep 1
+          done
+          if [ "$st" != "healthy" ]; then
+            echo "socket-proxy 未就绪 (status=$st)"
+            docker logs iso-hub-socket-proxy 2>&1 | tail -40 || true
+            exit 1
+          fi
+          echo "socket-proxy healthy"
+
+          # 用容器自带的 busybox wget 探: 它在 healthcheck 里已被证明存在, 不必再拉镜像。
+          # -S 把响应头打到 stderr, 取第一行 HTTP 状态码; wget 遇 4xx 会非零退出, 故 `|| true`。
+          probe() {
+            want="$1"; desc="$2"; shift 2
+            out=$(docker exec iso-hub-socket-proxy wget -S -O /dev/null "$@" 2>&1 || true)
+            got=$(printf '%s\n' "$out" | awk '/HTTP\//{print $2; exit}')
+            if [ "$got" != "$want" ]; then
+              echo "::error::$desc: 期望 $want, 实际 ${got:-<无响应>}"
+              printf '%s\n' "$out"
+              exit 1
+            fi
+            echo "  ok $desc -> $got"
+          }
+          B=http://localhost:2375
+
+          # --- 必须放行, 否则功能倒退 ---
+          probe 200 "GET /_ping (compose healthcheck)"                   "$B/_ping"
+          probe 200 "GET /version (排障)"                               "$B/version"
+          probe 404 "GET /containers/iso-hub-samba/json -> 到 daemon"   "$B/containers/iso-hub-samba/json"
+          probe 404 "GET /v1.44/containers/iso-hub-webdav/json (版本前缀)" "$B/v1.44/containers/iso-hub-webdav/json"
+          probe 404 "POST /containers/iso-hub-samba/start -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/start"
+          probe 404 "POST /containers/iso-hub-samba/restart -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/restart"
+          probe 404 "POST /containers/iso-hub-qbittorrent/update -> 到 daemon" --post-data=x "$B/containers/iso-hub-qbittorrent/update"
+          # 404 而不是 403 = 请求被代理放行、由 daemon 回"没这个容器"; 这正是我们要的:
+          # ACL 没拦住, 且测试机上确实没有这三个 sidecar。
+
+          # --- 必须拒绝 (H2 收窄的重点) ---
+          probe 403 "GET /containers/json (部署拓扑枚举)"               "$B/containers/json"
+          probe 403 "GET /containers/<id>/archive (任意文件读)"         "$B/containers/iso-hub-samba/archive?path=/etc/shadow"
+          probe 403 "GET /containers/<未知名字>/json (名字收窄)"        "$B/containers/evil-container/json"
+          probe 403 "POST /containers/create (建特权容器)"              --post-data=x "$B/containers/create"
+          probe 403 "POST /containers/<name>/exec (进容器)"             --post-data=x "$B/containers/iso-hub-samba/exec"
+          probe 403 "GET /images/json (镜像枚举)"                       "$B/images/json"
+          probe 403 "GET /v1.44/containers/json (版本前缀绕过)"         "$B/v1.44/containers/json"
+          # DELETE 没有单独探: 无条件的最后一条 `http-request deny` 兜住一切未显式 allow 的
+          # 方法, 上面 /images/json 的 403 已经证明该兜底真的生效。
+
       - name: Dump container logs
         if: failure()
         run: docker logs "$CONTAINER" 2>&1 | tail -60 || true
@@ -162,4 +229,6 @@ jobs:
         if: always()
         run: |
           docker rm -f "$CONTAINER" 2>/dev/null || true
+          # socket-proxy 由 compose 起, 用 down 收尾(含它创建的默认网络)
+          docker compose down -v --remove-orphans 2>/dev/null || true
           sudo rm -rf "$DATA_DIR"
