@@ -527,6 +527,12 @@ class LinuxDistributionDownloader:
           "fail"  签名校验失败/指纹不匹配(应拒绝下载)
           "skip"  官方无公钥/获取失败/无 gpg 环境(降级到 SHA256, 不阻塞)
         """
+        # M1 修复(审查 2026-10): 没有 checksum 文本就没有可验的对象。
+        # 缺了这道闸, checksum 源 404 后调用方会把 404 的 HTML 正文当 checksum
+        # 传进来, 再去配 .gpg 验签, 必然 fail —— 又是一次"不可达被误判成被篡改"。
+        if not checksum_text:
+            print("  - 无 checksum 文本可验, 跳过 GPG 验签(降级)")
+            return "skip"
         try:
             import shutil
             # 导入/导出/指纹提取都依赖 gpg; gpgv 只负责校验签名
@@ -565,7 +571,19 @@ class LinuxDistributionDownloader:
             # 3. 取 detached 签名文件(URL 或按惯例推导)
             if not sig_url:
                 return "skip"  # 无签名文件可验
-            sig = requests.get(sig_url, timeout=30).content
+            # M1 修复(审查 2026-10): 必须先判 HTTP 状态码, 再判内容是否为空。
+            # 镜像对不存在的 .gpg 返回 404 的 HTML 错误页 —— 正文非空, 拦不住下面
+            # 的 `if not sig`, 交给 gpg 验签必然失败, 于是"源不可达"被误判成
+            # "签名被篡改"(fail), 触发无谓重下并污染 /api/health 账本。
+            # 不可达属"无法判定", 只能降级 skip —— 这是 v1.3.17 三态契约的要求:
+            # fail 只留给"拿到了材料且明确不符"。
+            try:
+                sig_resp = requests.get(sig_url, timeout=30)
+                sig_resp.raise_for_status()
+                sig = sig_resp.content
+            except requests.RequestException as e:
+                print(f"  获取签名文件失败(降级跳过验签): {e}")
+                return "skip"
             if not sig:
                 return "skip"
             # 4. 验证 detached 签名: 优先 gpgv(不信任签名者), 否则回退 gpg --verify
@@ -643,9 +661,15 @@ class LinuxDistributionDownloader:
             print("  尝试 GPG 签名验证 checksum 文件…")
             checksum_text = ""
             try:
-                checksum_text = requests.get(checksum_url, headers=self.headers, timeout=30).text
+                # M1 修复(审查 2026-10): 与 verify_signature 同因 —— 404/5xx 返回的
+                # HTML 正文不是 checksum, 不能拿去验签。raise_for_status 让"不可达"
+                # 走 except 分支, 保持 checksum_text 为空, 后续由 verify_signature
+                # 的空文本闸降级为 skip, 而不是报 fail。
+                checksum_resp = requests.get(checksum_url, headers=self.headers, timeout=30)
+                checksum_resp.raise_for_status()
+                checksum_text = checksum_resp.text
             except Exception as e:  # noqa: BLE001 - 边界: GPG 预检是可选增强, 获取失败一律降级到 SHA256 比对
-                print(f"  获取 checksum 文本失败: {e}")
+                print(f"  获取 checksum 文本失败(降级): {e}")
             sig_url = dist.get("signature_url") or self._default_sig_url(checksum_url)
             keyring_dir = self.download_dir / "gpg-keyring"  # 缓存到 data 卷
             gpg_status = self.verify_signature(checksum_text, sig_url,
