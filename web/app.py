@@ -1387,16 +1387,26 @@ def _read_secret_file(path: str, what: str) -> str:
 
 
 def _secret_env(name: str, what: str) -> str:
-    """`<NAME>_FILE` 优先, 否则取 `<NAME>`。
+    """`<NAME>` 优先, 其次 `<NAME>_FILE`。
 
     M10: 口令/密钥走环境变量会长期留在两处 —— `docker inspect` 的 `.Config.Env`
     与容器内 `/proc/<pid>/environ`, 任何能读到其中之一的人直接拿到明文。
     改成只读文件挂载后, 值不再进容器的环境块。
+
+    优先级刻意与 `config_files._resolve_secret_key()`(settings.json 加密密钥)
+    保持一致: 同一类变量两套优先级, 用户永远记不住哪个生效。
+    两者同时设时告警 —— 环境变量那份已经泄露了, 只改文件而不删环境变量等于白改。
     """
+    raw = (os.environ.get(name) or "").strip()
     fp = (os.environ.get(name + "_FILE") or "").strip()
+    if raw and fp:
+        log(f"[安全] ⚠ {name} 与 {name}_FILE 同时设置, 以 {name} 为准;"
+            f" 想改走文件请把 {name} 从 .env / compose 里删掉")
+    if raw:
+        return raw
     if fp:
         return _read_secret_file(fp, what)
-    return (os.environ.get(name) or "").strip()
+    return ""
 
 
 def seed_admin():

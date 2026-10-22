@@ -90,10 +90,11 @@ services:
       - ISO_HUB_BACKUP_DIR=${ISO_HUB_BACKUP_DIR:-/backups}
       # 需要鉴权时在宿主机同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
-      # M10: 机密优先走只读文件 —— 走环境变量会长期留在 `docker inspect` 的
+      # M10: 机密可以改走只读文件 —— 走环境变量会长期留在 `docker inspect` 的
       # .Config.Env 与容器内 /proc/<pid>/environ 里。用法(挂在 /run/secrets 下):
       #   volumes: - ./secrets/token:/run/secrets/iso_hub_token:ro
       #   .env:     ISO_HUB_TOKEN_FILE=/run/secrets/iso_hub_token
+      # 两者都设时以 ISO_HUB_TOKEN 为准并告警(优先级与 ISO_HUB_SECRET_KEY 一致)。
       - ISO_HUB_TOKEN_FILE=${ISO_HUB_TOKEN_FILE:-}
       # 可选: 对 data/settings.json 整文件做 AES-GCM 静态加密(不设则明文, 向后兼容)。
       # 与登录密码无关; 生产建议用 ISO_HUB_SECRET_KEY_FILE 从 Docker secret/只读文件读密钥。
@@ -109,8 +110,8 @@ services:
       # 不设置的话, 登录会报"管理员账号未设置"(防抢注), 只能从服务器本机/局域网建号
       - ISO_HUB_ADMIN_USER=${ISO_HUB_ADMIN_USER:-}
       - ISO_HUB_ADMIN_PASS=${ISO_HUB_ADMIN_PASS:-}
-      # M10: 推荐改用只读文件。设了 PASS_FILE 就**只看文件**, 不再看上面的 ADMIN_PASS
-      # (文件读不到时按"未设置"处理并告警, 不会悄悄回退到环境变量里的旧口令)。
+      # M10: 推荐改用只读文件(值不进 docker inspect 的 Env)。
+      # 两者都设时以 ISO_HUB_ADMIN_PASS 为准并告警 —— 想改走文件请把上面那行删掉。
       #   volumes: - ./secrets/admin_pass:/run/secrets/iso_hub_admin_pass:ro
       #   .env:     ISO_HUB_ADMIN_PASS_FILE=/run/secrets/iso_hub_admin_pass
       - ISO_HUB_ADMIN_PASS_FILE=${ISO_HUB_ADMIN_PASS_FILE:-}
