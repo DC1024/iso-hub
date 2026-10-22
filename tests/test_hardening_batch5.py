@@ -25,10 +25,15 @@ import requests
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WEB = REPO_ROOT / "web"
+ISO_DL = REPO_ROOT / "iso_download"
+# iso_download 先入 path, 再把 WEB 顶到最前 —— web/ 里的模块名(app / iso_runner)
+# 更容易被同名文件顶掉, 保持它优先。
+sys.path.insert(0, str(ISO_DL))
 sys.path.insert(0, str(WEB))
 
 import app  # noqa: E402
 import config_files  # noqa: E402
+import download_linux as DL  # noqa: E402
 import iso_runner  # noqa: E402
 
 
@@ -380,6 +385,266 @@ class PartSrcInventoryTest(unittest.TestCase):
             names = sorted({f.get("partial_name") or f["name"] for f in files})
             self.assertNotIn(NAME + ".part.src", names)
             self.assertEqual(len(files), 2, "只应有一条完整文件 + 一条半成品: %r" % (files,))
+
+
+# ============================================================== M5: 多源 failover
+def _dist(**over):
+    """构造一条最小清单条目; 默认就是"单源旧格式"。"""
+    d = {
+        "type": "linux",
+        "distribution": "ubuntu",
+        "download_url": "https://a/" + NAME,
+        "checksum_url": "",
+        "checksum": "",
+    }
+    d.update(over)
+    return d
+
+
+class CandidateSourcesTest(unittest.TestCase):
+    """M5: 把清单条目展开成有序候选源。
+
+    Web 侧一直有多源 failover, CLI 过去只认 download_url 一个地址 —— 主源挂掉
+    就直接跳过, 同一个清单在两个入口行为不同。
+    """
+
+    def setUp(self):
+        self.dl = DL.LinuxDistributionDownloader.__new__(DL.LinuxDistributionDownloader)
+
+    def test_legacy_single_url_degrades_to_one_candidate(self):
+        """没有 download_urls 的旧清单必须退化成单源, 与修复前完全一致。"""
+        self.assertEqual(self.dl.candidate_sources(_dist()),
+                         [("https://a/" + NAME, None)])
+
+    def test_download_urls_order_is_priority(self):
+        got = self.dl.candidate_sources(_dist(
+            download_urls=["https://a/x", "https://b/x", "https://c/x"],
+            checksum_urls=["https://a/S", "https://b/S", "https://c/S"]))
+        self.assertEqual([u for u, _ in got],
+                         ["https://a/x", "https://b/x", "https://c/x"])
+        self.assertEqual([c for _, c in got],
+                         ["https://a/S", "https://b/S", "https://c/S"])
+
+    def test_pin_moves_source_and_its_checksum_to_front(self):
+        """用户在 UI 上手动选过源 -> 置顶, 且 checksum_url 必须跟着一起搬。
+
+        只搬 url 不搬 checksum, 会让置顶的源拿**别的镜像**的 SHA256SUMS 去验,
+        结果是"校验不符"→ 把刚下好的文件删掉重来, 比不置顶还糟。
+        """
+        got = self.dl.candidate_sources(_dist(
+            download_urls=["https://a/x", "https://b/x", "https://c/x"],
+            checksum_urls=["https://a/S", "https://b/S", "https://c/S"],
+            pin="https://c/x"))
+        self.assertEqual([u for u, _ in got],
+                         ["https://c/x", "https://a/x", "https://b/x"])
+        self.assertEqual(got[0][1], "https://c/S")
+
+    def test_pin_not_in_list_is_ignored(self):
+        """pin 指向清单更新后已不存在的源 -> 忽略, 顺序不变。"""
+        got = self.dl.candidate_sources(_dist(
+            download_urls=["https://a/x", "https://b/x"],
+            checksum_urls=[], pin="https://gone/x"))
+        self.assertEqual([u for u, _ in got], ["https://a/x", "https://b/x"])
+
+    def test_missing_checksum_urls_are_padded_with_none(self):
+        """checksum_urls 比 download_urls 短时补 None, 不能错位。"""
+        got = self.dl.candidate_sources(_dist(
+            download_urls=["https://a/x", "https://b/x"],
+            checksum_urls=["https://a/S"]))
+        self.assertEqual(got, [("https://a/x", "https://a/S"), ("https://b/x", None)])
+
+
+class FailoverTest(unittest.TestCase):
+    """M5: 主源挂掉要能换源, 而不是整条跳过。"""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.root = Path(self._td.name)
+        self.dl = DL.LinuxDistributionDownloader.__new__(DL.LinuxDistributionDownloader)
+        self.dl.download_dir = self.root
+        self.dl.storage_mode = "classified"
+        self.calls = []
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _drive(self, dist, statuses):
+        """用假的 _download_from_url 驱动主流程, 记录它依次试了哪些源。"""
+        self.dl.distributions = {"distributions": [dist]}
+        seq = list(statuses)
+
+        def _fake(target_dist, url, cs_url, dist_dir, filepath, filename, verify):
+            self.calls.append(url)
+            return seq.pop(0) if seq else "ok"
+
+        self.dl._download_from_url = _fake
+        return self.dl.download_distribution("ubuntu")
+
+    def test_first_source_fails_second_succeeds(self):
+        ok = self._drive(_dist(download_urls=["https://a/" + NAME, "https://b/" + NAME],
+                               checksum_urls=["https://a/S", "https://b/S"]),
+                         ["next", "ok"])
+        self.assertTrue(ok, "换源成功后必须算下载成功")
+        self.assertEqual(self.calls, ["https://a/" + NAME, "https://b/" + NAME])
+
+    def test_all_sources_failing_returns_false(self):
+        ok = self._drive(
+            _dist(download_urls=["https://a/" + NAME, "https://b/" + NAME,
+                                 "https://c/" + NAME]),
+            ["next", "next", "next"])
+        self.assertFalse(ok)
+        self.assertEqual(len(self.calls), 3, "三个候选源都该被试过")
+
+    def test_fatal_stops_without_trying_remaining_sources(self):
+        """磁盘满这类失败换源也没用 —— 不该把剩下几个源再撞一遍。"""
+        ok = self._drive(
+            _dist(download_urls=["https://a/" + NAME, "https://b/" + NAME,
+                                 "https://c/" + NAME]),
+            ["fatal"])
+        self.assertFalse(ok)
+        self.assertEqual(self.calls, ["https://a/" + NAME])
+
+    def test_single_source_behaviour_unchanged(self):
+        """旧清单(单源)失败一次就结束 —— 与修复前完全一致。"""
+        ok = self._drive(_dist(), ["next"])
+        self.assertFalse(ok)
+        self.assertEqual(self.calls, ["https://a/" + NAME])
+
+    def test_existing_file_is_not_downloaded_again(self):
+        """已存在且判定通过时不发起任何下载, 直接计成功。"""
+        ddir = self.root / "linux" / "ubuntu"
+        ddir.mkdir(parents=True)
+        (ddir / NAME).write_bytes(PAYLOAD)
+        self.dl._already_have = lambda *a, **k: True
+        self.assertTrue(self._drive(_dist(), []))
+        self.assertEqual(self.calls, [])
+
+
+class UnverifiedLedgerCliTest(unittest.TestCase):
+    """M5②: CLI 侧也要落 download_unverified.json, 且键必须与 Web 侧一致。"""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.root = Path(self._td.name)
+        self.dl = DL.LinuxDistributionDownloader.__new__(DL.LinuxDistributionDownloader)
+        self.dl.download_dir = self.root
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _read(self):
+        p = self.root / "download_unverified.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+    def test_cli_and_web_write_the_same_key(self):
+        """同一个文件从 CLI 下和从 Web 下必须落同一个键。
+
+        键不一致的后果不是报错, 而是 UI 上出现两条记录、徽标时有时无 ——
+        正是"两个入口行为不同"这一类缺陷。
+        """
+        iso_runner._record_unverified(self.root, "linux", "ubuntu", NAME, "web 侧")
+        self.dl._record_unverified(_dist(), NAME, "cli 侧")
+        self.assertEqual(list(self._read()), ["linux/ubuntu/" + NAME])
+
+    def test_cli_overwrites_web_record_on_same_key(self):
+        """键相同才能互相覆盖, 否则会各占一条。"""
+        iso_runner._record_unverified(self.root, "linux", "ubuntu", NAME, "web 侧")
+        self.dl._record_unverified(_dist(), NAME, "cli 侧")
+        self.assertEqual(self._read()["linux/ubuntu/" + NAME]["reason"], "cli 侧")
+
+    def test_clear_removes_marker(self):
+        self.dl._record_unverified(_dist(), NAME, "x")
+        self.dl._clear_unverified(_dist(), NAME)
+        self.assertEqual(self._read(), {}, "校验通过后必须撤掉徽标")
+
+    def test_existing_file_with_unreachable_checksum_is_recorded(self):
+        """校验源不可达: 文件保留不重下, 但必须落一条未验签。
+
+        修复前 CLI 只打印一行 ⚠ 就当成功了 —— 于是同一个文件从 CLI 下没有徽标、
+        从 Web 下有, 用户无法区分"验过"和"没验过"。
+        """
+        f = self.root / NAME
+        f.write_bytes(PAYLOAD)
+        self.dl.verify_checksum_smart = lambda *a, **k: (None, "校验源不可达")
+        self.assertTrue(self.dl._already_have(f, _dist(), True),
+                        "校验源不可达 ≠ 校验失败, 不得触发重下")
+        rec = self._read()
+        self.assertIn("linux/ubuntu/" + NAME, rec)
+        self.assertEqual(rec["linux/ubuntu/" + NAME]["state"], "unverified")
+
+    def test_existing_file_verified_clears_stale_marker(self):
+        """上一轮没验成, 这一轮验过了 -> 徽标必须消失。"""
+        f = self.root / NAME
+        f.write_bytes(PAYLOAD)
+        self.dl._record_unverified(_dist(), NAME, "上一轮没验成")
+        self.dl.verify_checksum_smart = lambda *a, **k: (True, "校验通过")
+        self.assertTrue(self.dl._already_have(f, _dist(), True))
+        self.assertEqual(self._read(), {})
+
+    def test_already_have_passes_dist_to_smart_verify(self):
+        """校验必须带上 dist —— 没有它就拿不到该发行版自己的 checksum_url。
+
+        test_gpg_dist_handoff 的模块注释里记着: 这段功能代码一直存在, 但生产
+        路径从未传 dist, 所以从未生效过。这里把它钉住。
+        """
+        seen = {}
+        dist = _dist(checksum_url="https://a/S")
+
+        def _verify(filepath, checksum_url, stored, dist=None):
+            seen["dist"] = dist
+            seen["checksum_url"] = checksum_url
+            return (True, "ok")
+
+        f = self.root / NAME
+        f.write_bytes(PAYLOAD)
+        self.dl.verify_checksum_smart = _verify
+        self.dl._already_have(f, dist, True)
+        self.assertIs(seen["dist"], dist)
+        self.assertEqual(seen["checksum_url"], "https://a/S")
+
+
+class CleanupKeepsPartSourceTest(unittest.TestCase):
+    """M4 收口: 清理过时文件时不能把 .part.src 单独删掉。
+
+    .part 被保留、标记被删掉, 下一轮就会走"无标记 → 照旧续传"的旧分支,
+    正好把 M4 堵上的跨源拼接重新打开。
+    """
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.root = Path(self._td.name)
+        self.dl = DL.LinuxDistributionDownloader.__new__(DL.LinuxDistributionDownloader)
+        self.dl.download_dir = self.root
+        self.ddir = self.root / "linux" / "ubuntu"
+        self.ddir.mkdir(parents=True)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_part_and_its_marker_survive_cleanup(self):
+        # 注意真实文件名: part_src_path(part) 是 str(part) + ".part.src",
+        # 而 part 本身已经以 .part 结尾, 所以半成品的标记是 x.iso.part.part.src。
+        part = self.ddir / (NAME + ".part")
+        marker = self.ddir / (NAME + ".part.part.src")
+        part.write_bytes(b"x" * 10)
+        marker.write_text("https://a/" + NAME, encoding="utf-8")
+        self.dl.cleanup_distribution_dir(self.ddir, [NAME])
+        self.assertTrue(part.exists())
+        self.assertTrue(marker.exists(),
+                        "标记被删 → 下一轮退化成无标记续传, 跨源拼接的洞又开了")
+
+    def test_orphan_marker_is_cleaned(self):
+        """半成品已经没了, 孤立的标记必须清掉, 否则永久堆积。"""
+        marker = self.ddir / (NAME + ".part.part.src")
+        marker.write_text("https://a/" + NAME, encoding="utf-8")
+        self.dl.cleanup_distribution_dir(self.ddir, [NAME])
+        self.assertFalse(marker.exists())
+
+    def test_stale_iso_still_deleted(self):
+        """别把清理逻辑改坏了: 真正过时的 ISO 必须照删。"""
+        (self.ddir / "old.iso").write_bytes(b"x")
+        self.dl.cleanup_distribution_dir(self.ddir, [NAME])
+        self.assertFalse((self.ddir / "old.iso").exists())
 
 
 if __name__ == "__main__":

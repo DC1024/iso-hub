@@ -19,6 +19,7 @@
 验证三种场景: 成功改名 / 校验失败留 .part / 传输中途异常留 .part。
 """
 
+import ast
 import sys
 import tempfile
 import unittest
@@ -505,8 +506,13 @@ class TestRunnerSourceContract(unittest.TestCase):
         self.assertIn("os.replace(part_path, filepath)", self.dl_src)
 
     def test_cleanup_preserves_part_files(self):
-        """目录清理不得删除半成品(.part), 否则续传数据丢失。"""
-        self.assertIn('f.lower().endswith((".part", ".aria2"))', self.dl_src)
+        """目录清理不得删除半成品(.part), 否则续传数据丢失。
+
+        M4 收口后保留名单还多了 .part.src(标记没了就等于没标记), 行为验证在
+        test_hardening_batch5.CleanupKeepsPartSourceTest。这里只做源码级护栏,
+        不钉变量名 —— 改个局部变量名不该算回归。
+        """
+        self.assertIn('endswith((".part", ".aria2"))', self.dl_src)
 
     # ---- v1.2.9: 完整性判据回归护栏 ----
 
@@ -536,11 +542,46 @@ class TestRunnerSourceContract(unittest.TestCase):
         self.assertIn("head_total=total", self.src)
 
     def test_upstream_has_head_fallback(self):
-        """订阅同步走的 download_linux 也必须能补长度判据, 且不得出现未定义变量。"""
+        """订阅同步走的 download_linux 也必须能补长度判据, 且实参在作用域内。
+
+        v1.8.0(M5) 把 download_distribution 拆成「候选源循环 + 单源下载」之后,
+        HEAD 兜底移进了 _download_from_url, 实参由 target_dist["download_url"]
+        变成该方法的 url 形参 —— 这是必须的: 正在下候选源 2 时, 首选源往往就是
+        刚失败的那个, 拿它去 HEAD 只会再失败一次。
+
+        所以这里不再比对字面量(那样会把正确的改动判成回归), 改为解析 AST:
+          (1) _head_content_length 仍然存在;
+          (2) 每一处调用都在某个方法内部, 且实参名是该方法的形参或局部变量
+              —— 这正是 v1.2.x 那个 NameError 的形状。
+        """
         self.assertIn("def _head_content_length(self, url: str) -> int:", self.dl_src)
-        self.assertIn('total_size = self._head_content_length(target_dist["download_url"])',
-                      self.dl_src)
-        self.assertNotIn("self._head_content_length(url)", self.dl_src)
+
+        tree = ast.parse(self.dl_src)
+        found = []
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            scope = {a.arg for a in fn.args.args + fn.args.kwonlyargs + fn.args.posonlyargs}
+            scope |= {n.id for n in ast.walk(fn)
+                      if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if not (isinstance(func, ast.Attribute)
+                        and func.attr == "_head_content_length"):
+                    continue
+                self.assertEqual(len(node.args), 1, "只该传一个 url")
+                arg0 = node.args[0]
+                self.assertIsInstance(arg0, ast.Name, "HEAD 实参必须是变量")
+                self.assertIn(arg0.id, scope,
+                              "HEAD 实参 %r 在 %s() 里未定义 —— 正是 v1.2.x 的 NameError"
+                              % (arg0.id, fn.name))
+                found.append((fn.name, arg0.id))
+
+        self.assertTrue(found, "HEAD 兜底没接进下载路径, 形同虚设")
+        self.assertIn(("_download_from_url", "url"), found,
+                      "HEAD 兜底必须查「当前正在下载的那个源」, 不是配置里的首选源")
 
 
 if __name__ == "__main__":
