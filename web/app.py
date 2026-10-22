@@ -256,6 +256,22 @@ LOG_TO_FILE = os.environ.get("ISO_HUB_LOG_TO_FILE", "1").strip().lower() in (
     "1", "true", "yes", "on")
 
 
+def _default_backup_dir(data_dir: Path) -> Path:
+    """配置备份的输出目录: $ISO_HUB_BACKUP_DIR > <data-dir> 同级的 backups/。
+
+    M8 修复: 备份**不能**落在 /data 里。settings.json 的归档会经 Samba(USERID=0)
+    与 WebDAV(iso=10001) 只读共享给整个局域网, 0700/0600 挡不住这两个"合法"读者。
+    与 scripts/backup.py、scripts/restore.py 必须同一套规则(有测试盯着三者一致)。
+    """
+    env = (os.environ.get("ISO_HUB_BACKUP_DIR") or "").strip()
+    if env:
+        return Path(env)
+    return data_dir.parent / "backups"
+
+
+BACKUP_DIR = _default_backup_dir(DATA_DIR)
+
+
 def _log_file_path(ts: float | None = None) -> Path:
     day = time.strftime("%Y-%m-%d", time.localtime(ts if ts is not None else time.time()))
     return LOG_DIR / f"iso-hub-{day}.log"
@@ -2526,6 +2542,31 @@ def _warn_if_auth_disabled() -> bool:
 _warn_if_auth_disabled()
 
 
+def _warn_if_legacy_backup_dir() -> bool:
+    """旧版备份目录(<data-dir>/backups)里还有归档时, 提醒迁移。
+
+    M8 把备份挪到了共享树之外, 但**升级前生成的归档不会自己搬家** —— 它们仍然躺在
+    Samba/WebDAV 读得到的地方。"我已经改过了"这种印象比没改更危险, 所以启动时点名。
+    返回是否真的打印了(便于测试断言)。
+    """
+    legacy = DATA_DIR / "backups"
+    if legacy == BACKUP_DIR or not legacy.is_dir():
+        return False
+    archives = list(legacy.glob("isohub-backup-*.tar.gz"))
+    if not archives:
+        return False
+    log("!" * 70)
+    log(f"[安全] ⚠ 旧备份目录仍在共享树内: {legacy} ({len(archives)} 份归档)")
+    log("[安全]    归档里的 settings.json 含会话 token / SMTP 授权码 / 共享口令,")
+    log("[安全]    而 /data 整块会经 Samba/WebDAV 只读共享。新版已改写到 "
+        f"{BACKUP_DIR},")
+    log("[安全]    请把旧归档移过去后删除该目录:")
+    log(f"[安全]        mkdir -p {BACKUP_DIR} && mv {legacy}/*.tar.gz {BACKUP_DIR}/"
+        f" && rmdir {legacy}")
+    log("!" * 70)
+    return True
+
+
 @app.before_request
 def require_auth():
     """设置 ISO_HUB_TOKEN 后,除页面/静态/健康检查外的所有 API 需携带 X-Auth-Token 或有效登录会话。
@@ -2971,8 +3012,11 @@ def _torrent_file_names(t: dict) -> list:
 def _writable_targets():
     """运行期需要可写的路径: [(key, 标签, Path|None, 是否必需)]。
 
-    只有数据目录是必需的 —— 其余三项对应可选 sidecar(qB/WebDAV/Samba), 老部署或
-    只用核心功能时根本没挂载, 目录不存在属于正常, 只提示不拦启动。
+    只有数据目录是必需的 —— 其余四项对应可选 sidecar(qB/WebDAV/Samba)与可选的
+    备份卷, 老部署或只用核心功能时根本没挂载, 目录不存在属于正常, 只提示不拦启动。
+
+    backups 这一项存在的意义: 宿主 ./backups 若由 root 创建, 容器(uid 10001)写不进去,
+    backup.py 要等到真的有人手动跑备份才会失败。启动时喊一声, 比事后翻日志便宜。
 
     webdav 项可能是 None: 没有配置 WEBDAV_CONF 就没有独立的配置挂载点(见
     _webdav_conf_dir), 此时状态记 not_configured, 而不是去探 /data 报一个恒真的值。
@@ -2980,6 +3024,7 @@ def _writable_targets():
     return (
         ("data", "数据目录", DATA_DIR, True),
         ("logs", "日志目录", LOG_DIR, False),
+        ("backups", "备份目录", BACKUP_DIR, False),
         # qBittorrent.conf 落在 /qb-config/qBittorrent/ 下, 探测其上一层更稳定
         # (子目录由 qB 自己创建, 首次启动前不存在)。
         ("qb_config", "qBittorrent 配置", QB_CONF_PATH.parent.parent, False),
@@ -3070,7 +3115,7 @@ _PREFLIGHT_HINT = """
   v1.5.0 起容器以非 root(uid/gid 10001)运行, 绑定挂载的属主由**宿主机**决定,
   容器内改不了。首次部署/升级时请在 docker-compose.yml 所在目录执行:
 
-      chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+      chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config
 
   · Podman / rootless Docker: 没有真正的 uid 0, 请改用 `userns_mode: keep-id`
     或把宿主目录交给该用户 (见 wiki/部署-快速开始.md「非 root 运行与目录属主」)。
@@ -3149,6 +3194,7 @@ if __name__ == "__main__":
     log(f"ISO Hub 启动  |  清单: {JSON_FILE}  数据目录: {DATA_DIR}")
     _sessions_load()  # 从磁盘恢复持久化会话(容器重建后 token 仍有效)
     seed_admin()  # 若设置 ISO_HUB_ADMIN_USER/PASS 则播种管理员
+    _warn_if_legacy_backup_dir()  # M8: 旧备份目录还在共享树里就喊一声
     # 启动收敛: compose 并发拉起 sidecar 存在时序竞态, 用后台线程重试直到状态一致,
     # 替代旧的一次性快照(_sync_disabled_shares/_sync_disabled_qb 仍保留供手动/测试调用)
     _bootstrap_webdav_conf()  # 首次部署时 ./webdav-config 为空, 按当前设置生成 webdav.yml

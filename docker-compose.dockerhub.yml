@@ -28,7 +28,7 @@ services:
     # 镜像内已 USER 10001:10001, 这里再显式写一遍是给 `docker compose config` 一份
     # 可见的声明(也防止有人拉了旧 tag 却以为降权已生效)。
     # ⚠️ 升级到 1.5.0 前先在宿主机执行:
-    #      chown -R 10001:10001 ./data ./qb-config ./webdav-config ./samba-config
+    #      chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config
     #    否则启动自检会立即退出并打印这条命令。
     user: "10001:10001"
     # 根文件系统只读: 运行期唯一可写的是下面显式挂载的卷 + 内存盘 /tmp。
@@ -64,6 +64,12 @@ services:
     volumes:
       # 所有 ISO 与发行版清单持久化到宿主机 ./data
       - ./data:/data
+      # M8: 配置备份**必须在共享树之外**。./data 会整块经 Samba(:/srv/iso)与
+      # WebDAV(:/data)只读共享, 而归档里就是 settings.json —— 会话 token、SMTP
+      # 授权码、qB/共享口令全在里头。0700/0600 挡的是"同机其他用户", 挡不住以
+      # root(Samba 的 USERID=0)或同 uid(WebDAV 的 iso=10001)运行的共享进程。
+      # ⚠️ samba / webdav 服务**不得**挂载这个卷。
+      - ./backups:/backups
       # qBittorrent 配置目录: 主容器直接改写 qBittorrent.conf 以设置固定 WebUI 密码
       - ./qb-config:/qb-config:rw
       # webdav 凭据配置目录: 与 webdav 容器共享(网页改密码后主容器改写此文件)
@@ -79,6 +85,9 @@ services:
       - DOCKER_HOST=tcp://socket-proxy:2375
       # webdav 配置文件路径(宿主机 ./webdav-config/webdav.yml 挂到容器内 /webdav-config/)
       - WEBDAV_CONF=${WEBDAV_CONF:-/webdav-config/webdav.yml}
+      # 配置备份输出目录(M8): 默认 <data-dir> 同级的 backups/, 容器内即 /backups。
+      # 改到别处时记得同步改上面的 volumes 与宿主 chown。
+      - ISO_HUB_BACKUP_DIR=${ISO_HUB_BACKUP_DIR:-/backups}
       # 需要鉴权时在宿主机同目录建 .env:  ISO_HUB_TOKEN=你的随机密码
       - ISO_HUB_TOKEN=${ISO_HUB_TOKEN:-}
       # 可选: 对 data/settings.json 整文件做 AES-GCM 静态加密(不设则明文, 向后兼容)。
@@ -165,6 +174,8 @@ services:
       - "${SAMBA_139:-1139}:139"
     volumes:
       - ./data:/srv/iso:ro          # 只读共享,ISO 不会被误改
+      # ⚠️ 绝不挂 ./backups: 那里是含 settings.json(会话 token/共享口令)的配置归档。
+      #    这正是 M8 把备份挪出 ./data 的原因, 加一行挂载就等于把它又交出去了。
       - ./samba-config:/samba-config:ro
       - ./docker/samba-entrypoint.sh:/etc/iso-hub/samba-entrypoint.sh:ro
     environment:
@@ -186,6 +197,7 @@ services:
       - "${WEBDAV_PORT:-8081}:6065"
     volumes:
       - ./data:/data:ro             # 只读共享
+      # ⚠️ 绝不挂 ./backups(同 samba 处的说明): 归档里有 settings.json 明文。
       - ./webdav-config:/config     # 凭据配置目录(挂载目录避免单文件 bind 的坑; 配置文件 webdav.yml 在此目录内)
     environment:
       - TZ=Asia/Shanghai

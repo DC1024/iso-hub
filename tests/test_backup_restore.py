@@ -15,6 +15,8 @@
   * restore 默认只预览, 不动磁盘
   * restore 拒绝路径穿越 / 未知成员 / 目录成员
   * restore 覆盖前先把旧文件存到 pre-restore-*, 且文件权限收敛到 600
+  * M8: 归档默认写到 <data-dir> **同级**的 backups/(不在 SMB/WebDAV 共享树内),
+    ISO_HUB_BACKUP_DIR 可覆盖, --out-dir 优先级最高
 """
 import importlib.util
 import os
@@ -26,6 +28,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,6 +66,8 @@ class _Base(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.data = self.root / "data"
         self.data.mkdir()
+        # M8: 默认输出目录是 <data-dir> 的**同级** backups/, 不再是 data/backups
+        self.bkdir = self.root / "backups"
         self.write("settings.json", '{"users": {"admin": {}}}')
         self.write("distributions.json", '{"distributions": []}')
 
@@ -73,8 +78,7 @@ class _Base(unittest.TestCase):
         (self.data / name).write_text(text, encoding="utf-8")
 
     def backups(self):
-        d = self.data / "backups"
-        return sorted(d.glob("isohub-backup-*.tar.gz")) if d.is_dir() else []
+        return sorted(self.bkdir.glob("isohub-backup-*.tar.gz")) if self.bkdir.is_dir() else []
 
 
 class BackupTest(_Base):
@@ -104,7 +108,7 @@ class BackupTest(_Base):
         self.assertEqual(code, 0)
         self.assertIn("dry-run", out)
         self.assertEqual(self.backups(), [])
-        self.assertFalse((self.data / "backups").exists())
+        self.assertFalse(self.bkdir.exists())
 
     def test_keep_prunes_oldest_and_keeps_newest(self):
         # 同秒内连跑三次会触发 "-1"/"-2" 后缀, 正是排序最容易出错的情形
@@ -123,8 +127,9 @@ class BackupTest(_Base):
     def test_archive_is_not_world_readable(self):
         """归档里是会话 token 与 SMTP 授权码, 不能 644。
 
-        /data 整块会通过 SMB / WebDAV 共享出去, 备份目录的 0700 挡不住
-        "共享配置改了"这种变化; 文件自身的 0600 才是不依赖上下文的那道锁。
+        M8 已经把默认输出目录挪出共享树, 但 0600 仍然要留着 ——
+        ISO_HUB_BACKUP_DIR 允许用户指到任意路径(比如一块多人可写的 NAS 卷),
+        届时目录权限不再由我们决定, 文件自身的 0600 才是最后一道锁。
         """
         _run(bk, ["--data-dir", str(self.data)])
         newest = max(self.backups(), key=lambda p: p.stat().st_mtime_ns)
@@ -132,8 +137,35 @@ class BackupTest(_Base):
 
     def test_no_leftover_part_files(self):
         _run(bk, ["--data-dir", str(self.data)])
-        leftovers = list((self.data / "backups").glob("*.part.tar.gz"))
+        leftovers = list(self.bkdir.glob("*.part.tar.gz"))
         self.assertEqual(leftovers, [])
+
+    def test_default_out_dir_is_outside_data_dir(self):
+        """M8 的核心断言: 归档绝不能落在 /data 里(那是 SMB/WebDAV 的共享树)。"""
+        code, _out, _err = _run(bk, ["--data-dir", str(self.data)])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.backups()), 1)
+        self.assertFalse((self.data / "backups").exists(),
+                         "默认输出目录回落到 data/backups 了 —— M8 会失效")
+
+    def test_env_var_overrides_out_dir(self):
+        custom = self.root / "nas" / "bk"
+        with patch.dict(os.environ, {"ISO_HUB_BACKUP_DIR": str(custom)}):
+            code, _out, _err = _run(bk, ["--data-dir", str(self.data)])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(list(custom.glob("isohub-backup-*.tar.gz"))), 1)
+        self.assertFalse(self.bkdir.exists(), "设了 ISO_HUB_BACKUP_DIR 就不该再写默认位置")
+
+    def test_out_dir_arg_beats_env(self):
+        """命令行显式指定优先级最高 —— 否则用户按 --help 的写法会得到意外结果。"""
+        custom = self.root / "nas" / "bk"
+        explicit = self.root / "explicit"
+        with patch.dict(os.environ, {"ISO_HUB_BACKUP_DIR": str(custom)}):
+            code, _out, _err = _run(bk, ["--data-dir", str(self.data),
+                                         "--out-dir", str(explicit)])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(list(explicit.glob("isohub-backup-*.tar.gz"))), 1)
+        self.assertFalse(custom.exists())
 
     def test_json_output_is_machine_readable(self):
         import json
@@ -177,7 +209,7 @@ class RestoreTest(_Base):
         self.assertEqual(code, 0, out)
         self.assertIn("admin", (self.data / "settings.json").read_text(encoding="utf-8"))
 
-        pre = list((self.data / "backups").glob("pre-restore-*"))
+        pre = list(self.bkdir.glob("pre-restore-*"))
         self.assertEqual(len(pre), 1)
         self.assertIn("changed", (pre[0] / "settings.json").read_text(encoding="utf-8"))
 
