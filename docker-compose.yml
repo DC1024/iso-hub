@@ -264,6 +264,9 @@ services:
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
   # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
   # WebUI: http://<服务器IP>:8090
+  #   ⚠ qB 的 Host 头校验要求 Host 里的端口等于容器内端口(8080)。映射成 8090 时
+  #   浏览器直接访问会 401(v1.8.0 起恢复校验, 不再为这点便利关掉防护)。要用 qB
+  #   自己的界面就把映射改成 "8080:8080"(或设 QB_PORT=8080); 只用面板则不受影响。
   # 默认不部署, 需启用 compose profile "bt":  docker compose --profile bt up -d
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest@sha256:e887804fa9de4c60f5f0fb1f3a7e4febe40a8f69fe736f70c4e8589b1f868dab

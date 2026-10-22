@@ -293,5 +293,46 @@ class TestLockReentrant(unittest.TestCase):
             self.assertNotIn(kw, body_src, f"锁内不应出现 {kw}")
 
 
+class TestSetQbPasswordConf(unittest.TestCase):
+    """L1: 写 qBittorrent.conf 时不得再关掉 Host 头校验。
+
+    这个函数此前只被 mock 过(所有用例都 patch 掉它), 真实写入路径没有护栏,
+    所以旧版本悄悄写 `HostHeaderValidation=false` 一直没被发现。
+    """
+
+    def _apply(self, fixture):
+        import configparser
+        with tempfile.TemporaryDirectory() as td:
+            conf = Path(td) / "qBittorrent.conf"
+            conf.write_text(fixture, encoding="utf-8")
+            with patch.object(app, "QB_CONF_PATH", conf):
+                self.assertTrue(app._set_qb_password("operator", "newpass"))
+            c = configparser.ConfigParser(strict=False, allow_no_value=True)
+            c.optionxform = str
+            c.read(str(conf), encoding="utf-8")
+            return c
+
+    def test_host_header_validation_stays_on(self):
+        """qB 默认 true; 旧代码写 false 等于拆掉 DNS rebinding 防护。"""
+        c = self._apply("[Preferences]\nWebUI\\Port=8080\n")
+        self.assertEqual(c["Preferences"]["WebUI\\HostHeaderValidation"], "true")
+
+    def test_existing_false_is_repaired(self):
+        """老部署的 conf 里已经是 false —— 必须显式改回来, 否则不会自愈。"""
+        c = self._apply(
+            "[Preferences]\nWebUI\\HostHeaderValidation=false\nWebUI\\LocalHostAuth=true\n")
+        prefs = c["Preferences"]
+        self.assertEqual(prefs["WebUI\\HostHeaderValidation"], "true")
+        # LocalHostAuth 反过来: 取消 localhost 免密才是收紧
+        self.assertEqual(prefs["WebUI\\LocalHostAuth"], "false")
+
+    def test_username_and_hash_written(self):
+        c = self._apply("[Preferences]\nWebUI\\Port=8080\n")
+        prefs = c["Preferences"]
+        self.assertEqual(prefs["WebUI\\Username"], "operator")
+        self.assertTrue(prefs["WebUI\\Password_PBKDF2"].startswith("@ByteArray("))
+        self.assertEqual(prefs["WebUI\\Port"], "8080", "无关键不该被动")
+
+
 if __name__ == "__main__":
     unittest.main()

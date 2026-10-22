@@ -1790,7 +1790,16 @@ def _make_qb_pbkdf2(password: str) -> str:
 
 
 def _set_qb_password(username: str, password: str) -> bool:
-    """把用户名/密码写入挂载的 qBittorrent.conf, 禁用 LocalHostAuth/HostHeaderValidation。"""
+    """把用户名/密码写入挂载的 qBittorrent.conf。
+
+    * ``LocalHostAuth=false`` —— **取消** localhost 免密(默认 true = 本机访问不验
+      密码)。iso-hub 从容器网络访问 qB, 不该享受免密, 这是收紧。
+    * ``HostHeaderValidation=true`` —— 旧版本这里写 false, 只为让浏览器经映射端口
+      打开 WebUI, 代价是把 DNS rebinding 防护整个拆掉(L1)。qB 的规则是「Host 里
+      的端口必须等于连接落在的本端端口」, 所以后端走 http://qbittorrent:8080 不受
+      影响; 浏览器若经 8090 访问会 401, 需要把映射改成 8080:8080 或只用面板。
+      必须显式写 true: 老部署的 conf 里已经是 false, 不写不会自愈。
+    """
     if not QB_CONF_PATH.exists():
         return False
     try:
@@ -1802,7 +1811,8 @@ def _set_qb_password(username: str, password: str) -> bool:
         c.set("Preferences", "WebUI\\Username", username)
         c.set("Preferences", "WebUI\\Password_PBKDF2", _make_qb_pbkdf2(password))
         c.set("Preferences", "WebUI\\LocalHostAuth", "false")
-        c.set("Preferences", "WebUI\\HostHeaderValidation", "false")
+        # L1: 不再关闭 Host 头校验。理由见 _set_qb_password 的 docstring。
+        c.set("Preferences", "WebUI\\HostHeaderValidation", "true")
         with open(QB_CONF_PATH, "w", encoding="utf-8") as f:
             c.write(f)
         return True
