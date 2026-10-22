@@ -357,7 +357,15 @@ def api_protected():
 @bp.post("/api/protected")
 def api_protected_toggle():
     body = request.get_json(force=True, silent=True) or {}
-    path = body.get("path")  # 相对路径 type/name/文件名 或 文件名
+    # M11 修复(审查 2026-10): path 必须是**非空字符串**, 且 strip 后再入库。
+    # 旧实现只判 `if not path`: 传 dict/list 会被原样存进 protected.json,
+    # 而 prune / delete-files 用**相等匹配**去比字符串路径 —— 永远匹配不上,
+    # 于是 🔒 锁定保护**静默失效**(用户以为锁了, 实际没锁)。
+    # 纯空格同理: 存进去也永远匹配不上任何真实文件。
+    raw = body.get("path")
+    if not isinstance(raw, str):
+        return jsonify({"error": "path 必须是字符串"}), 400
+    path = raw.strip()
     if not path:
         return jsonify({"error": "缺少 path"}), 400
     lst = core.load_protected()
