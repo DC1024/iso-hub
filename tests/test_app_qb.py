@@ -3,6 +3,7 @@
 
 import inspect
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "web"))
 
 import app  # noqa: E402
+import torrent_client  # noqa: E402
 
 
 class TestDefaultQbDisabled(unittest.TestCase):
@@ -332,6 +334,57 @@ class TestSetQbPasswordConf(unittest.TestCase):
         self.assertEqual(prefs["WebUI\\Username"], "operator")
         self.assertTrue(prefs["WebUI\\Password_PBKDF2"].startswith("@ByteArray("))
         self.assertEqual(prefs["WebUI\\Port"], "8080", "无关键不该被动")
+
+
+class TestQbPortDerivation(unittest.TestCase):
+    """QB_PORT 单变量驱动端口: 宿主映射、qB 监听、后端 URL 三处同源。
+
+    为什么必须同号: qB 的 Host 头校验拿 Host 里的端口去比容器内监听端口, 不等
+    立即 401, 且这一步在 ServerDomains 之前。所以不能再留"内部固定 8080"的写死
+    值 —— 那会把用户的选择锁死在单个端口上。
+    """
+
+    def test_default_port(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("QB_PORT", None)
+            self.assertEqual(app._qb_port(), "8090")
+
+    def test_blank_port_falls_back(self):
+        """`QB_PORT=` 写了个空值不该拼出 http://qbittorrent: 这种半截地址。"""
+        with patch.dict(os.environ, {"QB_PORT": "   "}, clear=False):
+            self.assertEqual(app._qb_port(), "8090")
+
+    def test_custom_port_flows_into_url(self):
+        with patch.dict(os.environ, {"QB_PORT": "12345"}, clear=False):
+            self.assertEqual(app._qb_port(), "12345")
+            self.assertEqual(app._default_qb_url(), "http://qbittorrent:12345")
+
+    def test_explicit_url_wins_over_port(self):
+        """显式 QB_URL 用于指向外部实例, 不能被 QB_PORT 覆盖。"""
+        with patch.dict(os.environ, {"QB_PORT": "12345",
+                                     "QB_URL": "http://10.0.0.9:18080"}, clear=False):
+            self.assertEqual(app._default_qb_url(), "http://10.0.0.9:18080")
+
+    def test_blank_url_falls_back_to_port(self):
+        """compose 默认传 `QB_URL=`(空)。空串必须当"没配", 不能当地址用。"""
+        with patch.dict(os.environ, {"QB_PORT": "9001", "QB_URL": ""}, clear=False):
+            self.assertEqual(app._default_qb_url(), "http://qbittorrent:9001")
+
+    def test_torrent_client_follows_qb_port(self):
+        """后端实际连接用的 qb_config() 也必须跟随, 否则面板连不上 qB。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"ISO_DATA_DIR": tmp, "QB_PORT": "8888",
+                                         "QB_URL": ""}, clear=False):
+                cfg = torrent_client.qb_config()
+        self.assertEqual(cfg["QB_URL"], "http://qbittorrent:8888")
+
+    def test_torrent_client_explicit_url_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"ISO_DATA_DIR": tmp, "QB_PORT": "8888",
+                                         "QB_URL": "http://192.168.1.50:18080"},
+                            clear=False):
+                cfg = torrent_client.qb_config()
+        self.assertEqual(cfg["QB_URL"], "http://192.168.1.50:18080")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ import base64
 import hashlib
 import configparser
 import ipaddress
+from urllib.parse import urlsplit
 from time import struct_time  # 供 _sched_matches 类型注解
 import threading
 import subprocess
@@ -920,13 +921,29 @@ DEFAULT_SHARES = {
 
 
 # --------------------------------------------------------------------------- qBittorrent sidecar
+# qB 的 WebUI 监听端口。**宿主端口与容器内端口必须同号** —— qB 的 Host 头校验
+# (validateHostHeader) 第一步就是拿 Host 里的端口去比「连接落在的本端端口」,
+# 不相等立即 401, 而且这一步在 ServerDomains 之前, 白名单救不回来。
+# 所以这里不能沿用「内部固定 8080、宿主随便映射」的老设计: 用户把 QB_PORT 设成
+# 任意 >=1024 的值, compose 的映射两侧、qB 的 --webui-port、以及下面的 QB_URL
+# 会一起跟随(见 docker-compose.yml 的 qbittorrent 服务与本文件 _default_qb_url)。
+def _qb_port() -> str:
+    return (os.environ.get("QB_PORT") or "").strip() or "8090"
+
+
+def _default_qb_url() -> str:
+    """后端访问 sidecar 的地址。显式设置 QB_URL 时以它为准(可指向外部实例)。"""
+    return (os.environ.get("QB_URL") or "").strip() or f"http://qbittorrent:{_qb_port()}"
+
+
 DEFAULT_QB = {
     "enabled": False,
     "username": os.environ.get("QB_USER", "admin"),
     "password": os.environ.get("QB_PASS", "adminadmin"),
-    "port": os.environ.get("QB_PORT", "8090"),
-    "url": os.environ.get("QB_URL", "http://qbittorrent:8080"),
+    "port": _qb_port(),
+    "url": _default_qb_url(),
 }
+QB_INTERNAL_HOST = "qbittorrent"
 QB_CONTAINER = "iso-hub-qbittorrent"
 QB_CONF_PATH = Path("/qb-config/qBittorrent/qBittorrent.conf")
 
@@ -984,13 +1001,18 @@ def load_qb_settings() -> dict:
 def _qb_is_external(qb: dict) -> bool:
     """判断 qBittorrent 是否指向用户自行部署的外部实例(非 iso-hub 配套 sidecar)。
 
-    判断依据: url 被用户显式保存过(url_saved), 且指向非默认内部地址
-    (http://qbittorrent:8080)。外部 QB 由用户自己管理, iso-hub 无法改其
-    用户名/密码, 只能用它来登录连接 —— 改凭据时只需保存, 不得写 sidecar conf 或重启。
+    判断依据: url 被用户显式保存过(url_saved), 且主机名不是配套 sidecar 的服务名
+    ``qbittorrent``。外部 QB 由用户自己管理, iso-hub 无法改其用户名/密码, 只能用它
+    来登录连接 —— 改凭据时只需保存, 不得写 sidecar conf 或重启。
+
+    只比主机名, **不比端口**: 端口自 v1.8.1 起由用户自由选择(见 _qb_port), 若把端口
+    纳入判据, 任何改过端口的部署都会被误判成"外部实例", 面板随即拒绝管理自己的
+    sidecar —— 改密码、查容器状态、启停全部跳过, 而界面上只会显示"未部署"。
     """
-    _url = (qb.get("url") or "").rstrip("/")
-    _saved = bool(qb.get("url_saved", False))
-    return _saved and (_url != (DEFAULT_QB.get("url") or "").rstrip("/"))
+    if not qb.get("url_saved", False):
+        return False
+    host = urlsplit((qb.get("url") or "").strip()).hostname or ""
+    return host.lower() != QB_INTERNAL_HOST
 
 
 def _probe_qb_connection(qb: dict, timeout: float = 3.0) -> dict:
@@ -1796,8 +1818,9 @@ def _set_qb_password(username: str, password: str) -> bool:
       密码)。iso-hub 从容器网络访问 qB, 不该享受免密, 这是收紧。
     * ``HostHeaderValidation=true`` —— 旧版本这里写 false, 只为让浏览器经映射端口
       打开 WebUI, 代价是把 DNS rebinding 防护整个拆掉(L1)。qB 的规则是「Host 里
-      的端口必须等于连接落在的本端端口」, 所以后端走 http://qbittorrent:8080 不受
-      影响; 浏览器若经 8090 访问会 401, 需要把映射改成 8080:8080 或只用面板。
+      的端口必须等于连接落在的本端端口」, 因此容器内监听端口必须与宿主端口**同号**:
+      compose 用 QB_PORT 同时驱动端口映射两侧与 WEBUI_PORT(见 _qb_port), 用户把
+      QB_PORT 换成任意 >=1024 的端口都成立, 后端 QB_URL 也随之派生。
       必须显式写 true: 老部署的 conf 里已经是 false, 不写不会自愈。
     """
     if not QB_CONF_PATH.exists():

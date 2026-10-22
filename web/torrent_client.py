@@ -6,9 +6,10 @@
 并查询进度、删除任务、移动已下载文件到 ./data 共享目录以被主容器统一识别。
 
 配置来源(优先级 settings.json > 环境变量):
-  QB_URL    qBittorrent WebUI 地址(默认 http://qbittorrent:8080)
+  QB_URL    qBittorrent WebUI 地址(默认 http://qbittorrent:$QB_PORT)
   QB_USER   账号(默认 admin)
   QB_PASS   密码(默认 adminadmin)
+  QB_PORT   sidecar 的 WebUI 端口(默认 8090); 未显式设 QB_URL 时用它拼地址
 """
 from __future__ import annotations
 
@@ -64,8 +65,13 @@ def qb_config() -> Dict[str, str]:
                 cfg.update({str(k).lower(): str(v) for k, v in t.items() if v})
     except (OSError, ValueError):  # 设置文件读不出就回退环境变量默认
         pass
+    # QB_URL 的默认值必须跟着 QB_PORT 走: qB 的 Host 头校验要求「Host 里的端口 ==
+    # 容器内监听端口」, 所以容器内端口不再固定 8080, 而是与宿主的 QB_PORT 同号
+    # (见 docker-compose.yml 的 qbittorrent 服务)。写死 8080 的后果是改过端口的
+    # 部署后端连不上 qB —— 面板里所有种子操作失败, 但容器看起来是"正常"的。
+    _port = (os.environ.get("QB_PORT") or "").strip() or "8090"
     env_defaults = {
-        "QB_URL": "http://qbittorrent:8080",
+        "QB_URL": (os.environ.get("QB_URL") or "").strip() or f"http://qbittorrent:{_port}",
         "QB_USER": "admin",
         # nosec B105: 这是 qBittorrent 官方默认密码, 仅作为兜底; 部署时必须通过 QB_PASS 环境变量修改。
         "QB_PASS": "adminadmin",

@@ -8,7 +8,9 @@
 
 判断依据:
 - SMB/WebDAV: container 状态是否 running/stopped(iso-hub 可检测) vs not_deployed/unknown(检测不到)。
-- qBittorrent: url 是否被用户指向外部(非默认内部地址 http://qbittorrent:8080)。
+- qBittorrent: url 是否被用户指向外部(主机名不是配套 sidecar 的服务名 qbittorrent)。
+  注意判据**不含端口** —— 端口由 QB_PORT 自由配置, 把端口算进去会把改过端口的
+  配套部署误判成外部实例。
 
 覆盖:
   后端  /api/shares        GET 在容器未部署/未知时 managed=false, running 时 managed=true
@@ -121,6 +123,23 @@ class TestQbManagedFlag(SharesManagedTestBase):
         qb = self._get_qb({"qb": {"url": "http://10.0.0.9:18080/"}})
         self.assertTrue(qb["url_saved"])
         self.assertIs(qb["managed"], False)
+
+    def test_saved_internal_url_with_custom_port_is_managed(self):
+        """回归: 用户改过 QB_PORT 后, 保存的 url 端口与默认值不同, 仍是配套 sidecar。
+
+        改端口之前, 判据是「与默认地址整体不等即视为外部」；端口一旦可配置, 这条
+        会把"自己的 sidecar"判成外部, 面板随即拒绝改密码/查容器状态, 且只显示
+        "未部署"。所以判据只能看主机名。
+        """
+        qb = self._get_qb({"qb": {"url": "http://qbittorrent:12345"}})
+        self.assertTrue(qb["url_saved"])
+        self.assertIs(qb["managed"], True)
+
+    def test_legacy_8080_internal_url_is_still_managed(self):
+        """升级路径: 旧版本保存过 http://qbittorrent:8080 的老配置不能变成"外部"。"""
+        qb = self._get_qb({"qb": {"url": "http://qbittorrent:8080"}})
+        self.assertTrue(qb["url_saved"])
+        self.assertIs(qb["managed"], True)
 
 
 class TestManagedFrontendContract(unittest.TestCase):
