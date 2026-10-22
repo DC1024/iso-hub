@@ -167,10 +167,37 @@ jobs:
           set -uo pipefail
           docker compose up -d --no-deps socket-proxy
 
-          # 等 healthy 再探: 代理没起来时所有请求都是"连接失败", 无法区分 403 与 200,
-          # 那样的断言等于没断言(会因 got 为空而误报)。
+          # 第一步: 先证明"haproxy 在 M9 的加固下真的在服务" —— 直接 exec 进去打 /_ping。
+          # 这一步**不依赖** compose 的 healthcheck, 目的是把两个问题分开:
+          #   这里失败 = M9 把代理搞死了(只读根/零能力导致起不来或不可用)
+          #   这里通过、下一步失败 = compose 的 healthcheck 自身有问题
+          # 分开才有可诊断性: 混在一起只会得到一句"未就绪"。
+          served=""
+          for _ in $(seq 1 60); do
+            if docker exec iso-hub-socket-proxy wget -q -O /dev/null http://127.0.0.1:2375/_ping 2>/dev/null; then
+              served=1; break
+            fi
+            sleep 1
+          done
+          if [ -z "$served" ]; then
+            echo "haproxy 60s 内未响应 /_ping —— 检查 M9 的加固是否把代理搞死了"
+            echo "--- 容器内是否有 wget(后续所有探针都依赖它) ---"
+            docker exec iso-hub-socket-proxy sh -c 'command -v wget || echo "wget 不存在"' || true
+            echo "--- /etc/hosts ---"
+            docker exec iso-hub-socket-proxy sh -c 'cat /etc/hosts' || true
+            echo "--- 容器状态 ---"
+            docker inspect -f '{{json .State}}' iso-hub-socket-proxy || true
+            docker logs iso-hub-socket-proxy 2>&1 | tail -40 || true
+            exit 1
+          fi
+          echo "haproxy 已在服务 (127.0.0.1:2375/_ping)"
+
+          # 第二步: compose 的 healthcheck 必须能转 healthy —— 主容器是
+          # depends_on: service_healthy 的, 它不 healthy 就等于"全新部署起不来"。
+          # 失败时把 Health.Log 打出来(每次尝试的 exit code + 原始输出), 否则只能看到
+          # 一个 starting/unhealthy, 完全无法定位是 wget 不存在、DNS 解析、还是端口没通。
           st=""
-          for _ in $(seq 1 40); do
+          for _ in $(seq 1 90); do
             st=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
                  iso-hub-socket-proxy 2>/dev/null || echo missing)
             [ "$st" = "healthy" ] && break
@@ -178,8 +205,14 @@ jobs:
             sleep 1
           done
           if [ "$st" != "healthy" ]; then
-            echo "socket-proxy 未就绪 (status=$st)"
-            docker logs iso-hub-socket-proxy 2>&1 | tail -40 || true
+            echo "compose healthcheck 未转 healthy (status=$st), 逐次尝试明细:"
+            docker inspect -f '{{range .State.Health.Log}}exit={{.ExitCode}} out={{.Output}}{{"\n"}}{{end}}' \
+              iso-hub-socket-proxy || true
+            echo "--- 容器内 wget 是否存在 ---"
+            docker exec iso-hub-socket-proxy sh -c 'command -v wget || echo "wget 不存在"' || true
+            echo "--- 容器内 localhost 解析 ---"
+            docker exec iso-hub-socket-proxy sh -c 'cat /etc/hosts' || true
+            docker logs iso-hub-socket-proxy 2>&1 | tail -20 || true
             exit 1
           fi
           echo "socket-proxy healthy"
