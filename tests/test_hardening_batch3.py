@@ -126,6 +126,20 @@ class TestM9SocketProxyHardened(unittest.TestCase):
         mounts = self.svc.get("tmpfs") or []
         self.assertIn("/tmp", mounts)
 
+    def test_does_not_shadow_docker_sock_with_tmpfs(self):
+        """红线: 不能在 /run 上挂 tmpfs。
+
+        容器里 /var/run 是 /run 的软链接, 而 docker.sock 按 /var/run/docker.sock
+        挂进来。给 /run 挂 tmpfs 会把这个 bind mount 整个遮住: haproxy 照样启动、
+        ACL 照样放行, 但每个请求都以 `503 SC--`(连不上后端) 结束, 面板上三个
+        sidecar 的状态全变 unknown, 而日志里没有任何 ACL 相关线索。
+
+        这条真的踩过 —— 第一版 M9 就加了 /run, 被 CI 的 socket-proxy 探针抓出来。
+        """
+        mounts = self.svc.get("tmpfs") or []
+        self.assertNotIn("/run", mounts,
+                         "/run 上的 tmpfs 会遮住 /var/run/docker.sock, 代理起来但全 503")
+
     def test_not_published_to_host(self):
         """只应在 compose 内部网络可达 —— 一旦映射到宿主, 等于把 Docker API 挂到网上。"""
         self.assertFalse(self.svc.get("ports"),

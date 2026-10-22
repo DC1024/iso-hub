@@ -133,7 +133,11 @@ services:
     read_only: true          # 根文件系统只读: 被拿下也写不进后门/替换二进制
     tmpfs:
       - /tmp
-      - /run                 # haproxy 运行期可能需要写运行时目录
+      # 这里**绝不能**加 /run。容器里 /var/run 是 /run 的软链接, 而 docker.sock
+      # 是按 /var/run/docker.sock 挂进来的 —— 一旦给 /run 挂上 tmpfs, 那个空 tmpfs
+      # 会把 socket 整个遮住, haproxy 能正常启动、ACL 也照常放行, 但每个请求都以
+      # `503 SC--`(连不上后端) 结束。表现为"面板所有 sidecar 状态都是 unknown",
+      # 而日志里看不出任何 ACL 相关的错误。CI 的 socket-proxy ACL 步骤守着这条。
     cap_drop:
       - ALL                  # 只监听 2375(>1024), 不需要任何 capability
     security_opt:
