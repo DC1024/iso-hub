@@ -2050,6 +2050,58 @@ def _yaml_quote(value: str) -> str:
     return inner
 
 
+# L2 修复(审查 2026-10): 这些是"看起来像口令"的占位值 —— 它们不会让共享变安全,
+# 只会让部署者以为已经设过了。iso123 是 1.3.21 之前的内置默认口令, 一并列上以
+# 覆盖从旧版本升级上来、文件没被重写的情况。
+_WEBDAV_WEAK_PASSWORDS = frozenset({"", "change-me-please", "CHANGE-ME-BEFORE-USE", "iso123"})
+
+
+def _yaml_scalar_value(line: str) -> str:
+    """从 `password: "xxx"  # 注释` 这样的行里取出标量值。
+
+    只处理本项目自己会写出的形态(可选引号 + 可选行尾注释), **不是** YAML 解析器。
+    为什么不用 PyYAML: 它只是测试依赖, 运行时不装 —— 为了读一行口令去加运行时
+    依赖不值得。
+
+    注意: 必须先剥行尾注释再剥引号。反过来会把 `"abc"  # 注释` 读成
+    `abc"  # 注释`, 占位口令就永远识别不出来(这个 bug 被 batch1 的测试抓到过)。
+    """
+    val = line.split(":", 1)[1].strip()
+    if val[:1] in ('"', "'"):
+        q = val[0]
+        end = val.find(q, 1)
+        return val[1:end] if end != -1 else val[1:]
+    for sep in (" #", "\t#"):
+        idx = val.find(sep)
+        if idx != -1:
+            val = val[:idx]
+    return val.strip()
+
+
+def _warn_if_webdav_conf_weak(cfg_path: Path) -> None:
+    """webdav.yml 仍是占位/空口令时在日志里告警(只告警, 不改文件)。
+
+    为什么需要: 面板"启用共享"那条路径会拒绝空口令(api/shares.py), 但**手工复制
+    仓库里的 webdav.yml 示例**这条路径绕过了它 —— 文件一存在, _ensure_webdav_conf
+    就不再生成模板, sidecar 直接按占位口令起来。这里不猜 hacdias/webdav 对空口令
+    的处理语义, 只把"你正在用占位口令"这个事实喊出来, 让人能看见。
+    """
+    try:
+        text = cfg_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("- "):
+            s = s[2:].strip()
+        if not s.startswith("password:"):
+            continue
+        if _yaml_scalar_value(s) in _WEBDAV_WEAK_PASSWORDS:
+            log("[共享] ⚠ webdav.yml 用的是占位/空口令, WebDAV 等同不设防; "
+                "请在面板「共享」里设置凭据(会自动重写该文件)")
+            return
+
+
 def _ensure_webdav_conf(username: str, password: str) -> bool:
     """webdav.yml 不存在或为空文件时按内置模板生成一份; 已存在且非空则原样保留。
 
@@ -2057,6 +2109,7 @@ def _ensure_webdav_conf(username: str, password: str) -> bool:
     """
     cfg_path = _webdav_conf_path()
     if cfg_path.exists() and cfg_path.stat().st_size > 0:
+        _warn_if_webdav_conf_weak(cfg_path)
         return True
     if not username or not password:
         log("[共享] webdav 配置缺失且无可用凭据, 跳过自动生成")
@@ -2442,6 +2495,25 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 AUTH_TOKEN = os.environ.get("ISO_HUB_TOKEN", "").strip()
 # 强制登录开关: ISO_HUB_REQUIRE_LOGIN=1 时, 除登录/自身状态接口外所有 API 均需登录会话或 X-Auth-Token
 REQUIRE_LOGIN = os.environ.get("ISO_HUB_REQUIRE_LOGIN", "1").strip().lower() in ("1", "true", "yes", "on")
+
+# L3 修复(审查 2026-10): 两个开关同时关闭 = 所有 API 完全开放(局域网内任何设备
+# 都能改配置/删文件/触发下载)。这是文档里写明的行为, 但它的触发条件很隐蔽 ——
+# 必须显式设 ISO_HUB_REQUIRE_LOGIN=0 **且**不设 ISO_HUB_TOKEN 才会走到这里。
+# 后果是"以为还开着, 其实早就裸奔了"。这里在启动日志里喊出来, 让它在面板日志
+# 第一屏就能看见。
+def _warn_if_auth_disabled() -> bool:
+    """鉴权全关时打印醒目横幅。返回是否真的打印了(便于测试断言)。"""
+    if REQUIRE_LOGIN or AUTH_TOKEN:
+        return False
+    log("!" * 70)
+    log("[安全] ⚠ 鉴权已完全关闭: ISO_HUB_REQUIRE_LOGIN=0 且未设置 ISO_HUB_TOKEN")
+    log("[安全]    当前局域网内任何设备都可读写全部 API(改配置/删文件/触发下载)")
+    log("[安全]    只想免登录浏览请设 ISO_HUB_TOKEN; 想恢复鉴权请置 REQUIRE_LOGIN=1")
+    log("!" * 70)
+    return True
+
+
+_warn_if_auth_disabled()
 
 
 @app.before_request
