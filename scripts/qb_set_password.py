@@ -39,9 +39,10 @@ c.set('Preferences', 'WebUI\\Password_PBKDF2', val)
 c.set('Preferences', 'WebUI\\LocalHostAuth', 'false')
 # Host 头校验: 旧版本写 false, 只为让浏览器经映射端口访问 WebUI, 代价是把 DNS
 # rebinding 防护整个拆掉。现在恢复 qB 的默认值(true)。
-# qB 的规则是「Host 头里的端口必须等于连接落在的本端端口」, 所以 8080 一旦被映射
-# 成别的号(如 8090), 浏览器访问会 401; 后端走 http://qbittorrent:8080 端口一致,
-# 不受影响。必须显式写 true —— 老部署的 conf 里已经被写成 false, 不写不会自愈。
+# qB 的规则是「Host 头里的端口必须等于连接落在的本端端口」, 因此容器内监听端口
+# 必须与宿主端口同号 —— compose 用 QB_PORT 同时驱动端口映射两侧与 WEBUI_PORT,
+# 后端 QB_URL 也随之派生, 用户可自由选择端口。必须显式写 true —— 老部署的 conf
+# 里已经被写成 false, 不写不会自愈。
 c.set('Preferences', 'WebUI\\HostHeaderValidation', 'true')
 with open(path, 'w', encoding='utf-8') as f:
     c.write(f)
@@ -154,9 +155,10 @@ def main() -> int:
 
     print(
         "\n注意: 已打开 qB 的 Host 头校验(qB 默认值)。它要求 Host 里的端口等于连接落在的\n"
-        "      本端端口, 所以容器内 8080 被映射成别的号时(compose 默认 8090), 浏览器直接\n"
-        "      访问 http://<IP>:8090 会返回 401。要么把映射改回 8080:8080(QB_PORT=8080),\n"
-        "      要么只经 iso-hub 面板使用 qB。iso-hub 后端走 http://qbittorrent:8080, 不受影响。"
+        "      本端端口, 所以容器内监听端口必须与宿主端口同号。compose 里映射已写成\n"
+        "      QB_PORT:QB_PORT 并由 WEBUI_PORT 同步, 因此 http://<IP>:<QB_PORT> 可直接\n"
+        "      打开(默认 8090, 可改任意 >=1024 的端口)。\n"
+        "      若手工改过端口映射却没同步 WEBUI_PORT, 浏览器访问会 401。"
     )
     return 0
 
