@@ -30,6 +30,9 @@ sys.path.insert(0, str(REPO_ROOT / "web"))
 
 import iso_runner  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _srcctl import source_tree  # noqa: E402
+
 
 class _FakeResp:
     """模拟 requests 的流式响应。"""
@@ -447,16 +450,25 @@ class TestRunnerSourceContract(unittest.TestCase):
     def setUpClass(cls):
         cls.src = (REPO_ROOT / "web" / "iso_runner.py").read_text(encoding="utf-8")
         cls.dl_src = (REPO_ROOT / "iso_download" / "download_linux.py").read_text(encoding="utf-8")
-        cls.app_src = (REPO_ROOT / "web" / "app.py").read_text(encoding="utf-8")
+        # v1.7.0: /api/download 的实现搬到 web/api/misc.py，这里要扫整个路由层，
+        # 只读 app.py 会让断言退化成"永远找不到"或（更糟）永远命中别处的同名字面量。
+        cls.app_src = source_tree()
 
     def test_app_download_payload_uses_part_path(self):
         """回归: /api/download 的 downloads.path 必须用 .part 路径。
 
         否则 running_task() 对最终名 stat() 得 0, 且 targets 的 key 是 .part
         名 → 两边对不上 → 进度条永远卡 0%。
+
+        v1.7.0: 路由层里内核常量要写 `core.PART_SUFFIX`（现查，保证 patch 生效），
+        所以这里两种写法都认 —— 但**只认这一种拼接模式**，别放宽成
+        "出现过 PART_SUFFIX 就算过"，那等于把守卫去掉。
         """
-        self.assertIn("PART_SUFFIX", self.app_src)
-        self.assertIn("target / (fname + PART_SUFFIX)", self.app_src)
+        self.assertRegex(
+            self.app_src,
+            r"target / \(fname \+ (?:core\.)?PART_SUFFIX\)",
+            "downloads.path 必须是 <target>/(<fname> + PART_SUFFIX)，"
+            "写成最终名会让进度条永远卡 0%")
 
     def test_runner_sends_range_header(self):
         self.assertIn('headers["Range"] = f"bytes={have}-"', self.src)
