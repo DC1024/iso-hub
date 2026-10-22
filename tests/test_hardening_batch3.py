@@ -140,6 +140,23 @@ class TestM9SocketProxyHardened(unittest.TestCase):
         self.assertNotIn("/run", mounts,
                          "/run 上的 tmpfs 会遮住 /var/run/docker.sock, 代理起来但全 503")
 
+    def test_healthcheck_uses_ipv4_literal(self):
+        """healthcheck 不能写 localhost, 必须写 127.0.0.1。
+
+        容器 /etc/hosts 同时有 `127.0.0.1 localhost` 和 `::1 localhost`, musl 按
+        RFC 3484 会先选 ::1; 而 haproxy 的 `bind *:2375` 只监听 IPv4。
+        结果 healthcheck 永远 connection refused -> 容器永远 unhealthy ->
+        主容器 depends_on: service_healthy 直接起不来, 面板打不开。
+
+        这个 bug 与加固无关, 是**既有问题**: 在启用了 IPv6 的容器里必现,
+        在禁用了 IPv6 的宿主上又恰好不出现 —— 所以它能藏很久。
+        """
+        test = self.svc.get("healthcheck", {}).get("test") or []
+        joined = " ".join(test)
+        self.assertNotIn("//localhost", joined,
+                         "healthcheck 用 localhost 会解析到 ::1, haproxy 只监听 IPv4")
+        self.assertIn("127.0.0.1", joined)
+
     def test_not_published_to_host(self):
         """只应在 compose 内部网络可达 —— 一旦映射到宿主, 等于把 Docker API 挂到网上。"""
         self.assertFalse(self.svc.get("ports"),

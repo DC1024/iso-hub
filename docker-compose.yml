@@ -158,7 +158,14 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
       # 用容器内自带的 wget 探 /_ping(白名单放行), 代理未就绪则 unhealthy
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:2375/_ping || exit 1"]
+      #
+      # 必须是 127.0.0.1, 不能写 localhost: 容器 /etc/hosts 里同时有
+      # `127.0.0.1 localhost` 与 `::1 localhost`, musl 按 RFC 3484 的优先级
+      # (::1 为 50, IPv4 映射为 10) 会**先**解析到 ::1; 而 haproxy 的
+      # `bind *:2375` 只监听 IPv4。于是 healthcheck 永远 "connection refused"。
+      # 后果不是"少个绿灯": 主容器是 depends_on: service_healthy, 全新部署时
+      # compose 会直接报 dependency failed to start, 面板根本起不来。
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/_ping || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6

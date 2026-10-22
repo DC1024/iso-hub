@@ -183,8 +183,28 @@ jobs:
             echo "haproxy 60s 内未响应 /_ping —— 检查 M9 的加固是否把代理搞死了"
             echo "--- 容器内是否有 wget(后续所有探针都依赖它) ---"
             docker exec iso-hub-socket-proxy sh -c 'command -v wget || echo "wget 不存在"' || true
+            echo "--- 容器内身份与 docker.sock ---"
+            docker exec iso-hub-socket-proxy sh -c \
+              'id; ls -ld /run /var/run 2>&1; ls -l /run/docker.sock /var/run/docker.sock 2>&1' || true
+            echo "--- 宿主侧看到的挂载 ---"
+            docker inspect -f '{{range .Mounts}}{{.Type}} {{.Source}} -> {{.Destination}} rw={{.RW}}{{"\n"}}{{end}}' \
+              iso-hub-socket-proxy || true
             echo "--- /etc/hosts ---"
             docker exec iso-hub-socket-proxy sh -c 'cat /etc/hosts' || true
+            echo "--- 逐 flag 复现: 到底是哪一项加固让后端不可达 ---"
+            for f in none --read-only --cap-drop=ALL --security-opt=no-new-privileges; do
+              extra=""
+              [ "$f" != "none" ] && extra="$f"
+              cid=$(docker run -d --rm $extra \
+                      -v /var/run/docker.sock:/var/run/docker.sock:ro \
+                      -v "$PWD/docker/socket-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+                      haproxy:2.8-alpine 2>/dev/null) || { echo "  $f: 起不来"; continue; }
+              sleep 3
+              code=$( { docker exec "$cid" wget -S -O /dev/null http://127.0.0.1:2375/_ping 2>&1 \
+                        | awk '/HTTP\//{print $2; exit}'; } || true )
+              echo "  $f: ${code:-<无响应>}"
+              docker rm -f "$cid" >/dev/null 2>&1 || true
+            done
             echo "--- 容器状态 ---"
             docker inspect -f '{{json .State}}' iso-hub-socket-proxy || true
             docker logs iso-hub-socket-proxy 2>&1 | tail -40 || true
