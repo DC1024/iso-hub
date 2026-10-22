@@ -262,7 +262,10 @@ jobs:
           probe 404 "GET /v1.44/containers/iso-hub-webdav/json (版本前缀)" "$B/v1.44/containers/iso-hub-webdav/json"
           probe 404 "POST /containers/iso-hub-samba/start -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/start"
           probe 404 "POST /containers/iso-hub-samba/restart -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/restart"
-          probe 404 "POST /containers/iso-hub-qbittorrent/update -> 到 daemon" --post-data=x "$B/containers/iso-hub-qbittorrent/update"
+          # update 必须带合法 JSON body, 否则 daemon 先报 400(无效请求体),
+          # 那样虽然也证明"请求到了 daemon", 但 400/404 混在一起不好读。
+          probe 404 "POST /containers/iso-hub-qbittorrent/update -> 到 daemon" \
+            --post-data='{"RestartPolicy":{"Name":"no"}}' "$B/containers/iso-hub-qbittorrent/update"
           # 404 而不是 403 = 请求被代理放行、由 daemon 回"没这个容器"; 这正是我们要的:
           # ACL 没拦住, 且测试机上确实没有这三个 sidecar。
 
