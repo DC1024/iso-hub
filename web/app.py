@@ -35,11 +35,14 @@ import subprocess
 from pathlib import Path
 from collections import deque
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+# v1.7.0: 视图搬到 web/api/ 后，部分 import 在内核里不再直接使用，但**不能删** ——
+# 路由层通过 `core.send_file` / `core.tcats` / `core.dtorrents` 从本模块命名空间取它们。
+# 删掉就是 AttributeError 500（`ruff --select=F` 会误报 F401，故显式标记 re-export）。
+from flask import Flask, jsonify, request, send_file, send_from_directory  # noqa: F401
 
 try:  # 种子下载集成(qBittorrent + DistroWatch 源) —— 可选加载
-    from torrent_client import QBClient, qb_config, distro_name_from_torrent  # noqa: PLC0415
-    import distro_torrents as dtorrents  # noqa: PLC0415
+    from torrent_client import QBClient, qb_config, distro_name_from_torrent  # noqa: PLC0415, F401
+    import distro_torrents as dtorrents  # noqa: PLC0415, F401
     TORRENT_AVAILABLE = True
 except Exception as e:  # noqa: BLE001 - 边界: 可选模块导入, 模块级代码可能抛任意异常, 一律降级为无种子功能
     TORRENT_AVAILABLE = False
@@ -47,7 +50,7 @@ except Exception as e:  # noqa: BLE001 - 边界: 可选模块导入, 模块级�
 
 # 种子分类: 纯计算模块, 无外部依赖, 因此**不用**可选加载 —— 加载失败属于部署损坏,
 # 应当直接暴露而不是静默降级(分类是纯展示功能, 不该被 qBittorrent 可用性绑架)。
-import torrent_categories as tcats  # noqa: E402
+import torrent_categories as tcats  # noqa: E402, F401
 
 # settings.json 的共享读写通道(加锁 + 原子写 + 损坏隔离)。
 # 放在独立模块而非本文件: distro_torrents.py 是同一个 settings.json 的第二个写方,
@@ -178,8 +181,10 @@ if not JSON_FILE.exists() and DEFAULT_JSON.exists():
         print(f"⚠ 初始配置拷贝失败: {_copy_err}", flush=True)
 
 # P1-⑤b: GPG 验证状态账本(同目录模块, /api/health 暴露 never_invoked)
+# v1.7.0: /api/health 已搬到 web/api/misc.py，它用 `core.gpg_ledger` 取本模块的这个
+# import —— 所以这里不能删（ruff 的 F401 在此是误报）。
 sys.path.insert(0, str(BASE_DIR))
-import gpg_ledger  # noqa: E402
+import gpg_ledger  # noqa: E402, F401
 
 
 def _migrate_distribution_fields() -> None:
@@ -1078,6 +1083,18 @@ def save_storage_mode(mode: str) -> None:
         m = "classified"
     save_settings_all({"storage_mode": m})
 
+
+# --------------------------------------------------------------------------- 路由层 (Blueprint)
+# v1.7.0: 54 条路由从本文件按域迁到 web/api/*.py。本文件只剩内核 —— 配置读写、
+# 任务线程、sidecar 收敛、Docker 访问、可写自检等，约 3000 行。
+#
+# 迁移约定（改路由时必读）：
+#   * 路由模块里访问内核符号一律写 `core.名字`（`from api._ctx import core`），
+#     由属性代理每次现查内核模块的命名空间。这样 340 处 `patch.object(app, "log")`
+#     这类既有打桩继续有效。**不许** `from app import log`（会在 import 期固化，
+#     桩失效但测试仍绿），也**不许** `import app`（容器里本文件是 __main__，
+#     会二次加载出第二个模块对象，内核状态分叉）。详见 web/api/_ctx.py。
+#   * 视图函数在 install() 里被回填到本模块命名空间，`app.api_state` 仍可用。
 
 # --------------------------------------------------------------------------- 邮件通知配置
 # 存 settings.json 的 notify 段, 读写一律走 load_settings_all / save_settings_all
@@ -2496,513 +2513,55 @@ def no_cache_api(resp):
     return resp
 
 
-@app.get("/")
-def index():
-    # 禁用缓存, 防止前端更新后浏览器仍加载旧 index.html(导致输入框缺失/交互失效)
-    resp = send_from_directory(app.static_folder, "index.html")
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-    return resp
 
 
-@app.get("/api/health")
-def api_health():
-    # P1-⑤b: 暴露 GPG 状态账本 —— never_invoked 非空 = 有发行版从未获得验签机会
-    # v1.5.1: 传 download_dir, 让摘要能区分"盘上有文件却没验签"与"根本没下载"。
-    # v1.5.0: 暴露各挂载点的可写性 —— 非 root 运行后, "属主配错"的典型症状就是
-    # writable.data=false。字段是诊断用, 不影响 ok(写不了盘时服务本身确实是活的,
-    # 让容器被判 unhealthy 后重启并不能解决属主问题, 只会掩盖日志)。
-    # v1.5.2: writable 是布尔视图, writable_states 给出 ok/missing/denied/not_configured,
-    # 用于区分"卷没挂"与"属主不对" —— 两者的处置方式完全不同。
-    return jsonify({"ok": True,
-                    "gpg_ledger": gpg_ledger.build_summary(JSON_FILE, download_dir=DATA_DIR),
-                    "writable": writable_snapshot(),
-                    "writable_states": writable_states()})
 
 
-@app.get("/api/distros")
-def api_distros():
-    return jsonify(build_distros())
 
 
-@app.get("/api/state")
-def api_state():
-    t = running_task()
-    return jsonify({"running": t is not None, "task": t})
 
 
-@app.get("/api/logs")
-def api_logs():
-    # L1 修复: 非数字 after 参数兜底为 0, 不再抛 500
-    try:
-        after = int(request.args.get("after", 0))
-    except (ValueError, TypeError):
-        after = 0
-    with _lock:
-        lines = [x for x in _log_lines if x["i"] > after]
-        final_seq = _log_seq
-    return jsonify({"after": final_seq, "lines": lines})
 
 
-@app.post("/api/download")
-def api_download():
-    body = request.get_json(force=True, silent=True) or {}
-    entries = body.get("entries") or []
-    if not entries:
-        return jsonify({"error": "没有选择任何条目"}), 400
-    # 重新从当前清单校验，防止提交伪造数据
-    # 前端每条目传 {distribution, download_url}; download_url 是用户选定的源URL
-    # (可为主源 download_url, 也可为 download_urls 里的某个镜像), 据此匹配对应条目
-    cur = load_json()
-    wanted = {(e.get("distribution"), e.get("download_url")) for e in entries}
-    cand_index = {}   # (distribution, 任意候选url) -> entry
-    for e in cur.get("distributions", []):
-        cand_index[(e["distribution"], e["download_url"])] = e
-        for c in e.get("download_urls", []):
-            cand_index[(e["distribution"], c)] = e
-    matched = [cand_index[w] for w in wanted if w in cand_index]
-    if not matched:
-        return jsonify({"error": "所选条目不在当前发行版清单中，请先刷新列表"}), 400
-
-    # 用户对某个文件手动指定的源URL(不存在则空 = 跟随全局策略自动选)
-    chosen = {e.get("distribution"): e.get("download_url", "") for e in entries}
-    download_payload = []
-    seen = set()
-    for e in matched:
-        fname = e["download_url"].rstrip("/").rsplit("/", 1)[-1]
-        # 路径穿越防护: 通过白名单校验确保目标目录在 DATA_DIR 内
-        target = _safe_join(e.get("type", "linux"), e.get("distribution", ""))
-        if target is None:
-            return jsonify({"error": f"非法的发行版类型/名称: {e.get('type')}/{e.get('distribution')}"}), 400
-        # 下载期间字节写在 <最终名>.part 上(iso_runner 的 .part 原子落盘协议),
-        # 且 #TARGET 哨兵上报的也是 .part 路径。这里必须同样用 .part 路径,
-        # 才能让 running_task() 的 stat(size) 与 targets 的 key 对得上,
-        # 否则进度条永远 0%(size=0 且 total 取不到)。
-        path = str(target / (fname + PART_SUFFIX))
-        if (e["distribution"], fname) not in seen:
-            seen.add((e["distribution"], fname))
-            download_payload.append({"filename": fname, "path": path})
-
-    select_json = json.dumps(
-        [{"distribution": e["distribution"], "download_url": e["download_url"],
-          "pin": chosen.get(e["distribution"]) or ""} for e in matched],
-        ensure_ascii=False,
-    )
-    cmd = [
-        PY, str(BASE_DIR / "iso_runner.py"),
-        "--json-file", str(JSON_FILE),
-        "--download-dir", str(DATA_DIR),
-        "--select", select_json,
-        "--strategy", load_source_strategy(),
-        "--storage-mode", load_storage_mode(),
-    ]
-    names = sorted({e["distribution"] for e in matched})
-    ok = start_task("download", f"下载: {'、'.join(names)}（{len(matched)} 个文件）", cmd, download_payload)
-    if not ok:
-        return jsonify({"error": "已有任务在运行"}), 409
-    return jsonify({"ok": True, "files": len(matched)})
 
 
-@app.post("/api/update-meta")
-def api_update_meta():
-    cmd = [
-        PY, str(REPO_DIR / "update_distributions.py"),
-        "--config", str(REPO_DIR / "sources_config.json"),
-        "--output", str(JSON_FILE),
-        "--pretty",
-    ]
-    ok = start_task("meta", "抓取镜像站，刷新发行版清单元数据", cmd)
-    if not ok:
-        return jsonify({"error": "已有任务在运行"}), 409
-    # 自定义源独立存储，不随 update-meta 覆盖；UI 读取时再合并
-    return jsonify({"ok": True})
 
 
-@app.get("/api/custom-sources")
-def api_custom_sources():
-    return jsonify({"sources": load_custom_sources()})
 
 
-@app.get("/api/source-strategy")
-def api_source_strategy_get():
-    return jsonify({"strategy": load_source_strategy()})
 
 
-@app.post("/api/source-strategy")
-def api_source_strategy_set():
-    body = request.get_json(force=True, silent=True) or {}
-    s = (body.get("strategy") or "A").strip().upper()
-    if s not in ("A", "B"):
-        return jsonify({"error": "strategy 只能是 A 或 B"}), 400
-    save_source_strategy(s)
-    log(f"[设置] 选源策略改为 {s}")
-    return jsonify({"ok": True, "strategy": s})
 
 
-@app.get("/api/storage-mode")
-def api_storage_mode_get():
-    """读取 ISO 存放模式。flat 模式下附带统一目录的绝对路径, 供 UI 提示用户去哪里找文件。"""
-    mode = load_storage_mode()
-    return jsonify({"mode": mode,
-                    "dir": str(_flat_iso_dir()) if mode == "flat" else ""})
 
 
-@app.post("/api/storage-mode")
-def api_storage_mode_set():
-    """切换 ISO 存放模式。只影响**之后**的新下载, 已有文件不会迁移。"""
-    body = request.get_json(force=True, silent=True) or {}
-    mode = str(body.get("mode") or "").strip().lower()
-    if mode not in STORAGE_MODES:
-        return jsonify({"error": f"mode 只能是 {' 或 '.join(STORAGE_MODES)}"}), 400
-    save_storage_mode(mode)
-    log(f"[设置] ISO 存放模式改为 {mode}"
-        + ("(统一目录 %s, 仅对新下载生效)" % _flat_iso_dir() if mode == "flat" else
-           "(按类型/发行版分类, 仅对新下载生效)"))
-    return jsonify({"ok": True, "mode": mode})
 
 
 # --------------------------------------------------------------------------- 邮件通知
-@app.get("/api/notify")
-def api_notify_get():
-    """读取邮件通知配置。**密码不回传**, 只用 password_set 告诉 UI 有没有配过。"""
-    cfg = load_notify_config()
-    return jsonify({"config": notifier.redact(cfg),
-                    "ready": notifier.is_ready(cfg),
-                    "missing": notifier.missing_fields(cfg)})
 
 
-@app.post("/api/notify")
-def api_notify_set():
-    """保存邮件通知配置。局部提交即可(只传要改的字段), 密码留空表示不改。"""
-    body = request.get_json(force=True, silent=True) or {}
-    cfg = save_notify_config(notify_cfg_from_body(body))
-    log(f"[设置] 邮件通知已更新(启用={cfg['enabled']}, "
-        f"服务器={cfg['smtp_host']}:{cfg['smtp_port']}/{cfg['security']})")
-    return jsonify({"ok": True, "config": notifier.redact(cfg),
-                    "ready": notifier.is_ready(cfg),
-                    "missing": notifier.missing_fields(cfg)})
 
 
-@app.post("/api/notify/test")
-def api_notify_test():
-    """发一封测试邮件(**不落盘**)——先验证凭据能不能通, 再决定要不要保存。
-
-    正文用表单里当前的值; 密码留空时沿用已保存的那份。
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    submitted = body.get("config") if isinstance(body.get("config"), dict) else body
-    cfg = notify_cfg_from_body(submitted)
-    subject, text = notifier.build_test_mail(
-        "%s:%s (%s)" % (cfg["smtp_host"], cfg["smtp_port"], cfg["security"]))
-    ok, detail = notifier.send(cfg, subject, text)
-    log("[邮件] 测试邮件已发送" if ok else "[邮件] 测试邮件发送失败: " + detail)
-    return (jsonify({"ok": ok, "detail": detail}), 200 if ok else 400)
 
 
-@app.post("/api/custom-sources")
-def api_custom_sources_add():
-    body = request.get_json(force=True, silent=True) or {}
-    distribution = (body.get("distribution") or "").strip()
-    typ = (body.get("type") or "linux").strip()
-    if not distribution:
-        return jsonify({"error": "需要 distribution(发行版名)"}), 400
-    if typ not in ALLOWED_TYPES:
-        return jsonify({"error": f"type 必须是 {', '.join(sorted(ALLOWED_TYPES))} 之一"}), 400
-    items = load_custom_sources()
-    strategy = (body.get("strategy") or "").strip()
-    if strategy:
-        # 发行版源: 追踪该镜像站目录的最新版本
-        if strategy not in ("dated_directory", "flat_listing", "versioned_flat_listing", "static"):
-            return jsonify({"error": f"不支持的 strategy: {strategy}"}), 400
-        listing_url = (body.get("listing_url") or "").strip()
-        download_template = (body.get("download_template") or "").strip()
-        if not listing_url or not download_template:
-            return jsonify({"error": "发行版源需要 listing_url 与 download_template"}), 400
-        # SSRF 防护: listing_url 与下载模板必须为 http/https
-        if not _is_http_url(listing_url):
-            return jsonify({"error": "listing_url 必须是 http/https 链接"}), 400
-        if download_template and re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", download_template):
-            if not _is_http_url(download_template):
-                return jsonify({"error": "download_template 若含绝对 URL 协议, 必须是 http/https"}), 400
-        checksum_template = (body.get("checksum_template") or "").strip()
-        if checksum_template and re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", checksum_template):
-            if not _is_http_url(checksum_template):
-                return jsonify({"error": "checksum_template 若含绝对 URL 协议, 必须是 http/https"}), 400
-        # 判断重复: 同名 + 同 strategy + 同 listing_url
-        if any(c.get("strategy") == strategy and c.get("distribution") == distribution
-               and c.get("listing_url") == listing_url for c in items):
-            return jsonify({"error": "该发行版源已存在"}), 400
-        try:
-            max_entries = max(1, int(body.get("max_entries") or 1))
-        except (ValueError, TypeError):
-            max_entries = 1
-        entry = {
-            "distribution": distribution,
-            "type": typ,
-            "strategy": strategy,
-            "listing_url": listing_url,
-            "version_regex": (body.get("version_regex") or "").strip(),
-            "artifact_regex": (body.get("artifact_regex") or "").strip(),
-            "download_template": download_template,
-            "checksum_template": checksum_template,
-            "max_entries": max_entries,
-        }
-        if strategy == "static":
-            vs = body.get("versions")
-            if isinstance(vs, list) and vs:
-                entry["versions"] = [str(v).strip() for v in vs]
-        items.append(entry)
-        save_custom_sources(items)
-        # 不再在请求线程内实时抓取校验: 落盘后由后台任务展开(若当前有任务运行则稍后手动刷新)
-        refresh_custom_repo_cache()
-        log(f"[自定义源] 添加发行版源 {distribution}({strategy}) <- {listing_url} (待后台展开)")
-        return jsonify({"ok": True, "sources": items, "expanded": 0, "pending_refresh": True})
-    # 普通直链
-    url = (body.get("download_url") or "").strip()
-    if not url:
-        return jsonify({"error": "需要 download_url 或 strategy"}), 400
-    if not _is_http_url(url):
-        return jsonify({"error": "download_url 必须是 http/https 链接"}), 400
-    if any(c.get("download_url") == url for c in items):
-        return jsonify({"error": "该地址已存在"}), 400
-    checksum_url = (body.get("checksum_url") or "").strip()
-    if checksum_url and not _is_http_url(checksum_url):
-        return jsonify({"error": "checksum_url 必须是 http/https 链接"}), 400
-    items.append({
-        "distribution": distribution,
-        "type": typ,
-        "download_url": url,
-        "checksum_url": checksum_url,
-        "checksum": (body.get("checksum") or "").strip(),
-    })
-    save_custom_sources(items)
-    log(f"[自定义源] 添加 {distribution} <- {url}")
-    return jsonify({"ok": True, "sources": items})
 
 
-@app.delete("/api/custom-sources")
-def api_custom_sources_del():
-    url = request.args.get("url", "")
-    distribution = request.args.get("distribution", "")
-    strategy = request.args.get("strategy", "")
-    if url:
-        items = [c for c in load_custom_sources() if c.get("download_url") != url]
-    elif distribution and strategy:
-        items = [c for c in load_custom_sources()
-                 if not (c.get("distribution") == distribution and c.get("strategy") == strategy)]
-    else:
-        return jsonify({"error": "需要 url 或 distribution+strategy"}), 400
-    save_custom_sources(items)
-    log(f"[自定义源] 删除 {url or f'{distribution}({strategy})'}")
-    return jsonify({"ok": True, "sources": items})
 
 
-@app.post("/api/custom-sources/refresh")
-def api_custom_sources_refresh():
-    """手动触发自定义源展开(后台子进程, 非阻塞)。复用 start_task 的单一任务锁。"""
-    if running_task():
-        return jsonify({"error": "已有任务在运行"}), 409
-    sources = _custom_source_list()
-    if not sources:
-        return jsonify({"error": "没有 strategy 类型的自定义源"}), 400
-    ok = refresh_custom_repo_cache()
-    if not ok:
-        return jsonify({"error": "已有任务在运行"}), 409
-    return jsonify({"ok": True, "count": len(sources)})
 
 
-@app.get("/api/custom-sources/auto-refresh")
-def api_custom_auto_refresh_get():
-    """读取自定义源自动刷新设置(独立开关, 默认关闭)。"""
-    return jsonify({"custom_source_auto_refresh": load_custom_auto_refresh()})
 
 
-@app.post("/api/custom-sources/auto-refresh")
-def api_custom_auto_refresh_set():
-    """保存自定义源自动刷新设置。body: {enabled?:bool, interval?:int(秒)}"""
-    body = request.get_json(force=True, silent=True) or {}
-    enabled = body.get("enabled")
-    interval = body.get("interval")
-    # 显式只接受 bool/None; 避免字符串 'false' 被当成真值
-    if enabled is not None and not isinstance(enabled, bool):
-        return jsonify({"error": "enabled 必须是布尔值"}), 400
-    if interval is not None:
-        try:
-            interval = int(interval)
-        except (ValueError, TypeError):
-            return jsonify({"error": "interval 必须是整数(秒)"}), 400
-    cfg = save_custom_auto_refresh(enabled, interval)
-    log(f"[自定义源] 自动刷新设置已保存: enabled={cfg['enabled']}, interval={cfg['interval']}s")
-    return jsonify({"ok": True, "custom_source_auto_refresh": cfg})
 
 
-@app.get("/api/subscriptions")
-def api_subscriptions():
-    return jsonify({"subscriptions": load_subscriptions()})
 
 
-@app.post("/api/subscriptions")
-def api_subscriptions_save():
-    body = request.get_json(force=True, silent=True) or {}
-    items = body.get("subscriptions") or []
-    save_subscriptions(items)
-    log(f"[订阅] 保存 {len(items)} 条订阅配置")
-    return jsonify({"ok": True})
 
 
-@app.post("/api/sync-subscriptions")
-def api_sync_subscriptions():
-    """对所有已启用订阅执行: 刷新清单 -> 下载最新 N -> 删旧版。"""
-    if running_task():
-        return jsonify({"error": "已有任务在运行"}), 409
-    subs = [s for s in load_subscriptions() if s.get("enabled", True)]
-    if not subs:
-        return jsonify({"error": "没有已启用的订阅"}), 400
-    sync_cmd = _run_sync_cmd()
-    ok = start_task(
-        "sync",
-        f"订阅同步: {len(subs)} 个发行版(自动拉最新+删旧)",
-        sync_cmd,
-        [],
-    )
-    if not ok:
-        return jsonify({"error": "已有任务在运行"}), 409
-    return jsonify({"ok": True, "count": len(subs)})
 
 
-@app.post("/api/prune")
-def api_prune():
-    body = request.get_json(force=True, silent=True) or {}
-    name, typ = body.get("distribution"), body.get("type")
-    if not name or not typ:
-        return jsonify({"error": "缺少 distribution/type"}), 400
-    # H1 修复: 路径穿越防护, target 必须安全地落在 DATA_DIR 内
-    target = _safe_join(typ, name)
-    if target is None:
-        return jsonify({"error": "非法的 distribution/type 参数"}), 400
-    if running_task():
-        return jsonify({"error": "已有任务在运行"}), 409
-    cur = load_json()
-    # B7 修复: 记录当前清单文件名到历史(累积), 供清理时判断哪些文件"曾经属于清单"
-    _record_manifest_history(cur.get("distributions", []))
-    expected = {
-        e["download_url"].rstrip("/").rsplit("/", 1)[-1]
-        for e in cur.get("distributions", [])
-        if e.get("distribution") == name and e.get("type") == typ
-    }
-    removed, skipped = [], []
-    protected = set(load_protected())
-    if target.exists():
-        for f in target.iterdir():
-            if f.is_file() and f.name not in expected and f.suffix.lower() in ISO_SUFFIXES:
-                rel = f"{typ}/{name}/{f.name}"
-                if rel in protected or f.name in protected:
-                    skipped.append(f"{f.name}: 受保护, 跳过")
-                    continue
-                # B7 修复: 只删除"曾出现在历史清单中"的文件, 保护用户手动放入/种子下载的 ISO
-                if not _is_known_file(typ, name, f.name):
-                    skipped.append(f"{f.name}: 非清单文件, 保留")
-                    continue
-                try:
-                    f.unlink()
-                    removed.append(f.name)
-                except OSError as e:
-                    skipped.append(f"{f.name}: {e}")
-    log(f"[清理] {typ}/{name}: 删除 {len(removed)} 个过期文件，跳过 {len(skipped)}")
-    return jsonify({"ok": True, "removed": removed, "skipped": skipped})
 
 
-@app.post("/api/delete-files")
-def api_delete_files():
-    """删除清单内已下载的 ISO 文件。
-
-    请求体: {"items": [{"type": "linux", "distribution": "Ubuntu", "filename": "xxx.iso"}, ...]}
-
-    安全约束(逐条对应):
-      1. 路径穿越: (type, distribution) 经 _safe_join 校验, 必须落在 DATA_DIR 内
-      2. 文件名: 拒绝空/含分隔符/为 . 或 ..; 且最终路径必须仍在目标目录内
-      3. 只删清单内文件: 文件名必须属于该发行版**当前清单**(expected), 否则拒绝
-         —— 防止误删用户手动放入的 ISO; 若要删除非清单文件请用「清理过期」接口
-      4. **受保护(🔒锁定)文件一律拒绝删除**: 无任何绕过参数。锁定优先级高于手动删除,
-         用户必须先点解锁按钮才可删除。命中时以 locked 列表单独返回, 供前端给出明确指引。
-      5. 任务互斥: 有下载任务在跑时拒绝, 避免边下边删造成状态错乱
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    items = body.get("items") or []
-    if not items:
-        return jsonify({"error": "没有选择任何文件"}), 400
-    if running_task():
-        return jsonify({"error": "已有任务在运行, 请稍后再试"}), 409
-
-    cur = load_json()
-    # 按 (type, distribution) 归集当前清单里的合法文件名
-    expected: dict[tuple[str, str], set[str]] = {}
-    for e in cur.get("distributions", []):
-        url = e.get("download_url", "") or ""
-        fname = url.rstrip("/").rsplit("/", 1)[-1]
-        if not fname:
-            continue
-        expected.setdefault((e.get("type", "linux"), e.get("distribution", "")), set()).add(fname)
-
-    protected = set(load_protected())
-    removed, skipped, locked = [], [], []
-    for it in items:
-        typ = str(it.get("type") or "").strip()
-        name = str(it.get("distribution") or "").strip()
-        fname = str(it.get("filename") or "").strip()
-        label = f"{fname or '(空文件名)'}"
-        if not fname or "/" in fname or "\\" in fname or fname in (".", ".."):
-            skipped.append(f"{label}: 非法文件名")
-            continue
-        target = _safe_join(typ, name)
-        if target is None:
-            skipped.append(f"{label}: 非法的 type/distribution")
-            continue
-        # 只允许删除当前清单内声明的文件(防误删用户自有 ISO)
-        if fname not in expected.get((typ, name), set()):
-            skipped.append(f"{label}: 不在当前清单内, 已拒绝(如需清理请用「清理过期」)")
-            continue
-        rel = f"{typ}/{name}/{fname}"
-        # 锁定文件: 硬拒绝, 无 force 后门
-        if rel in protected or fname in protected:
-            locked.append({"type": typ, "distribution": name, "filename": fname})
-            continue
-        # 前端传的是"目标文件名"(如 xxx.iso), 但下载中的半成品实际叫
-        # xxx.iso.part。删除必须连带处理半成品: 否则"下载停止"的文件点删除会
-        # 报"文件不存在"被跳过(用户明明看得到它占着空间)。
-        fp = (target / fname)
-        part_fp = target / (fname + PART_SUFFIX)
-        # 二次确认最终路径仍在目标目录内(防 symlink / 拼接绕过)
-        for _p in (fp, part_fp):
-            try:
-                _p.resolve().relative_to(target.resolve())
-            except ValueError:
-                skipped.append(f"{label}: 路径越界, 已拒绝")
-                break
-        else:
-            victims = [p for p in (fp, part_fp) if p.is_file()]
-            if not victims:
-                skipped.append(f"{label}: 文件不存在")
-                continue
-            try:
-                for _p in victims:
-                    _p.unlink()
-                # 半成品被删掉后, 残留的"下载停止"失败记录也要清掉,
-                # 否则 UI 仍会显示「下载停止」而文件已经没了。
-                if part_fp in victims:
-                    clear_failure(f"{typ}/{name}/{fname}")
-                removed.append(fname + (PART_SUFFIX if fp not in victims else ""))
-            except OSError as e:
-                skipped.append(f"{label}: {e}")
-
-    ok = not locked
-    for lk in locked:
-        skipped.append(f"{lk['filename']}: 文件已被锁定, 已跳过")
-    resp = {"ok": ok, "removed": removed, "skipped": skipped, "locked": locked}
-    if locked:
-        resp["error"] = f"{len(locked)} 个文件已被锁定"
-    return jsonify(resp)
 
 
 # ---------- 受保护/锁定文件 ----------
@@ -3015,10 +2574,6 @@ def _rel_of_file(abs_path: Path, typ: str = "", name: str = "") -> str:
         return f"{typ}/{name}/{abs_path.name}".lstrip("/") if typ and name else abs_path.name
 
 
-@app.get("/api/protected")
-def api_protected():
-    lst = load_protected()
-    return jsonify({"protected": lst})
 
 
 # --------------------------------------------------------------------------- 下载到本机
@@ -3213,113 +2768,10 @@ def _issue_dl_ticket(typ: str, name: str, fname: str) -> str:
     return tok
 
 
-@app.post("/api/files/ticket")
-def api_files_ticket():
-    """为「把服务器上已下载的文件拉到本机」签发短时下载票据。
-
-    为什么不能直接把链接指到文件: 会话 token 走 X-Auth-Token **请求头**, 而浏览器
-    点链接下载是顶层导航, 带不上自定义头 → 拿不到凭据。把会话 token 塞进 URL 更糟:
-    它是 7 天有效的长效凭据, 会留在浏览器历史/代理日志里。所以用票据 ——
-    随机、限时、只对一个文件有效, 泄露面最小。
-
-    请求体: {"items": [{"type","distribution","filename"}, ...]}
-    返回:   {"tickets": [{"url","filename","type","distribution","size"}], "skipped": [...]}
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    items = body.get("items") or []
-    if not items:
-        return jsonify({"error": "没有选择任何文件"}), 400
-    if len(items) > DL_TICKET_MAX:
-        return jsonify({"error": f"一次最多下载 {DL_TICKET_MAX} 个文件"}), 400
-
-    tickets, skipped = [], []
-    for it in items:
-        # 形态 1: 种子下载(按 hash 枚举已完成文件, 后端走 qBittorrent)
-        h = it.get("hash")
-        if h:
-            entries, hskip = _torrent_completed_files([h])
-            skipped.extend(hskip)
-            h = str(h).strip().lower()
-            for kind, val in entries:
-                # DATA_DIR 内的走 _rel; 目录外(外部 qB 挂载形态)的走 _abs,
-                # _abs 票据在下载时还会再对照 qB 报告复核一次, 防伪路径
-                tk, sk = (_issue_ticket_for("_abs", h, val) if kind == "abs"
-                          else _issue_ticket_for("_rel", "", val))
-                if tk is not None:
-                    tickets.append(tk)
-                else:
-                    skipped.append(sk)
-            continue
-        # 形态 2: 相对路径(种子/手动放入的任意文件, 不依赖 catalog)
-        rel = it.get("rel")
-        if rel:
-            tk, sk = _issue_ticket_for("_rel", "", str(rel))
-            if tk is not None:
-                tickets.append(tk)
-            else:
-                skipped.append(sk)
-            continue
-        # 形态 3: catalog 三元组(历史形态, 保持兼容)
-        tk, sk = _issue_ticket_for(
-            str(it.get("type") or "").strip(),
-            str(it.get("distribution") or "").strip(),
-            str(it.get("filename") or "").strip())
-        if tk is not None:
-            tickets.append(tk)
-        else:
-            skipped.append(sk)
-
-    if tickets:
-        user = _valid_session() or ("token" if AUTH_TOKEN else "匿名")
-        log(f"[下载] {user} 请求下载 {len(tickets)} 个文件到本机")
-    return jsonify({"ok": bool(tickets), "tickets": tickets, "skipped": skipped})
 
 
-@app.get("/api/files/get")
-def api_files_get():
-    """凭票据下发文件(支持 Range, 因此浏览器可暂停/续传)。
-
-    票据**可重复使用直到过期** —— 断点续传/连接重试会让浏览器对同一 URL 发多次
-    请求(带 Range 头), 一次性票据会直接掐断续传。代价是票据在 TTL 内可重放,
-    所以 TTL 默认只有 10 分钟。
-    """
-    tok = request.args.get("t", "")
-    _dl_tickets_purge()
-    hit = _dl_tickets.get(tok) if tok else None
-    if not hit:
-        return jsonify({"error": "下载链接无效或已过期, 请在面板上重新点击下载"}), 403
-    typ, name, fname, _exp = hit
-    # 二次校验: 票据里存的是 (type, distro, 文件名) 分量而不是路径, 必须重新过一遍约束
-    fp = _resolve_dl_target(typ, name, fname)
-    if fp is None:
-        return jsonify({"error": f"文件不存在: {fname}"}), 404
-    # P3 修复: download_name 必须是**文件名**, 不能直接用票据里的 fname ——
-    # _abs 寻址时 fname 是容器内绝对路径(/downloads/xxx.iso), 直接塞进
-    # Content-Disposition 会变成 "/downloads/xxx.iso" 这种带路径的怪名字,
-    # 部分浏览器/下载器还会拒绝。用解析后真实文件的 .name。
-    resp = send_file(fp, as_attachment=True, download_name=fp.name, conditional=True)
-    # 大文件必须允许浏览器缓存分片, 否则续传会从头开始(no-store 是续传杀手)。
-    # 该路径同时被 after_request 的 no-cache 规则排除, 见 no_cache_api。
-    resp.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
-    resp.headers["Accept-Ranges"] = "bytes"
-    return resp
 
 
-@app.post("/api/protected")
-def api_protected_toggle():
-    body = request.get_json(force=True, silent=True) or {}
-    path = body.get("path")  # 相对路径 type/name/文件名 或 文件名
-    if not path:
-        return jsonify({"error": "缺少 path"}), 400
-    lst = load_protected()
-    if path in lst:
-        lst = [p for p in lst if p != path]
-        removed = True
-    else:
-        lst.append(path)
-        removed = False
-    save_protected(lst)
-    return jsonify({"ok": True, "protected": lst, "removed": removed})
 
 
 # ---------- 定时任务 / 调度 ----------
@@ -3344,391 +2796,33 @@ def _as_int(value, default: int, lo: int | None = None, hi: int | None = None) -
     return n
 
 
-@app.get("/api/schedules")
-def api_schedules():
-    return jsonify({"schedules": load_schedules()})
 
 
-@app.post("/api/schedules")
-def api_schedules_add():
-    body = request.get_json(force=True, silent=True) or {}
-    name = (body.get("name") or "").strip() or "定时任务"
-    typ = body.get("type") or "daily"
-    sched = {
-        "id": body.get("id") or _sched_id(),
-        "name": name,
-        "type": typ,
-        "time": body.get("time") or "00:00",
-        "day_of_week": _as_int(body.get("day_of_week", 0) or 0, 0, 0, 6),
-        "day_of_month": _as_int(body.get("day_of_month", 1) or 1, 1, 1, 31),
-        "month_of_year": _as_int(body.get("month_of_year", 1) or 1, 1, 1, 12),
-        "scheduled_at": _as_int(body.get("scheduled_at") or 0, 0, 0),  # 一次性调度用的时间戳
-        "enabled": bool(body.get("enabled", True)),
-        "last_run": 0,
-    }
-    lst = load_schedules()
-    lst = [x for x in lst if x.get("id") != sched["id"]]  # 更新或新增
-    lst.append(sched)
-    save_schedules(lst)
-    return jsonify({"ok": True, "schedules": lst})
 
 
-@app.delete("/api/schedules")
-def api_schedules_del():
-    sid = request.args.get("id")
-    if not sid:
-        return jsonify({"error": "缺少 id"}), 400
-    lst = [x for x in load_schedules() if x.get("id") != sid]
-    save_schedules(lst)
-    return jsonify({"ok": True, "schedules": lst})
 
 
-@app.post("/api/schedules/run")
-def api_schedules_run():
-    """手动触发一次订阅同步。"""
-    if running_task():
-        return jsonify({"error": "已有任务在运行"}), 409
-    cmd = _run_sync_cmd()
-    if not cmd:
-        return jsonify({"error": "无启用的订阅"}), 400
-    n = len([s for s in load_subscriptions() if s.get("enabled", True)])
-    start_task("sync", f"手动订阅同步: {n} 个发行版", cmd, [])
-    return jsonify({"ok": True})
 
 
 # ---------- 用户登录 / 会话 token ----------
-@app.get("/api/user/me")
-def api_user_me():
-    """返回当前登录状态(不强制要求已登录)。附带 require_login/auth_configured 标志供前端判定是否弹登录遮罩。"""
-    username = _valid_session()
-    return jsonify({
-        "authenticated": bool(username),
-        "username": username,
-        # B5 修复: 只有强制登录模式下前端才应弹遮罩; 未设 token 时 API 本就敞开, 不应强凑 UX
-        "require_login": REQUIRE_LOGIN,
-        "auth_configured": bool(AUTH_TOKEN) or bool(REQUIRE_LOGIN),
-    })
 
 
-@app.post("/api/user/login")
-def api_user_login():
-    body = request.get_json(force=True, silent=True) or {}
-    u = (body.get("username") or "").strip()
-    p = body.get("password") or ""
-    # P3 修复: 登录失败限速 —— 此前 /api/user/login 完全没有节流, 公网实例可被
-    # 无限次撞库。策略刻意温和(连续 5 次失败锁 5 分钟, 成功即清零), 只挡暴力枚举,
-    # 不惩罚手误; 计数只在内存, 容器重启归零。
-    ip = (request.remote_addr or "-").strip()
-    wait = _login_lock_remaining(ip)
-    if wait > 0:
-        return jsonify({"error": f"登录尝试过于频繁，请 {wait} 秒后再试",
-                        "code": "rate_limited", "retry_after": wait}), 429
-    # 首次登录且尚未播种: 允许用 ISO_HUB_ADMIN_USER/PASS 播种
-    if not load_users() and not (os.environ.get("ISO_HUB_ADMIN_USER", "").strip() or ""):
-        # 无可播种账号, 允许首个登录者创建管理员(设置页用相同用户名/密码建账号)
-        # B5 修复: 仅限 localhost 请求放行首用户建号, 防止公网访客顺手抢注管理员
-        if request.remote_addr not in ("127.0.0.1", "::1", "localhost"):
-            return jsonify({"error": "管理员账号未设置, 请先在服务器本机或通过环境变量创建"}), 403
-        if not u or not p:
-            return jsonify({"error": "缺少用户名或密码"}), 400
-        salt = secrets.token_hex(16)
-        users = load_users()
-        users[u] = {"password_hash": _hash_pw(p, salt), "salt": salt,
-                    "iterations": PBKDF2_ITERATIONS,
-                    "created_at": int(time.time())}
-        save_users(users)
-        log(f"[用户] 首次创建管理员账号: {u}")
-        _login_note_ok(ip)
-        return jsonify({"ok": True, "token": _issue_token(u), "username": u})
-    v = _verify_login(u, p)
-    if v != "ok":
-        _login_note_fail(ip)
-        # 精确原因只进日志: 回给客户端的是同一句话, 否则登录接口就是一台账号枚举机
-        log(f"[用户] 登录失败({v}): {u} @ {ip}")
-        return jsonify({"error": "用户名或密码错误", "code": "bad_credentials"}), 401
-    _login_note_ok(ip)
-    return jsonify({"ok": True, "token": _issue_token(u), "username": u})
 
 
-@app.post("/api/user/logout")
-def api_user_logout():
-    tok = request.headers.get("X-Auth-Token")
-    if tok and tok in _sessions:
-        _sessions.pop(tok, None)
-        _sessions_persist()
-    return jsonify({"ok": True})
 
 
-@app.post("/api/user/password")
-def api_user_password():
-    """修改当前登录用户密码(需会话 token)。"""
-    # H3 修复: 用 _valid_session 统一校验(含过期检查), 而非裸 _sessions.get(过期也放行)
-    username = _valid_session()
-    if not username:
-        return jsonify({"error": "未登录"}), 401
-    body = request.get_json(force=True, silent=True) or {}
-    old = body.get("old_password") or ""
-    nw = body.get("new_password") or ""
-    if not nw:
-        return jsonify({"error": "新密码不能为空"}), 400
-    if not _check_login(username, old):
-        return jsonify({"error": "当前密码错误"}), 401
-    salt = secrets.token_hex(16)
-    users = load_users()
-    users[username] = {"password_hash": _hash_pw(nw, salt), "salt": salt,
-                       "iterations": PBKDF2_ITERATIONS,
-                       "created_at": users.get(username, {}).get("created_at", int(time.time()))}
-    save_users(users)
-    # P3 修复: 改密码 = 把其他设备/已泄露的 token 踢下线; 当前会话保留,
-    # 否则用户改完密码会立刻被自己的请求踢出去(前端只看到一次莫名的 401)。
-    keep = (request.headers.get("X-Auth-Token") or "").strip()
-    revoked = _revoke_other_sessions(username, keep=keep)
-    log(f"[用户] {username} 修改了密码, 已吊销其他会话 {revoked} 个")
-    return jsonify({"ok": True, "revoked_sessions": revoked})
 
 
-@app.post("/api/stop")
-def api_stop():
-    return jsonify({"ok": stop_task()})
 
 
-@app.post("/api/verify")
-def api_verify():
-    """对已落定的文件补一次校验(不重新下载), v1.4.0。
-
-    背景: 校验源不可达但长度达标时文件会被落定(避免每周重下整包), 并在
-    download_unverified.json 留一条记录 → UI 显示「未验签」。旧版清除该标记的
-    **唯一**路径是整文件重下, 对 2~6GB 的 ISO 代价过高, 用户实际不会点。
-    这里复用 iso_runner 的 --verify-only 分支: 后台跑一次 verify_checksum_smart,
-    通过则清记录, 不符则记 state=mismatch, 仍不可达则更新原因。
-
-    为什么走 start_task 而不是同步请求: 校验要顺序读完整个文件, 机械盘上可能
-    几十秒到两分钟; 且与下载互斥能避免"读盘时文件正被 .part 改写"与 gpg keyring
-    并发写。复用同一把"单任务"锁, 语义与下载/元数据刷新一致。
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    rel = str(body.get("rel") or "").strip()
-    parts = rel.split("/")
-    if len(parts) != 3 or any(
-        (not p) or p != p.strip() or p in (".", "..") or "/" in p or "\\" in p
-        for p in parts
-    ):
-        return jsonify({"error": "非法的文件标识"}), 400
-    typ, name, fname = parts
-    if fname.lower().endswith(PART_SUFFIX):
-        return jsonify({"error": "半成品(.part)不在校验范围内, 请先完成下载"}), 409
-
-    entry = None
-    for e in load_json().get("distributions", []):
-        if e.get("type", "linux") != typ or e.get("distribution") != name:
-            continue
-        url = e.get("download_url") or ""
-        if url.rstrip("/").rsplit("/", 1)[-1] == fname:
-            entry = e
-            break
-    if entry is None:
-        return jsonify({"error": "发行版清单里找不到该文件, 请先刷新列表"}), 404
-    # 前置守卫: verify_checksum_smart 在 checksum_url 与 checksum 都为空时返回
-    # (True, "跳过校验和验证（无可用信息）") —— 那是下载路径"没信息就放行"的历史语义。
-    # 作为"重新校验"的结果会把"没配校验源"冒充成"校验通过", 必须在这里挡成 400。
-    if not (entry.get("checksum_url") or entry.get("checksum")):
-        return jsonify({
-            "error": "该发行版没有配置校验源(checksum_url / checksum), 无法校验; "
-                     "请先在自定义源里补充后再试"
-        }), 400
-
-    target = _safe_join(typ, name)
-    if target is None:
-        return jsonify({"error": f"非法的发行版类型/名称: {typ}/{name}"}), 400
-    if not (target / fname).is_file():
-        return jsonify({"error": "文件不存在或不完整, 无法校验"}), 409
-
-    cmd = [
-        PY, str(BASE_DIR / "iso_runner.py"),
-        "--json-file", str(JSON_FILE),
-        "--download-dir", str(DATA_DIR),
-        "--storage-mode", load_storage_mode(),
-        "--verify-only",
-        "--rel", rel,
-    ]
-    ok = start_task("verify", f"重新校验: {fname}", cmd)
-    if not ok:
-        return jsonify({"error": "已有任务在运行, 请稍后再试"}), 409
-    log(f"[校验] 开始重新校验: {rel}")
-    return jsonify({"ok": True, "rel": rel})
 
 
-@app.get("/api/shares")
-def api_shares():
-    shares = load_shares()
-    # 附带每个 sidecar 容器实时四态(running/stopped/not_deployed/unknown)
-    for proto, s in shares.items():
-        st = service_state(SHARE_CONTAINERS[proto])
-        s["container"] = st
-        # managed = 是否 iso-hub 配套部署的容器: 能检测到(非 not_deployed/unknown)即为配套,
-        # 凭据可管理; 用户自行部署的外部容器 iso-hub 检测不到, 无法改凭据。
-        s["managed"] = st not in ("not_deployed", "unknown")
-    return jsonify({"shares": {k: _redact_password(v) for k, v in shares.items()}})
 
 
-@app.post("/api/shares")
-def api_shares_save():
-    body = request.get_json(force=True, silent=True) or {}
-    shares = load_shares()
-    for proto in ("samba", "webdav"):
-        if proto not in body:
-            continue
-        p = body[proto] or {}
-        cur = shares[proto]
-        cred_changed = False
-        if "username" in p:
-            cur["username"] = str(p["username"]).strip()
-            cred_changed = True
-        if "password" in p:
-            _pw = str(p["password"]).strip()
-            if _pw:  # 空 = 不改: 前端密码框留空即沿用已保存的那份
-                cur["password"] = _pw
-                cred_changed = True
-        if "port" in p:
-            cur["port"] = str(p["port"]).strip()
-        if cred_changed:
-            # 同步新凭据到运行中的 sidecar 容器(更新 env + 重启)
-            ok = apply_share_creds(proto, cur["username"], cur["password"])
-            if not ok:
-                # L4 修复: 此处尚未 save_shares, 凭据并未落盘 —— 修正与实际不符的错误文案
-                return jsonify({"error": f"{proto} 凭据同步到容器失败, 设置未保存, 请检查 sidecar 是否运行"}), 500
-        if "enabled" in p:
-            # 启停 sidecar 容器; 未部署时给出命令提示(应用读不到宿主 compose 文件, 无法自动创建)
-            want = bool(p["enabled"])
-            # v1.3.21: 没有密码不允许启用 —— 旧版内置 iso123, 用户常直接开共享忘了改,
-            # 等于把整库 ISO 匿名暴露给局域网。这里改成硬性前置条件。
-            if want and not str(cur.get("password") or ""):
-                return jsonify({"error": f"{proto} 尚未设置密码: 请先在上方填写密码并保存凭据, 再启用共享"}), 400
-            cur["enabled"] = want
-            ok = set_share(proto, want)
-            if not ok:
-                st = service_state(SHARE_CONTAINERS[proto])
-                if st == "not_deployed":
-                    return jsonify({"error": f"{proto} 未部署: 请用 docker compose --profile share up -d 先创建该容器"}), 500
-                if st == "unknown":
-                    return jsonify({"error": f"{proto} 容器状态未知(请检查 socket-proxy 是否运行)"}), 500
-                return jsonify({"error": f"{proto} 容器操作失败(是否已部署 sidecar?)"}), 500
-    save_shares(shares)
-    log(f"[共享] 设置已保存: SMB={shares['samba']['enabled']} WebDAV={shares['webdav']['enabled']}")
-    return jsonify({"ok": True, "shares": {
-        k: {**_redact_password(v), "container": (_st := service_state(SHARE_CONTAINERS[k])),
-            "managed": _st not in ("not_deployed", "unknown")}
-        for k, v in shares.items()}})
 
 
-@app.get("/api/qb/settings")
-def api_qb_settings_get():
-    """获取 qBittorrent 设置及容器实时四态状态。"""
-    qb = load_qb_settings()
-    # 标记 url 是否被用户显式保存过(区别于默认的内部 sidecar 地址 http://qbittorrent:8080)。
-    # 前端据此决定输入框是否回显 url —— 未自定义时留空, 由用户按占位提示自行填写。
-    try:
-        _raw = load_settings_all() if SETTINGS_JSON.exists() else {}
-        qb["url_saved"] = bool((_raw.get("qb") or {}).get("url"))
-    except errs.JSON_READ:
-        qb["url_saved"] = False
-    # 区分「配套容器」与「外部容器」: 只要 url 未被用户指向外部(仍是默认内部 sidecar 地址,
-    # 或从未自定义), iso-hub 就能管理该 qb 容器, 可改凭据并同步到 sidecar; 若用户填了外部
-    # qBittorrent 地址, 那是自行部署的容器, iso-hub 无法改其用户名/密码 → managed=False。
-    qb["managed"] = not _qb_is_external(qb)
-    # 容器状态只在**配套** sidecar 场景才有意义。外部 QB 是用户自行部署的容器, iso-hub 没有
-    # 它可查(查的是同名配套 sidecar, 必然 not_deployed/unknown): 既会污染日志(未接 Docker 的
-    # 部署每次访问都抛 FileNotFoundError), 又会让界面误报"请检查 socket-proxy"。
-    # 故外部 QB 不查询, 直接标记未部署; 界面看 conn 判断"能否连上并登录"。
-    qb["container"] = service_state(QB_CONTAINER) if qb["managed"] else "not_deployed"
-    # 外部 QB 真正要看的是"能否连上并登录这个外部实例" —— 直接探测一次并回传, 面板据此显示
-    # 「已连接 / 凭据错误 / 无法连接」, 而不是误导性的"请检查 socket-proxy"。
-    qb["conn"] = _probe_qb_connection(qb) if not qb["managed"] else None
-    return jsonify({"ok": True, "qb": _redact_password(qb)})
 
 
-@app.post("/api/qb/settings")
-def api_qb_settings_post():
-    """保存 qBittorrent 设置并启停/重启容器。body: {enabled?:bool, username?:str, password?:str}"""
-    body = request.get_json(force=True, silent=True) or {}
-    qb = load_qb_settings()
-    changed = False
-    cred_changed = False
-    if "username" in body:
-        qb["username"] = str(body["username"]).strip()
-        changed = True
-        cred_changed = True
-    if "password" in body:
-        _pw = str(body["password"]).strip()
-        if _pw:  # 空 = 不改: 前端密码框留空即沿用已保存的那份
-            qb["password"] = _pw
-            changed = True
-            cred_changed = True
-    if "url" in body:
-        # 允许用户指向外部 qBittorrent(如自行部署的实例), 而非默认的 sidecar 内部地址
-        qb["url"] = str(body["url"]).strip().rstrip("/") or qb.get("url", "")
-        changed = True
-
-    # 启用或保持启用时，必须提供非空凭据
-    will_be_enabled = bool(body["enabled"]) if "enabled" in body else qb.get("enabled", False)
-    if will_be_enabled and (not qb.get("username") or not qb.get("password")):
-        return jsonify({"error": "启用 qBittorrent 必须提供非空用户名和密码"}), 400
-
-    # 计算是否指向外部 QB(用户自行部署, 非配套 sidecar)。url_saved 需从原始 settings 判断,
-    # 与 GET 保持一致: 用户显式保存过 url 才视为已自定义; 若本次请求带 url 字段同样视为已保存。
-    # 必须在 enabled 分支**之前**算好: 外部 QB 启停时不应去操作配套 sidecar 容器。
-    try:
-        _raw = load_settings_all() if SETTINGS_JSON.exists() else {}
-        qb["url_saved"] = bool((_raw.get("qb") or {}).get("url")) or ("url" in body)
-    except errs.JSON_READ:
-        qb["url_saved"] = bool("url" in body)
-    _is_ext = _qb_is_external(qb)
-
-    enabled_changed = False
-    if "enabled" in body:
-        want = bool(body["enabled"])
-        if want != qb.get("enabled", False):
-            # 外部 QB(用户自行部署): 根本没有 iso-hub 配套的 sidecar 容器可启停。
-            # 这里的 enabled 只表示"是否用这个外部 QB 做种子下载", 只落盘开关状态即可,
-            # 绝不能去 start/stop QB_CONTAINER —— 那个容器不存在(或不属于 iso-hub),
-            # 否则必定失败并误报"容器状态未知(请检查 socket-proxy 是否运行)"。
-            # 这与用户预期完全不符: 外部 QB 不需要 socket-proxy, iso-hub 只走 Web API 登录连接。
-            if _is_ext:
-                log(f"[qB] 外部 qBittorrent({qb.get('url')}) 开关 -> enabled={want}, 不操作配套 sidecar 容器")
-            else:
-                ok = set_qb(want, qb["username"], qb["password"])
-                if not ok:
-                    st = service_state(QB_CONTAINER)
-                    if st == "not_deployed":
-                        return jsonify({"error": "qBittorrent 未部署: 请用 docker compose --profile bt up -d 先创建该容器"}), 500
-                    if st == "unknown":
-                        return jsonify({"error": "qBittorrent 容器状态未知(请检查 socket-proxy 是否运行)"}), 500
-                    return jsonify({"error": "qBittorrent 容器操作失败，请检查是否已部署 sidecar"}), 500
-            qb["enabled"] = want
-            changed = True
-            enabled_changed = True
-
-    # 仅当"凭据"变更且当前是启用状态、且是配套 sidecar 时, 才同步密码到 sidecar 容器并重启。
-    # 外部 QB(用户自行部署): 改凭据只是为了登录连接, 只保存到配置即可, 不写 conf 不重启
-    # (根本没有 iso-hub 配套容器可重启)。
-    if cred_changed and qb.get("enabled", False) and not _is_ext:
-        if not enabled_changed:
-            # 仅修改凭据：直接写 conf 并重启
-            if QB_CONF_PATH.exists() and _set_qb_password(qb["username"], qb["password"]):
-                rr = _docker_request("POST", f"/containers/{QB_CONTAINER}/restart", None, 30)
-                if rr.status not in (200, 204, 304):
-                    return jsonify({"error": "qBittorrent 凭据已保存，但重启容器失败"}), 500
-            else:
-                return jsonify({"error": "qBittorrent 凭据保存失败，请检查 qb-config 是否正确挂载"}), 500
-        save_qb_settings(qb)
-    elif changed:
-        save_qb_settings(qb)
-
-    # 与 GET 一致: 外部 QB 不查配套 sidecar 容器(查了必然 not_deployed/unknown, 只会污染
-    # 日志并让界面误报"请检查 socket-proxy")。复用上面已算好的 _is_ext, 避免重复判断。
-    qb["managed"] = not _is_ext
-    qb["container"] = service_state(QB_CONTAINER) if not _is_ext else "not_deployed"
-    return jsonify({"ok": True, "qb": _redact_password(qb)})
 
 
 # --------------------------------------------------------------------------- 种子下载 (qBittorrent + DistroWatch)
@@ -3745,167 +2839,18 @@ def _ensure_qb_enabled() -> tuple[bool, tuple | None]:
     return True, None
 
 
-@app.get("/api/torrent/sources")
-def api_torrent_sources():
-    """扫描 DistroWatch 官方种子源 + 用户自加 RSS/链接, 返回可下载的种子列表。"""
-    ok, err = _ensure_qb_enabled()
-    if not ok:
-        return err
-    if not TORRENT_AVAILABLE:
-        return jsonify({"error": "种子模块未加载: " + (_torrent_import_err or "")}), 500
-    try:
-        res = dtorrents.scan_sources()
-        return jsonify({"ok": True, "source": res.get("source"),
-                        "reports": res.get("reports", []),
-                        "items": res.get("items", []),
-                        "user_rss": dtorrents.get_user_rss(),
-                        "user_links": dtorrents.get_user_links()})
-    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        log(f"[种子] 扫描种子源失败: {e!r}")
-        return jsonify({"error": f"扫描种子源失败: {e}"}), 500
 
 
 MAX_CLASSIFY_ITEMS = 5000        # 入参上限: 防超大数组打内存/撑爆返回体
 _CLASSIFY_FIELDS = ("title", "url", "pubDate", "source", "builtin")
 
 
-@app.post("/api/torrent/classify")
-def api_torrent_classify():
-    """把种子条目按分类分组返回。**纯计算**: 不抓外网、不落盘、不依赖 qBittorrent。
-
-    刻意不做 _ensure_qb_enabled 检查: 分类只影响展示, 不该因为没部署
-    qbittorrent sidecar 就用不了(/api/torrent/sources 的检查不要照抄到这里)。
-
-    入参: {"items": [{"title","url","pubDate","source","builtin"}, ...]}
-    出参: {"ok": true, "categories": [...], "counts": {...}}  (+ 可选 warnings)
-    """
-    body = request.get_json(silent=True)
-    if not isinstance(body, dict):
-        return jsonify({"ok": False, "error": "请求体必须是 JSON 对象"}), 400
-    items = body.get("items")
-    if not isinstance(items, list):
-        return jsonify({"ok": False, "error": "items 必须是数组"}), 400
-    if len(items) > MAX_CLASSIFY_ITEMS:
-        return jsonify({"ok": False,
-                        "error": "items 过多(上限 %d 条)" % MAX_CLASSIFY_ITEMS}), 400
-
-    # 字段白名单 + 类型校验: 只取认识的字段, 非字符串一律归一化, 缺 title 的条目丢弃
-    clean = []
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        url = it.get("url") if isinstance(it.get("url"), str) else ""
-        title = it.get("title") if isinstance(it.get("title"), str) else ""
-        title = title.strip() or url.strip()
-        if not title:
-            continue
-        clean.append({
-            "title": title,
-            "url": url,
-            "pubDate": it.get("pubDate") if isinstance(it.get("pubDate"), str) else "",
-            "source": it.get("source") if isinstance(it.get("source"), str) else "",
-            "builtin": bool(it.get("builtin")),
-        })
-
-    report = []
-    try:
-        cats = tcats.load_categories(report=report)     # 每次实时读, 不缓存
-        res = tcats.classify(clean, cats)
-        res["show_empty"] = tcats.load_show_empty()
-    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        log(f"[种子] 分类失败: {e!r}")
-        return jsonify({"ok": False, "error": f"分类失败: {e}"}), 500
-
-    res["ok"] = True
-    if report:      # 配置损坏必须可见, 不能静默当成"没有分类"
-        res["warnings"] = report
-        log(f"[种子] 分类配置告警: {report}")
-    return jsonify(res)
 
 
-@app.get("/api/torrent/categories")
-def api_torrent_categories_get():
-    """读取分类配置(设置页回显)。返回合并结果 + 原始用户配置 + 损坏告警。"""
-    report = []
-    try:
-        merged = tcats.load_categories(report=report)
-        user = tcats.load_user_doc()
-    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        log(f"[种子] 读取分类配置失败: {e!r}")
-        return jsonify({"ok": False, "error": f"读取分类配置失败: {e}"}), 500
-    res = {"ok": True, "categories": merged,
-           "user_categories": user["user_categories"],
-           "overrides": user["overrides"],
-           "show_empty": user["show_empty"]}
-    if report:
-        res["warnings"] = report
-    return jsonify(res)
 
 
-@app.post("/api/torrent/categories")
-def api_torrent_categories_post():
-    """保存用户分类配置。
-
-    信任边界: 入参一律当不可信输入, 只认 user_categories/overrides/show_empty,
-    其余键丢弃; 校验不过返回 400 而不是写坏配置。
-    预置分类**不可删除**, 只能通过 overrides 禁用。
-    """
-    body = request.get_json(silent=True)
-    if not isinstance(body, dict):
-        return jsonify({"ok": False, "error": "请求体必须是 JSON 对象"}), 400
-    doc = {
-        "user_categories": body.get("user_categories") or [],
-        "overrides": body.get("overrides") or {},
-        "show_empty": bool(body.get("show_empty", False)),
-    }
-    try:
-        tcats.save_user_doc(doc)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        log(f"[种子] 保存分类配置失败: {e!r}")
-        return jsonify({"ok": False, "error": f"保存分类配置失败: {e}"}), 500
-
-    report = []
-    merged = tcats.load_categories(report=report)
-    res = {"ok": True, "categories": merged, "show_empty": doc["show_empty"],
-           "user_categories": tcats.load_user_doc()["user_categories"],
-           "overrides": doc["overrides"]}
-    if report:
-        res["warnings"] = report
-    return jsonify(res)
 
 
-@app.get("/api/torrent/info")
-def api_torrent_info():
-    """查询 qBittorrent 连接状态 + 传输信息 + 种子列表(含本地是否已存在)."""
-    ok, err = _ensure_qb_enabled()
-    if not ok:
-        return err
-    if not TORRENT_AVAILABLE:
-        return jsonify({"error": "种子模块未加载"}), 500
-    try:
-        qb = _qb()
-        ver = qb.version()
-        if not ver:
-            cfg = qb_config()
-            # P2 修复: 密码绝不回传 —— 旧实现截取前 12 位, 12 位以内的密码(含默认
-            # adminadmin)等于全量泄露。与 _redact_password 的约定保持一致。
-            return jsonify({"ok": False, "error": f"无法连接 qBittorrent ({cfg['QB_URL']}), 请确认已部署 sidecar 且凭据正确",
-                            "config": {k: ("***" if k == "QB_PASS" else cfg[k]) for k in cfg}}), 200
-        transfer = qb.transfer_info()
-        toks = qb.list_torrents()
-        # 标记本地是否已存在同名文件
-        inv = disk_inventory()
-        names = {f["name"] for fs in inv.values() for f in fs}
-        for t in toks:
-            t["local_has"] = bool(set(t.get("name", "").split()) & names) or any(
-                f in names for f in _torrent_file_names(t))
-        return jsonify({"ok": True, "connected": True, "version": ver,
-                        "transfer": transfer, "torrents": toks})
-    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        log(f"[种子] 查询 qBittorrent 状态失败: {e!r}")
-        return jsonify({"ok": False, "error": f"查询失败: {e}"}), 500
 
 
 def _torrent_file_names(t: dict) -> list:
@@ -3919,154 +2864,16 @@ def _torrent_file_names(t: dict) -> list:
     return [base] if base else []
 
 
-@app.post("/api/torrent/add")
-def api_torrent_add():
-    """把种子(URL/磁力)交给 qBittorrent 下载。
-    body: {urls:[...], distro?, type?, category?}
-
-    保存路径随 ISO 存放模式走, 与镜像下载保持一致:
-      * classified(默认) — 能推断发行版则 /data/<type>/<发行版>/, 否则 /data/_torrents/
-      * flat             — 一律落到统一目录 /data/iso/(与镜像下载同一个目录)
-    保存路径经 qBittorrent `torrents/add` 的 `savepath` 参数下发(见 QBClient.add_torrent)。
-    """
-    ok, err = _ensure_qb_enabled()
-    if not ok:
-        return err
-    if not TORRENT_AVAILABLE:
-        return jsonify({"error": "种子模块未加载"}), 500
-    body = request.get_json(force=True, silent=True) or {}
-    urls = [u for u in (body.get("urls") or []) if u and str(u).strip()]
-    if not urls:
-        return jsonify({"error": "未提供任何种子 URL/磁力链接"}), 400
-    urls = [str(u).strip() for u in urls]
-    for u in urls:
-        if u.startswith("magnet:"):
-            continue
-        if not _is_http_url(u):
-            return jsonify({"error": f"非法的种子链接(仅允许 http/https/magnet): {u[:80]}"}), 400
-    # 推断保存路径
-    save_path = None
-    # 后端优先从 URL 文件名推断发行版(可靠), 前端传来的 distro 可能是完整文件名(如
-    # "NetBSD-9.5-amd64.iso")而非发行版名, 若直接当目录名会用错(类型也恒为 linux)。
-    distro = (body.get("distro") or "").strip()
-    typ = (body.get("type") or "linux").strip()
-    probe = urls[0].rsplit("/", 1)[-1]
-    dname, dtype = distro_name_from_torrent(probe)
-    if dname:
-        # 官方种子列表/标准 .torrent 文件名 → 用推断出的发行版名(更准确)
-        distro, typ = dname, dtype
-    elif not distro:
-        # 推断失败且前端没给 distro → 用文件名主体兜底, 归入 linux 类型
-        base = probe.rsplit(".", 1)[0] if "." in probe else probe
-        distro = base
-    if distro:
-        # H2 修复: 路径穿越防护, 只有通过白名单校验才允许指向该保存路径
-        target = _safe_join(typ, distro)
-        if target is not None:
-            target.mkdir(parents=True, exist_ok=True)
-            save_path = str(target)
-        else:
-            # distro/typ 非法(含 ../ 等): 回退到受控目录, 不信任用户输入
-            fallback = _torrent_fallback_dir()
-            fallback.mkdir(parents=True, exist_ok=True)
-            save_path = str(fallback)
-            log(f"[种子] 拒绝非法保存路径 {typ}/{distro}, 回退到 {save_path}")
-    else:
-        fallback = _torrent_fallback_dir()
-        fallback.mkdir(parents=True, exist_ok=True)
-        save_path = str(fallback)
-    try:
-        qb = _qb()
-        r = qb.add_torrent(urls, save_path=save_path, category=body.get("category") or "iso-hub")
-        if not r.get("ok"):
-            return jsonify({"error": f"qBittorrent 添加失败: {r.get('error')}"}), 502
-        log(f"[种子] 添加 {len(urls)} 个下载, 保存到 {save_path}")
-        return jsonify({"ok": True, "save_path": save_path, "distro": distro, "type": typ})
-    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        log(f"[种子] 添加失败: {e!r}")
-        return jsonify({"error": f"添加失败: {e}"}), 500
 
 
-@app.post("/api/torrent/delete")
-def api_torrent_delete():
-    """从 qBittorrent 删除种子。body: {hashes:[...], delete_files?:bool}"""
-    ok, err = _ensure_qb_enabled()
-    if not ok:
-        return err
-    if not TORRENT_AVAILABLE:
-        return jsonify({"error": "种子模块未加载"}), 500
-    body = request.get_json(force=True, silent=True) or {}
-    hashes = [str(h) for h in (body.get("hashes") or []) if h]
-    if not hashes:
-        return jsonify({"error": "未提供种子 hash"}), 400
-    delete_files = bool(body.get("delete_files"))
-    try:
-        qb = _qb()
-        ok = qb.delete_torrents(hashes, delete_files)
-        log(f"[种子] 删除 {len(hashes)} 个, 同时删文件={delete_files}")
-        return jsonify({"ok": ok})
-    except Exception as e:  # noqa: BLE001 - 边界: 请求处理器兜底, 未预期异常折成 500 返回前端
-        return jsonify({"error": f"删除失败: {e}"}), 500
 
 
-@app.post("/api/torrent/rss/add")
-def api_torrent_rss_add():
-    ok, err = _ensure_qb_enabled()
-    if not ok:
-        return err
-    body = request.get_json(force=True, silent=True) or {}
-    url = (body.get("url") or "").strip()
-    if not _is_http_url(url):
-        return jsonify({"error": "RSS 地址必须是有效的 http/https 链接"}), 400
-    try:
-        lst = dtorrents.add_user_rss(url)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    log(f"[种子] 添加 RSS 源: {url}")
-    return jsonify({"ok": True, "user_rss": lst})
 
 
-@app.post("/api/torrent/rss/remove")
-def api_torrent_rss_remove():
-    ok, err = _ensure_qb_enabled()
-    if not ok:
-        return err
-    body = request.get_json(force=True, silent=True) or {}
-    url = (body.get("url") or "").strip()
-    lst = dtorrents.remove_user_rss(url)
-    log(f"[种子] 移除 RSS 源: {url}")
-    return jsonify({"ok": True, "user_rss": lst})
 
 
-@app.post("/api/torrent/link/add")
-def api_torrent_link_add():
-    ok, err = _ensure_qb_enabled()
-    if not ok:
-        return err
-    body = request.get_json(force=True, silent=True) or {}
-    url = (body.get("url") or "").strip()
-    if url.startswith("magnet:"):
-        pass
-    elif not _is_http_url(url):
-        return jsonify({"error": "链接必须是有效的 http/https 磁力链接"}), 400
-    try:
-        lst = dtorrents.add_user_link(url, (body.get("distro") or ""))
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    log(f"[种子] 添加手动链接: {url}")
-    return jsonify({"ok": True, "user_links": lst})
 
 
-@app.post("/api/torrent/link/remove")
-def api_torrent_link_remove():
-    ok, err = _ensure_qb_enabled()
-    if not ok:
-        return err
-    body = request.get_json(force=True, silent=True) or {}
-    url = (body.get("url") or "").strip()
-    lst = dtorrents.remove_user_link(url)
-    log(f"[种子] 移除手动链接: {url}")
-    return jsonify({"ok": True, "user_links": lst})
 
 
 # ---------------- v1.5.0: 运行期可写性自检 ----------------
@@ -4221,6 +3028,36 @@ def preflight_writable() -> bool:
         return False
     return True
 
+
+
+# --------------------------------------------------------------------------- 路由层安装
+def _install_routes() -> None:
+    """把 web/api/ 下的 9 个蓝图装到 app 上，并把视图回填到本模块命名空间。
+
+    放在文件末尾调用的原因：蓝图的视图函数用 `core.log` 这类**运行期**查找，
+    不要求内核符号在 import 期就存在；但安装时必须确认内核定义已全部就位。
+
+    把内核模块塞进 `app.extensions`：同一个 app.py 在测试进程里可能被
+    `import app` 与 `import web.app` 各加载一次，成为两个模块对象、各带一个
+    Flask 实例。路由层不能靠"猜哪个是内核"来取符号 —— 请求由哪个实例处理，
+    就用哪个实例携带的内核。详见 web/api/_ctx.py 顶部注释。
+    """
+    import importlib
+
+    import api._ctx as _ctx
+
+    _kernel = sys.modules[__name__]
+    app.extensions[_ctx.KERNEL_KEY] = _kernel
+
+    # 顺序即 URL 注册顺序（Flask 按 rule 具体度排序，不影响匹配），
+    # 只影响 `app.url_map` 的阅读顺序 —— 按业务域排，便于排查。
+    for _name in ("misc", "files", "custom_sources", "schedules", "user",
+                  "notify", "shares", "qb", "torrent"):
+        _mod = importlib.import_module(f"api.{_name}")
+        _mod.install(app, _kernel)
+
+
+_install_routes()
 
 if __name__ == "__main__":
     # v1.5.0: 先确认挂载卷真的写得进去, 再往下初始化。

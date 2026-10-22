@@ -16,17 +16,27 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 APP_PY = REPO_ROOT / "web" / "app.py"
+API_DIR = REPO_ROOT / "web" / "api"
 API_MD = REPO_ROOT / "wiki" / "API.md"
 
-ROUTE_RE = re.compile(r'@app\.(get|post|put|delete)\("([^"]+)"')
+# v1.7.0: 路由按域搬到 web/api/*.py，装饰器从 @app.xxx 变成 @bp.xxx。
+# 两种都认 —— 只认 @app. 会让这个守卫变成空转（代码里 0 条路由、文档里 54 条，
+# 反向断言照样绿，等于什么都没查）。
+ROUTE_RE = re.compile(r'@(?:app|bp)\.(get|post|put|delete)\("([^"]+)"')
 # 文档表格里的路由行: `| GET | `/api/xxx` | ... |` 或 `| GET / POST | `/api/xxx` | ... |`
 # (方法列是纯文本, 路径列才带反引号 —— 按实际排版写, 别照着想象改正则)
 DOC_ROW_RE = re.compile(r"\|\s*([A-Z][A-Z/ ]*?)\s*\|\s*`([^`]+)`\s*\|")
 
 
 def _code_routes() -> set:
-    text = APP_PY.read_text(encoding="utf-8")
-    return {(m.group(1).upper(), m.group(2)) for m in ROUTE_RE.finditer(text)}
+    """代码里声明的全部路由（内核 + 路由层）。"""
+    texts = [APP_PY.read_text(encoding="utf-8")]
+    if API_DIR.is_dir():
+        texts += [f.read_text(encoding="utf-8") for f in sorted(API_DIR.glob("*.py"))]
+    out = set()
+    for text in texts:
+        out |= {(m.group(1).upper(), m.group(2)) for m in ROUTE_RE.finditer(text)}
+    return out
 
 
 def _doc_routes() -> set:

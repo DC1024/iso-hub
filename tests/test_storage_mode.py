@@ -35,12 +35,15 @@ sys.path.insert(0, str(REPO_ROOT / "iso_download"))
 import app  # noqa: E402
 import iso_runner  # noqa: E402
 import sync_subscriptions  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _srcctl import source_tree  # noqa: E402
 import download_linux  # noqa: E402
 
 HTML = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
 
 FLAT = "iso"           # 平铺目录名(DATA_DIR/iso)
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 
 
 class StorageModeBase(unittest.TestCase):
@@ -296,11 +299,15 @@ class TestFlatConstantsAgree(unittest.TestCase):
         以及 v1.4.0 的重新校验(iso_runner --verify-only)。
 
         只按行断言(不跨行), 免得行尾 CRLF/LF 差异把测试弄红。
+
+        v1.7.0: 三条命令分别落在 web/api/misc.py 与内核里，且常量写成
+        `core.load_storage_mode()`（现查，保证 patch 生效）。因此扫整个路由层，
+        并允许可选的 `core.` 前缀 —— 但仍是**逐个统计调用点**，不是"出现过就算过"。
         """
-        src = (REPO_ROOT / "web" / "app.py").read_text(encoding="utf-8")
-        self.assertEqual(src.count('"--storage-mode", load_storage_mode(),'), 3,
-                         "app.py 应为 iso_runner / sync_subscriptions / 重新校验三条子进程"
-                         "都传 --storage-mode")
+        src = source_tree()
+        self.assertEqual(
+            len(re.findall(r'"--storage-mode",\s*(?:core\.)?load_storage_mode\(\),', src)), 3,
+            "应为 iso_runner / sync_subscriptions / 重新校验三条子进程都传 --storage-mode")
 
 
 # --------------------------------------------------------------------- F. 平铺清理安全性

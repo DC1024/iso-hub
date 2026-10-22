@@ -28,6 +28,9 @@ sys.path.insert(0, str(REPO_ROOT / "web"))
 import app  # noqa: E402
 import iso_runner  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _srcctl import source_tree  # noqa: E402
+
 
 # --------------------------------------------------------------------------- runner 侧
 class _FakeDownloader:
@@ -174,9 +177,11 @@ class RelMappingConsistencyTest(unittest.TestCase):
     """runner 与 app 的 rel 拼法必须一致, 否则按钮会指向不存在的文件。"""
 
     def test_both_sides_use_type_name_file(self):
-        app_src = (REPO_ROOT / "web" / "app.py").read_text(encoding="utf-8")
+        # v1.7.0: 重新校验的视图搬到 web/api/misc.py，扫整个路由层。
+        app_src = source_tree()
         self.assertIn('rel = f"{typ}/{name}/{fname}"', app_src)
-        self.assertIn('"--rel", rel', app_src)
+        # 允许尾逗号: 该参数已经写成多行, 逐字 matching 会把排版变化误报成逻辑回归
+        self.assertRegex(app_src, r'"--rel",\s*rel\b')
 
 
 # --------------------------------------------------------------------------- app 侧
