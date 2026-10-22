@@ -121,7 +121,7 @@
   },
   {
     "id": "dl-ticket-not-validated",
-    "file": "web/app.py",
+    "file": "web/api/files.py",
     "find": "    if not hit:\n        return jsonify({\"error\": \"下载链接无效或已过期, 请在面板上重新点击下载\"}), 403\n",
     "replace": "    if False:  # MUTANT: 不再校验票据有效性\n        return jsonify({\"error\": \"下载链接无效或已过期, 请在面板上重新点击下载\"}), 403\n",
     "expect_test": "tests/test_local_download.py",
@@ -146,8 +146,8 @@
   {
     "id": "dl-auth-allowlist-removed",
     "file": "web/app.py",
-    "find": "request.path == \"/api/health\" or request.path == \"/api/files/get\"):\n            return None\n        if request.headers.get(\"X-Auth-Token\") == AUTH_TOKEN:\n            return None\n        if _valid_session():\n            return None\n        return jsonify({\"error\": \"unauthorized\"}), 401\n",
-    "replace": "request.path == \"/api/health\"):\n            return None\n        if request.headers.get(\"X-Auth-Token\") == AUTH_TOKEN:\n            return None\n        if _valid_session():\n            return None\n        return jsonify({\"error\": \"unauthorized\"}), 401\n",
+    "find": "        if request.method == \"GET\" and (request.path == \"/\" or request.path.startswith(\"/static/\") or request.path == \"/api/health\" or request.path == \"/api/files/get\"):\n            return None\n",
+    "replace": "        if request.method == \"GET\" and (request.path == \"/\" or request.path.startswith(\"/static/\") or request.path == \"/api/health\"):\n            return None\n",
     "expect_test": "tests/test_local_download.py",
     "desc": "强制登录下不再放行 /api/files/get -> 浏览器导航式下载直接 401(功能失效)"
   },
