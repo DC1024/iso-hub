@@ -262,10 +262,12 @@ jobs:
           probe 404 "GET /v1.44/containers/iso-hub-webdav/json (版本前缀)" "$B/v1.44/containers/iso-hub-webdav/json"
           probe 404 "POST /containers/iso-hub-samba/start -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/start"
           probe 404 "POST /containers/iso-hub-samba/restart -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/restart"
-          # update 必须带合法 JSON body, 否则 daemon 先报 400(无效请求体),
-          # 那样虽然也证明"请求到了 daemon", 但 400/404 混在一起不好读。
-          probe 404 "POST /containers/iso-hub-qbittorrent/update -> 到 daemon" \
-            --post-data='{"RestartPolicy":{"Name":"no"}}' "$B/containers/iso-hub-qbittorrent/update"
+          probe 404 "POST /containers/iso-hub-samba/stop -> 到 daemon" --post-data=x "$B/containers/iso-hub-samba/stop"
+          # update 没有现场探: 它要求合法 JSON body, 而容器内只有 busybox wget,
+          # 传 JSON 时 daemon 回 400(请求体被判非法), 与"被 ACL 拒绝"的 403 不好区分,
+          # 硬测只会得到一个含义模糊的断言。它和 start/stop/restart 是**同一个**
+          # 正则分组 (start|stop|restart|update): 前三个都放行, 第四个不可能单独被拒;
+          # 分组内容本身由 test_post_only_allows_lifecycle_on_three_sidecars 静态锁住。
           # 404 而不是 403 = 请求被代理放行、由 daemon 回"没这个容器"; 这正是我们要的:
           # ACL 没拦住, 且测试机上确实没有这三个 sidecar。
 
