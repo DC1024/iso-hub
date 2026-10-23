@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO_ROOT / "iso_download"))
 import app  # noqa: E402
 import iso_runner  # noqa: E402
 import sync_subscriptions  # noqa: E402
+import version  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _srcctl import source_tree  # noqa: E402
@@ -43,7 +44,8 @@ import download_linux  # noqa: E402
 HTML = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
 
 FLAT = "iso"           # 平铺目录名(DATA_DIR/iso)
-VERSION = "1.7.0"
+# 版本号不再写死在测试里: web/version.py 是唯一真源, 这里跟着它走。
+VERSION = version.__version__
 
 
 class StorageModeBase(unittest.TestCase):
@@ -527,7 +529,12 @@ class TestFrontendStorageModeContract(unittest.TestCase):
 
     def test_version_tag_bumped(self):
         self.assertIn(f"APP_VERSION='{VERSION}'", HTML)
-        self.assertIn(f"VERSION_TAG='{VERSION}'", HTML)
+        # v1.8.3 起 VERSION_TAG 由 APP_VERSION 派生(前端也不留两份字面量),
+        # 所以要么两者都是同一个字面量, 要么是派生写法 —— 都算一致。
+        self.assertTrue(
+            f"VERSION_TAG='{VERSION}'" in HTML or "VERSION_TAG=APP_VERSION" in HTML,
+            "VERSION_TAG 必须与 APP_VERSION 一致(或直接由它派生)",
+        )
 
 
 # ----------------------------------------------------------------- K. 打包/文档契约

@@ -34,6 +34,9 @@
 
 - 所有 API 响应带 `Cache-Control: no-store`，避免前端「刷新列表」拿到浏览器缓存的旧数据。
   唯一例外是 `/api/files/get`（大文件必须允许缓存分片，否则 Range 续传失效）。
+- `GET /` 与 `/api/health` 额外带 **`X-Version`** 响应头，值是 `web/version.py` 里的当前版本号。
+  页面徽标也以 `/api/health` 的 `version` 为准（HTML 里的 `APP_VERSION` 只是首屏兜底），
+  所以"徽章显示的版本"与"实际跑的镜像"不会再对不上。
 - 错误体统一为 `{"error": "..."}`，部分接口附带 `code` 字段。
 - 下载/刷新/同步这类长任务都是**后台异步**的：POST 立即返回，进度走 `/api/state`
   与 `/api/logs`（增量拉取）。同一时刻只允许一个任务，冲突返回 `409`。
@@ -43,7 +46,7 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/` | 前端单页（`index.html`，禁用缓存） |
-| GET | `/api/health` | 健康与自检：`gpg_ledger` 账本统计、`writable` / `writable_states` 四态探针 |
+| GET | `/api/health` | 健康与自检：`version` 当前版本号（唯一真源 `web/version.py`）、`gpg_ledger` 账本统计、`writable` / `writable_states` 四态探针 |
 | GET | `/api/user/me` | 当前登录状态（不强制已登录），附 `require_login` / `auth_configured` 供前端判定是否弹遮罩 |
 | POST | `/api/user/login` | 登录，成功返回 `token`。失败统一 `code=bad_credentials`，不区分用户名不存在与密码错误 |
 | POST | `/api/user/logout` | 注销当前会话 |
@@ -94,7 +97,7 @@
 | GET | `/api/subscriptions` | 订阅配置（自动拉最新 + 删旧） |
 | POST | `/api/subscriptions` | 保存订阅配置 |
 | POST | `/api/sync-subscriptions` | 对所有已启用订阅执行：刷新清单 → 下载最新 N → 删旧版 |
-| GET / POST / DELETE | `/api/schedules` | 定时任务增删改查 |
+| GET / POST / DELETE | `/api/schedules` | 定时任务增删改查。**POST 会校验参数**：`type` 必须是 `daily`/`weekly`/`monthly`/`yearly`/`once`，`time` 必须是 `HH:MM`（00:00–23:59），`once` 还需有效的 `scheduled_at`；非法一律 400 且不落盘 |
 | POST | `/api/schedules/run` | 手动触发一次订阅同步 |
 
 ## 网络共享（Samba / WebDAV）

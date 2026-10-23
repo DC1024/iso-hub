@@ -189,6 +189,12 @@
   .tbl tr:last-child td{border-bottom:0}
   .tbl td:first-child{padding-left:16px;width:30px}
   .tbl td:nth-child(2){width:26px}
+  /* P2 修复: 清单表格此前没有任何列标题 —— 第 5 列是「下载源」下拉、第 6 列是状态文案、
+     第 7 列是锁定开关, 不看源码无法判断含义。表头用弱化色 + 细线, 不抢数据行的注意力。 */
+  .tbl th{padding:6px 16px 6px 0;font-size:11px;font-weight:600;color:var(--ink3);
+    text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  .tbl th:first-child{padding-left:16px}
+  /* 已折叠的分组表格整张隐藏时, 表头跟着一起隐藏(display:none 在 table 上, 无需额外处理) */
   .fname{font-family:var(--mono);font-size:12.8px;word-break:break-all;color:var(--fname)}
   .fname a{color:inherit;text-decoration:none;margin-left:4px;opacity:.55}
   .fname a:hover{opacity:1;color:var(--brand2)}
@@ -373,7 +379,7 @@
           <input id="rs-sub" class="inp" style="grid-column:1/-1" placeholder="[高级] sub_listing_template: 子页URL模板(versioned_flat_listing用),如 {listing_url}{version}/Workstation/x86_64/iso/" data-page-node-id="9K8ZKQiXu85RM9lCirbv0q">
           <input id="rs-dltpl" class="inp" style="grid-column:1/-1" placeholder="下载模板,如 {listing_url}{version}/ubuntu-{version}-desktop-amd64.iso" data-page-node-id="GQ3u7PGp1b39FLELzgGH3o">
           <input id="rs-chktpl" class="inp" style="grid-column:1/-1" placeholder="校验模板(可选),如 {listing_url}{version}/SHA256SUMS" data-page-node-id="3nAdFa46weFok7mqejo6Ae">
-          <div id="rs-versions-row" style="display:none;grid-column:1/-1;display:flex;gap:8px;align-items:center" data-page-node-id="dYlvjiLJmN9RIVhfCzDckS">
+          <div id="rs-versions-row" style="display:none;grid-column:1/-1;gap:8px;align-items:center" data-page-node-id="dYlvjiLJmN9RIVhfCzDckS">
             <span class="muted" style="font-size:12px;white-space:nowrap" data-i18n="fixedList" data-page-node-id="QfRkOIFnt4Fd8eSa51eNYu">固定版本列表(逗号分隔)</span>
             <input id="rs-versions" class="inp" style="flex:1" placeholder="如 7.9.2009,8.0.2008 (static策略用)" data-page-node-id="gAfrdwI99JTNiddwEHLuF7">
           </div>
@@ -718,6 +724,11 @@
 <script>
 let GROUPS=[], POLL=null, RUNNING=false, AFTER=0, allChecked=false, prev={}, LOGF=localStorage.getItem('iso_hub_logflt')||'all';
 let TORR_POLL=null; // 种子下载中列表自动刷新定时器
+/* P10: 镜像列表里已勾选的行, 以 download_url 为 key。
+   勾选状态此前只活在 DOM 里, 而 setFilter→renderCurrent→loadDistros 会整表重建 ——
+   切一次筛选、刷一次新, 勾选就没了(用户白勾)。现在按 url 记住, 渲染后回填。
+   注意: 这**不是**"让隐藏行参与操作" —— 删除/下载仍只看可见行, 见 visibleChecked()。 */
+let ISO_SEL=new Set();
 let SUBS=[]; // 当前订阅列表(用于镜像列表显示订阅状态)
 // 种子分类的内存态。声明放最上方: applyLang() 在初始化早期就会用到它们,
 // 若声明在文件后半段会踩 let 的暂时性死区(TDZ) ReferenceError。
@@ -728,8 +739,11 @@ let TORR_SEL=new Set(); let PROTECTED=new Set();
 // 前端版本号: 与 git tag / 镜像 tag 同源(去掉前缀 v), 发版时两行同步递增。
 // v1.3.20 起统一为发布版本号 —— 此前前端走 "beta 2.x"、Release 走 v1.3.x, 两套编号
 // 长期并行(2.5 对 1.3.19), 徽标显示的版本和用户实际跑的镜像对不上。
-const APP_VERSION='1.7.0';
-const VERSION_TAG='1.7.0';
+// P9 修复: 这个常量只是**首屏兜底**。真值以后端 web/version.py 为准 ——
+// 曾经常量停在 1.7.0 而镜像已到 1.8.2, 徽标整整骗了两个版本。
+// 一致性由 tests/test_version_consistency.py 锁死(它读的就是下面这一行)。
+let APP_VERSION='1.8.3';
+let VERSION_TAG=APP_VERSION;
 // 立即在标题旁显示版本徽章(页面一加载就有, 无需等API)
 (function(){const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;})();
 
@@ -795,6 +809,13 @@ const I18N={
   'metaStat':{zh:'清单元数据更新时间',en:'Meta Updated'},
   'versions':{zh:'个版本',en:'versions'},
   'local':{zh:'本地',en:'Local'},
+  // P2: 清单表格的列标题(8 列, 前两列是勾选框与状态点, 留空)
+  'colFile':{zh:'文件名',en:'File'},
+  'colLocalSize':{zh:'本地大小',en:'Local size'},
+  'colSource':{zh:'下载源',en:'Source'},
+  'colStatus':{zh:'状态',en:'Status'},
+  'colLock':{zh:'锁定',en:'Lock'},
+  'colAction':{zh:'操作',en:'Actions'},
   'downloaded':{zh:'已下载',en:'Downloaded'},
   'unverified':{zh:'未验签',en:'Not verified'},
   'unverifiedTip':{zh:'文件长度与服务器声明一致，但校验源不可达或清单里没有该文件名 —— 这次落定没有任何 SHA256/GPG 证据。检查该发行版的 checksum 配置后，点本行 ⟳ 重新校验（只读盘，不会重新下载）。',en:'File length matches the server, but the checksum source was unreachable or the filename was missing from its manifest — this file was accepted without any SHA256/GPG evidence. Check the checksum config, then click ⟳ on this row to verify it (reads the file only, no re-download).'},
@@ -1227,6 +1248,14 @@ function askToken(){return false} // 认证改为登录会话(REQUIRE_LOGIN)后,
 // 登录接口自身返回的 401 是"凭据错误"的业务响应(带 code/error), 必须原样透传给调用方,
 // 否则会被下面的 401 兜底逻辑替换成笼统的"请先登录后再操作", 让用户看不出哪里错了。
 const AUTH_ENDPOINTS=['/api/user/login'];
+/* P5 修复: 401 兜底只应改写「会话失效」, 不该改写「业务性 401」。
+   改密码接口在旧密码错误时返回 401 {"error":"当前密码错误"} —— 这是准确的提示,
+   但旧代码对所有非 AUTH_ENDPOINTS 的 401 一律换成"请先登录后再操作", 用户会以为
+   登录失效而跑去重新登录, 真正的原因(旧密码打错)被彻底掩盖。
+   现在先读一遍响应体: 后端给了**具体原因**就原样返回, 只有语义为
+   unauthorized(会话过期/未登录)或读不出 JSON 时才走原来的改写分支。
+   这样以后任何接口返回业务性 401 都不会再被吞掉, 不必逐个往白名单里加路径。 */
+function isSessionLost(j){return !j||!j.error||j.error==='unauthorized'}
 // jget 的 401 分支过去无条件 `return {}`, 调用方拿到的空对象和"接口真的返回空"
 // 无法区分, 于是失败被静默吞掉(典型症状: 点「刷新列表」毫无反应也无报错)。
 // askToken() 现恒返回 false, 该分支实际上已经变成"无条件吞掉 401"。
@@ -1243,7 +1272,18 @@ async function jget(u){
   if(!r.ok){LAST_GET_FAILED={status:r.status,url:u};}
   try{return await r.json()}catch(e){return{}}
 }
-async function jpost(u,b){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'});if(r.status===401&&!AUTH_ENDPOINTS.includes(u)){if(!askToken())return{s:401,j:{error:t('pleaseLogin')}};r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'})}return{s:r.status,j:await r.json()}}
+async function jpost(u,b){
+  const send=()=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'});
+  let r=await send();
+  if(r.status===401&&!AUTH_ENDPOINTS.includes(u)){
+    // 先看后端说了什么: 具体原因(如「当前密码错误」)直接透传, 只改写会话失效。
+    let j=null;try{j=await r.clone().json()}catch(e){}
+    if(!isSessionLost(j))return{s:401,j};
+    if(!askToken())return{s:401,j:{error:t('pleaseLogin')}};
+    r=await send();
+  }
+  return{s:r.status,j:await r.json()}
+}
 
 /* ---------- 数据渲染 ---------- */
 /* 刷新镜像列表(「⟳ 刷新列表」按钮 / 各写操作完成后调用)。
@@ -1295,6 +1335,11 @@ function shortSrc(u){
 }
 function render(d){
   const groups=d.groups||[];
+  // P10: 清单里已经消失的条目要从勾选集合里剔除(文件被删、清单刷新后换版本),
+  // 否则一个不存在的 url 会被带进下载/删除入参。
+  const live=new Set();
+  groups.forEach(g=>(g.entries||[]).forEach(e=>{if(e.download_url)live.add(e.download_url)}));
+  for(const u of [...ISO_SEL])if(!live.has(u))ISO_SEL.delete(u);
   $('#sGroups').textContent=groups.length;
   const total=groups.reduce((a,g)=>a+g.file_count,0);
   $('#sFiles').textContent=total;
@@ -1309,6 +1354,17 @@ function render(d){
     return;
   }
   $('#empty').style.display='none';
+  // P2: 列标题(8 列与数据行一一对应)。前两列是勾选框与状态色点, 留空不占文案。
+  // 放在 render 内构造而不是模块级常量 —— 切语言时 loadDistros→render 会重建, 表头跟着翻译。
+  const tblHead='<thead><tr>'
+    +'<th></th><th></th>'
+    +'<th>'+t('colFile')+'</th>'
+    +'<th>'+t('colLocalSize')+'</th>'
+    +'<th>'+t('colSource')+'</th>'
+    +'<th class="td-r">'+t('colStatus')+'</th>'
+    +'<th class="td-r">'+t('colLock')+'</th>'
+    +'<th class="td-r">'+t('colAction')+'</th>'
+    +'</tr></thead>';
   groups.forEach(g=>{
     const card=document.createElement('div');card.className='card';
     const stray=g.stray_files||[];
@@ -1339,7 +1395,7 @@ function render(d){
         ?(t('local')+' '+fmt(shownSize)+((isStop||isRun)?' <span class="muted">('+t('dlPartialSize')+')</span>':''))
         :'<span class="muted">—</span>';
       rows+=`<tr data-url="${esc(e.download_url)}" data-rel="${esc(e.rel||(g.type+'/'+g.name+'/'+e.filename))}" data-status="${esc(S)}">
-        <td><input type="checkbox" class="ck" data-url="${esc(e.download_url)}"></td>
+        <td><input type="checkbox" class="ck" data-url="${esc(e.download_url)}"${ISO_SEL.has(e.download_url)?' checked':''}></td>
         <td><span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${dot}</span></td>
         <td><div class="fname">${esc(e.filename)}<a target="_blank" rel="noopener" href="${esc(e.download_url)}" title="${t('openUrl')}">↗</a></div></td>
         <td class="size">${sizeCell}</td>
@@ -1367,7 +1423,7 @@ function render(d){
         <button class="btn-fav ${isFav(g.type,g.name)?'on':''}" onclick="toggleFav(this)" title="${isFav(g.type,g.name)?t('unfavGroup'):t('favGroup')}">${isFav(g.type,g.name)?'★':'☆'}</button>
         <button class="btn-sub ${isSubscribed(g.type,g.name)?'on':''}" data-act="subscribe" data-name="${esc(g.name)}" data-type="${esc(g.type)}" title="${isSubscribed(g.type,g.name)?t('subTipOn'):t('subTipOff')}">${isSubscribed(g.type,g.name)?('★ '+t('subscribed')):('☆ '+t('subscribe'))}</button>
       </div>
-      <table class="tbl" id="tbl-${esc(g.type)}-${esc(g.name)}" style="${isFolded(g.type,g.name)?'display:none':''}">${rows}${strayHtml}</table>`;
+      <table class="tbl" id="tbl-${esc(g.type)}-${esc(g.name)}" style="${isFolded(g.type,g.name)?'display:none':''}">${tblHead}<tbody>${rows}${strayHtml}</tbody></table>`;
     box.appendChild(card);
   });
   $('#sFiles').textContent=total;
@@ -1381,21 +1437,41 @@ function refreshSelState(){ // 全选按钮文案: 只统计「当前可见(未�
   $('#btnSel').textContent=allChecked?('☐ '+t('deselectAll')):('☑ '+t('selectAll'));
 }
 function toggleAll(){document.querySelectorAll('.ckg').forEach(c=>c.checked=!allChecked);toggleAllGroups(!allChecked)}
+/* P10: 勾选集合与 DOM 的唯一同步点 —— 任何改 .checked 的地方都要过这里,
+   否则重绘回填时会用旧集合把用户刚点的结果盖掉。 */
+function syncIsoSel(c,on){const u=c.dataset.url;if(!u)return;if(on)ISO_SEL.add(u);else ISO_SEL.delete(u)}
 function toggleAllGroups(v){
-  // 全选/取消全选只作用于可见行, 避免选中被筛选隐藏的项
+  // 全选只作用于可见行, 避免选中被筛选隐藏的项;
+  // 取消全选则清空**所有**(含被筛掉的) —— 否则切回「全部」还留着一堆勾。
   document.querySelectorAll('#groups .ck').forEach(c=>{
     const tr=c.closest('tr');
-    if(tr&&tr.style.display==='none')return;
+    if(v&&tr&&tr.style.display==='none')return;
     c.checked=v;
+    syncIsoSel(c,v);
   });
   refreshSelState();
 }
-function toggleGroup(cb){const g=cb.closest('.card');g.querySelectorAll('.ck').forEach(c=>c.checked=cb.checked);refreshSelState()}
-document.addEventListener('change',e=>{if(e.target.classList.contains('ck'))refreshSelState()});
+function toggleGroup(cb){
+  const g=cb.closest('.card');
+  g.querySelectorAll('.ck').forEach(c=>{c.checked=cb.checked;syncIsoSel(c,cb.checked)});
+  refreshSelState()
+}
+document.addEventListener('change',e=>{
+  if(!e.target.classList.contains('ck'))return;
+  syncIsoSel(e.target,e.target.checked);
+  refreshSelState();
+});
+/* 当前用户**看得见**的已勾选行。下载/删除一律走这里:
+   勾选从 v1.8.3 起能跨筛选保留, 若不过滤可见性, 一个被筛掉的行会被悄悄带进
+   删除范围(它在界面上根本看不见)。线上功能测试用例 84 专门盯这条。 */
+function visibleChecked(){
+  return [...document.querySelectorAll('#groups .ck:checked')]
+    .filter(c=>{const tr=c.closest('tr');return tr&&tr.style.display!=='none'});
+}
 
 /* ---------- 操作 ---------- */
 async function downloadSel(){
-  const cks=[...document.querySelectorAll('.ck:checked')];
+  const cks=visibleChecked(); // P10: 只取看得见的行
   if(!cks.length)return toast(t('pleaseSel'),'err');
   const map=new Map();
   GROUPS.forEach(g=>g.entries.forEach(e=>map.set(e.download_url,e)));
@@ -1411,6 +1487,9 @@ async function downloadSel(){
   if(r.s===409)return toast(r.j.error,'err');
   if(r.s!==200)return toast(r.j.error||t('startFailed'),'err');
   toast(t('taskStarted')+r.j.files+' '+t('files'));
+  // 已经发起过下载, 勾选留着没有意义(与种子批量添加的 TORR_SEL 一致):
+  // 不清的话, 刷新/切筛选回填会把它们又勾上, 容易被当成"还没开始"再点一次。
+  ISO_SEL.clear();document.querySelectorAll('#groups .ck').forEach(c=>c.checked=false);refreshSelState();
   AFTER=0;startPoll(true);
 }
 async function updateMeta(){
@@ -1432,7 +1511,7 @@ function filenameOf(e){
   return u.split('/').pop()||'';
 }
 async function deleteSel(){
-  const cks=[...document.querySelectorAll('.ck:checked')];
+  const cks=visibleChecked(); // P10: 只取看得见的行
   if(!cks.length)return toast(t('pleaseSelAny'),'err');
   // 建立 download_url -> {entry, type} 映射(type 只在组层级, 需一并带上)
   const map=new Map();
@@ -1537,7 +1616,7 @@ async function downloadLocalSel(){
     if(sub&&sub.dataset.sub==='source')return torrAddSel();
     return torrDlLocalSel();
   }
-  const cks=[...document.querySelectorAll('.ck:checked')];
+  const cks=visibleChecked(); // P10: 只取看得见的行
   if(!cks.length)return toast(t('pleaseSel'),'err');
   const map=new Map();
   GROUPS.forEach(g=>g.entries.forEach(e=>map.set(e.download_url,e)));
@@ -1682,6 +1761,13 @@ function clearLog(){const box=$('#log');if(box)box.innerHTML='';AFTER=0;toast(t(
 
 refreshProtected();   // 先加载受保护名单, 再渲染列表以显示🔒状态
 (function(){const s=$('#logflt');if(s){s.value=LOGF;}applyLogFilter();})();
+// P9: 版本号以服务端为准。静态常量只保证首屏立刻有内容(不闪空), 一旦拿到
+// /api/health 就用它覆盖 —— 这样前端常量忘了随发版递增, 界面也不会显示错版本。
+jget('/api/health').then(r=>{
+  if(!r||!r.version||r.version===VERSION_TAG)return;
+  APP_VERSION=r.version;VERSION_TAG=r.version;
+  const c=document.getElementById('ver-chip');if(c)c.textContent=VERSION_TAG;
+});
 loadDistros();
 startPoll();
 // 修复: 不再每 30s 无脑轮询 /api/distros。列表仅在用户手动点击「刷新列表」时更新;
@@ -1711,7 +1797,14 @@ function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-th
 })();
 
 /* ---------- Tab 切换 ---------- */
+// P6: 当前页签记在 localStorage, 刷新后恢复 —— 在种子页做批量操作时误按 F5,
+// 不该把上下文丢回镜像列表。取值必须在白名单内: 旧版本/手改 localStorage
+// 可能留下已不存在的页签名, switchTab 会去取一个不存在的 panel 并抛错。
+const TAB_KEY='iso_hub_tab';
+const TABS=['mirror','source','subs','settings','torrent'];
 function switchTab(tab){
+  if(!TABS.includes(tab))tab='mirror';
+  try{localStorage.setItem(TAB_KEY,tab)}catch(e){}
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   ['mirror','source','subs','settings','torrent'].forEach(p=>{
     document.getElementById('panel-'+p).style.display=(p===tab)?'':'none';
@@ -1935,11 +2028,12 @@ function torrSelToggleAll(on){
   });
   syncTorrSelUI();
 }
-/* 渲染后统一同步: 剔除已不在当前列表里的勾选, 刷新全选框的半选/文案。 */
+/* 渲染后统一同步: 刷新全选框的半选/文案。
+   P8 修复: 这里**不再**按当前 DOM 剔除勾选。搜索框过滤后 DOM 里只剩命中的条目,
+   旧实现把「没显示」当成「已消失」删掉 —— 勾 1 个再搜个关键字, 勾选就归零。
+   真正的清理交给 pruneTorrSel(res): 只在拿到服务端新数据时按**全集**修剪。 */
 function syncTorrSelUI(){
   const cks=[...document.querySelectorAll('#torr-list .ti-ck')];
-  const live=new Set(cks.map(c=>c.dataset.u));
-  for(const u of [...TORR_SEL]) if(!live.has(u))TORR_SEL.delete(u);
   const on=cks.filter(c=>c.checked).length;
   document.querySelectorAll('#torr-list .tcat-all').forEach(cb=>{
     const rows=[...(cb.closest('.tcat')?.querySelectorAll('.ti-ck')||[])];
@@ -1953,6 +2047,13 @@ function syncTorrSelUI(){
     btn.dataset.i18n=all?'torrSelNone':'torrSelAll';
     btn.textContent=(all?'☐ ':'☑ ')+t(all?'torrSelNone':'torrSelAll');
   }
+}
+/* P8: 只按**服务端全集**修剪勾选(不受搜索框影响)。种子源换了一批、条目真没了
+   才该把对应勾去掉; "搜索没命中"不代表用户不要它了。 */
+function pruneTorrSel(res){
+  const live=new Set();
+  (res&&res.categories||[]).forEach(c=>(c.items||[]).forEach(it=>{if(it.url)live.add(String(it.url))}));
+  for(const u of [...TORR_SEL]) if(!live.has(u))TORR_SEL.delete(u);
 }
 function torrItemRow(it){
   const title=it.title||String(it.url||'').split('/').pop()||'';
@@ -1986,6 +2087,7 @@ async function classifyAndRender(){
   }
   if(r.j.warnings&&r.j.warnings.length)toast(r.j.warnings[0].error,'err');
   LAST_CLASSIFY=r.j;
+  pruneTorrSel(LAST_CLASSIFY);   // P8: 只在服务端新数据到手时按全集修剪勾选
   renderTorrGroups(LAST_CLASSIFY);
 }
 function renderTorrGroups(res){
@@ -2422,7 +2524,7 @@ function applySrcTpl(){
   $('#rs-chktpl').value=tpl.chktpl||'';
   $('#rs-max').value=(tpl.max||2);
   if(tpl.versions)$('#rs-versions').value=tpl.versions.join(',');else $('#rs-versions').value='';
-  $('#rs-versions-row').style.display=(tpl.strategy==='static')?'':'none';
+  $('#rs-versions-row').style.display=(tpl.strategy==='static')?'flex':'none';
   toast(t('fillingTpl')+' '+$('#rs-tpl').selectedOptions[0].text);
 }
 async function loadCustomSources(){
@@ -2549,6 +2651,18 @@ function toggleGroupFold(btn){
 /* ---------- 收藏 & 筛选 ---------- */
 const FAV_KEY='iso_hub_fav';
 let FILTER=localStorage.getItem('iso_hub_filter')||'all';
+/* P1 修复: FILTER 会从 localStorage 恢复, applyFilter 也照它执行 —— 但**没人回填下拉框**。
+   于是刷新后控件显示「全部」、列表却仍是「已下载」, 界面在骗人(用户在 13 行里找不到
+   另外 10 个版本)。这里与 #logflt 的做法保持一致: 声明之后立刻把值写回控件。
+   放在声明之后是必须的 —— FILTER 是 let, 初始化代码块在文件更上方, 提前访问会踩 TDZ。 */
+(function initFilterSel(){
+  const s=document.getElementById('filterSel');
+  if(!s)return;
+  // 取值必须真实存在于 options: 旧版本可能留下已删除的筛选值,
+  // 直接赋给 select 会变成 ''(下拉空白), 比不同步更难理解。
+  if([...s.options].some(o=>o.value===FILTER)){s.value=FILTER;return}
+  FILTER='all';localStorage.setItem('iso_hub_filter',FILTER);s.value='all';
+})();
 function favSet(){try{return new Set(JSON.parse(localStorage.getItem(FAV_KEY)||'[]'))}catch(e){return new Set()}}
 function isFav(type,name){return favSet().has(type+'|'+name)}
 function saveFav(set){localStorage.setItem(FAV_KEY,JSON.stringify([...set]))}
@@ -2620,7 +2734,9 @@ function applyFilter(){
     // 对按状态筛选的: 逐行判定可见性, 组内只要有一行命中就显示该组
     if(wanted){
       let any=false;
-      card.querySelectorAll('.tbl tr').forEach(tr=>{
+      // 只作用于 tbody 里的数据行: v1.8.3 起表头也在这张表里, 旧选择器
+      // `.tbl tr` 会把 thead 行一并置为 display:none —— 一筛就没表头了。
+      card.querySelectorAll('.tbl tbody tr').forEach(tr=>{
         if(tr.classList.contains('stray')){tr.style.display='none';return}
         const st=tr.dataset.status||'';
         const show=wanted.includes(st);
@@ -2629,7 +2745,7 @@ function applyFilter(){
       });
       match=any;
     }else{
-      card.querySelectorAll('.tbl tr').forEach(tr=>{tr.style.display=''});
+      card.querySelectorAll('.tbl tbody tr').forEach(tr=>{tr.style.display=''});
     }
     card.style.display=match?'':'none';
   });
@@ -2968,7 +3084,16 @@ async function gateLogin(){
 $('#gate-pass').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
 $('#gate-user').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
 // 页面加载即检查: 强制登录开启时未登录显示遮罩
-if(typeof checkLoginGate==='function')checkLoginGate();
+// P6: 等登录态确认后再恢复上次页签 —— 未登录时切页签会立刻发出几个必然 401 的请求,
+// 在登录遮罩背后空转、把控制台刷红。mirror 是默认状态, 不必重切(避免多打一轮请求)。
+if(typeof checkLoginGate==='function'){
+  Promise.resolve(checkLoginGate()).then(ok=>{
+    if(!ok)return;
+    let tab=null;
+    try{tab=localStorage.getItem(TAB_KEY)}catch(e){}
+    if(tab&&TABS.includes(tab)&&tab!=='mirror')switchTab(tab);
+  });
+}
 </script>
 </body>
 </html>

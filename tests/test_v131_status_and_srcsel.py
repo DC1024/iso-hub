@@ -234,9 +234,23 @@ class TestVersionBumped(unittest.TestCase):
         # 锚在声明本身, 而不是"全文任意位置出现过 '1.3.15'"。旧写法
         # assertIn("'1.3.14'", HTML) 只要版本号出现在注释或任何字符串里就能过关,
         # 与 test_download_status.test_version_bumped 的严格写法也不一致。
-        self.assertIn("APP_VERSION='1.7.0'", HTML)
-        self.assertIn("VERSION_TAG='1.7.0'", HTML)
+        #
+        # v1.8.3 起版本号收归 web/version.py 单一真源: 这里不再写死字符串, 改为
+        # 从真源取值比对, 发版时无需再回来改测试。
+        import version
+        cur = version.__version__
+        self.assertIn("APP_VERSION='%s'" % cur, HTML)
+        self.assertTrue(
+            ("VERSION_TAG='%s'" % cur) in HTML or "VERSION_TAG=APP_VERSION" in HTML,
+            "VERSION_TAG 必须与 APP_VERSION 一致(或直接由它派生)",
+        )
         self.assertNotIn("'1.2.9'\n", HTML.split("APP_VERSION")[1][:40])
+
+        # P9: 前端兜底常量只是兜底, 真实值必须从 /api/health 拉取并覆盖到徽标上,
+        # 否则后端升了版本、徽标还显示旧值(线上就是这么错的)。
+        self.assertIn("/api/health", HTML)
+        self.assertIn("APP_VERSION=r.version", HTML)
+        self.assertIn("ver-chip", HTML)
 
 
 if __name__ == "__main__":

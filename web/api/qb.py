@@ -11,6 +11,7 @@ v1.7.0 从 app.py 按域迁出，只做搬移不改行为。两条铁律：
 """
 from flask import Blueprint, jsonify, request
 import errs
+import url_guard
 
 from api._ctx import core
 
@@ -63,7 +64,15 @@ def api_qb_settings_post():
             cred_changed = True
     if "url" in body:
         # 允许用户指向外部 qBittorrent(如自行部署的实例), 而非默认的 sidecar 内部地址
-        qb["url"] = str(body["url"]).strip().rstrip("/") or qb.get("url", "")
+        _url = str(body["url"]).strip().rstrip("/")
+        # P4 修复: 此前无论填什么原样落盘。`http://127.0.0.1:99999`(端口越界)存进去后
+        # 连接状态直接变 unreachable, 用户只能从"连不上"反推是自己填错了 —— 而错误
+        # 在保存那一刻就能判定。复用 url_guard(自定义源/RSS 用的同一个 SSRF 白名单),
+        # 保证"什么算一个 URL"全站只有一处定义: 协议 http/https、host 非空、端口 1-65535。
+        if _url and not url_guard.is_http_url(_url):
+            return jsonify({"error": "qBittorrent 地址无效: %r。"
+                                     "需要形如 http://主机:端口(端口 1-65535)" % _url}), 400
+        qb["url"] = _url or qb.get("url", "")
         changed = True
 
     # 启用或保持启用时，必须提供非空凭据

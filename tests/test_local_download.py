@@ -837,11 +837,41 @@ class TestTorrentSourceBatchUI(unittest.TestCase):
         self.assertIn('class="tcat-all"', m.group(1))
         self.assertIn('onclick="event.stopPropagation()"', m.group(1))
 
-    def test_sync_prunes_stale_selection(self):
-        """渲染后同步: 剔除已不在当前列表里的勾选(与 TORR_CHECKED 同款逻辑)。"""
+    def test_sync_does_not_prune_by_dom(self):
+        """P8 回归: 渲染/搜索时**不得**按当前 DOM 剔除勾选。
+
+        旧实现把"搜不到 / 没显示"当成"已消失", 勾 1 个种子再搜个关键字(或切个
+        分类), 勾选就归零 —— 用户勾了 10 个, 一搜索全没了。清理只能由
+        pruneTorrSel(服务端全集) 做。
+        """
         m = re.search(r"function syncTorrSelUI\(\)\{(.*?)\n\}", HTML, re.S)
         self.assertIsNotNone(m, "找不到 syncTorrSelUI")
-        self.assertIn("TORR_SEL.delete(u)", m.group(1))
+        body = m.group(1)
+        self.assertNotIn("TORR_SEL.delete", body,
+                         "syncTorrSelUI 不得删除勾选(会按被过滤后的 DOM 误删)")
+
+    def test_prune_uses_server_full_set(self):
+        """清理逻辑存在, 且只以服务端返回的 categories 全集为准。"""
+        m = re.search(r"function pruneTorrSel\(res\)\{(.*?)\n\}", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 pruneTorrSel")
+        body = m.group(1)
+        self.assertIn("TORR_SEL.delete", body)
+        # 修剪依据必须是 res.categories[].items[].url, 不是 DOM
+        self.assertIn("categories", body)
+        self.assertIn("items", body)
+        self.assertNotIn("querySelector", body,
+                         "pruneTorrSel 只能用服务端数据, 不能回头看 DOM")
+
+    def test_classify_calls_prune(self):
+        """只有拿到服务端新分组数据时才修剪; 分组失败时不能剪(否则全清空)。"""
+        m = re.search(r"async function classifyAndRender\(\)\{(.*?)\n\}", HTML, re.S)
+        self.assertIsNotNone(m, "找不到 classifyAndRender")
+        body = m.group(1)
+        self.assertIn("pruneTorrSel(LAST_CLASSIFY)", body)
+        # 修剪必须在"成功"之后: 失败分支里 LAST_CLASSIFY=null 且提前 return
+        i_fail = body.index("LAST_CLASSIFY=null")
+        i_prune = body.index("pruneTorrSel(LAST_CLASSIFY)")
+        self.assertLess(i_fail, i_prune)
 
     def test_batch_i18n_keys_bilingual(self):
         for k in ("dlSel", "torrSelAll", "torrSelNone",
