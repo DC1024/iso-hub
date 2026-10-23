@@ -429,6 +429,16 @@ class TestFrontendWiring(unittest.TestCase):
         self.assertNotIn("loginNoUser", self.html)
         self.assertNotIn("loginBadPass", self.html)
 
+    def _fn_body(self, signature):
+        """按函数边界取函数体。
+
+        v1.8.3 起 jpost 不再是单行实现, 原来"取以 `async function jpost(` 开头的
+        那一行"的写法只会拿到 `async function jpost(u,b){`, 断言必然失败 —— 这是
+        测试跟着实现细节走的典型。统一按 `\\n}` 收尾取整段。
+        """
+        i = self.html.index(signature)
+        return self.html[i:self.html.index("\n}", i)]
+
     def test_jpost_passes_login_401_through(self):
         """回归: jpost 不得把 /api/user/login 的 401 替换成笼统的"请先登录后再操作"。
 
@@ -439,20 +449,32 @@ class TestFrontendWiring(unittest.TestCase):
         self.assertIn("AUTH_ENDPOINTS", self.html)
         self.assertIn("'/api/user/login'", self.html)
         # jpost/jget 的 401 分支必须带上白名单判断, 不能无条件改写。
-        # jpost 是单行实现; jget 自 v1.2.8 起改为多行, 需按函数体边界取。
-        jpost_line = next((l for l in self.html.splitlines()
-                           if l.startswith("async function jpost(")), "")
-        self.assertTrue(jpost_line, "未找到 jpost")
-        self.assertIn("AUTH_ENDPOINTS.includes(u)", jpost_line,
+        jpost_body = self._fn_body("async function jpost(u,b){")
+        self.assertIn("AUTH_ENDPOINTS.includes(u)", jpost_body,
                       "jpost 的 401 分支缺少登录接口白名单判断")
 
-        i = self.html.index("async function jget(u){")
-        jget_body = self.html[i:self.html.index("\n}", i)]
+        # P5(v1.8.3): 光有白名单不够。改密码这类接口返回 401 时带的是业务原因
+        # (如「当前密码错误」), 旧实现一律改写成「请先登录」, 用户永远看不到真正的
+        # 失败原因。现在必须先用 isSessionLost() 判断"是不是真的会话丢了"。
+        self.assertIn("function isSessionLost", self.html)
+        self.assertIn("isSessionLost(j)", jpost_body,
+                      "jpost 必须区分「会话失效」与「业务性 401」, 后者原样透传")
+        # r.clone().json(): 先读一遍响应体判断, 再决定是否重发; 不 clone 会把 body 消费掉。
+        self.assertIn("r.clone()", jpost_body,
+                      "jpost 读取 401 响应体前必须 clone, 否则 body 被消费")
+
+        jget_body = self._fn_body("async function jget(u){")
         self.assertIn("AUTH_ENDPOINTS.includes(u)", jget_body,
                       "jget 的 401 分支缺少登录接口白名单判断")
 
     def test_version_bumped(self):
-        self.assertIn("APP_VERSION='1.7.0'", self.html)
+        """前端兜底常量必须与后端唯一真源 web/version.py 一致。
+
+        旧写法把 '1.7.0' 写死在这里: 每次发版都得回来改测试, 忘了改就变成
+        "改了版本号, 测试反而红"。改为从 version.py 取值, 测试跟着真源走。
+        """
+        import version
+        self.assertIn("APP_VERSION='%s'" % version.__version__, self.html)
 
     def test_poll_refreshes_list_while_running(self):
         """回归: 任务运行期间也要刷新列表。
