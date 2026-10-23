@@ -2028,11 +2028,12 @@ function torrSelToggleAll(on){
   });
   syncTorrSelUI();
 }
-/* 渲染后统一同步: 剔除已不在当前列表里的勾选, 刷新全选框的半选/文案。 */
+/* 渲染后统一同步: 刷新全选框的半选/文案。
+   P8 修复: 这里**不再**按当前 DOM 剔除勾选。搜索框过滤后 DOM 里只剩命中的条目,
+   旧实现把「没显示」当成「已消失」删掉 —— 勾 1 个再搜个关键字, 勾选就归零。
+   真正的清理交给 pruneTorrSel(res): 只在拿到服务端新数据时按**全集**修剪。 */
 function syncTorrSelUI(){
   const cks=[...document.querySelectorAll('#torr-list .ti-ck')];
-  const live=new Set(cks.map(c=>c.dataset.u));
-  for(const u of [...TORR_SEL]) if(!live.has(u))TORR_SEL.delete(u);
   const on=cks.filter(c=>c.checked).length;
   document.querySelectorAll('#torr-list .tcat-all').forEach(cb=>{
     const rows=[...(cb.closest('.tcat')?.querySelectorAll('.ti-ck')||[])];
@@ -2046,6 +2047,13 @@ function syncTorrSelUI(){
     btn.dataset.i18n=all?'torrSelNone':'torrSelAll';
     btn.textContent=(all?'☐ ':'☑ ')+t(all?'torrSelNone':'torrSelAll');
   }
+}
+/* P8: 只按**服务端全集**修剪勾选(不受搜索框影响)。种子源换了一批、条目真没了
+   才该把对应勾去掉; "搜索没命中"不代表用户不要它了。 */
+function pruneTorrSel(res){
+  const live=new Set();
+  (res&&res.categories||[]).forEach(c=>(c.items||[]).forEach(it=>{if(it.url)live.add(String(it.url))}));
+  for(const u of [...TORR_SEL]) if(!live.has(u))TORR_SEL.delete(u);
 }
 function torrItemRow(it){
   const title=it.title||String(it.url||'').split('/').pop()||'';
@@ -2079,6 +2087,7 @@ async function classifyAndRender(){
   }
   if(r.j.warnings&&r.j.warnings.length)toast(r.j.warnings[0].error,'err');
   LAST_CLASSIFY=r.j;
+  pruneTorrSel(LAST_CLASSIFY);   // P8: 只在服务端新数据到手时按全集修剪勾选
   renderTorrGroups(LAST_CLASSIFY);
 }
 function renderTorrGroups(res){
