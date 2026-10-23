@@ -11,7 +11,9 @@ M3 的关键点: **线程锁 ≠ 跨进程锁**。
 第二个进程去抢锁 —— 只在同进程里起两个线程, 无论锁写没写对都会通过。
 """
 
+import ast
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -80,6 +82,89 @@ class CrossProcessLockTest(_TmpDirCase):
         """
         self.assertEqual(config_files.lock_file_for(self.ledger),
                          self.tmp / "download_failures.json.lock")
+
+    def test_seeding_does_not_replace_an_existing_lock_file(self):
+        """锁文件一旦存在, 再"创建"一次也**不许换 inode**。
+
+        这是 v1.8.1 在 CI 上丢记录的直接原因: 两个进程同时判定"锁文件不存在",
+        各自临时文件 + os.replace, 后到的那个把先到的 inode 从目录里摘掉 ——
+        先到者已 open 的句柄还指着旧 inode, 两边 flock 的是两个不同 inode,
+        都返回成功, 于是 50 条并发写丢 1 条, 而且一条降级日志都没有。
+
+        这里直接盯不变量: 第二次走创建分支后, 路径上的 inode 必须还是原来那个。
+        """
+        lp = config_files.lock_file_for(self.ledger)
+        config_files._ensure_lock_file(lp)
+        before = os.stat(lp).st_ino
+        self.assertGreater(os.stat(lp).st_size, 0, "锁文件必须是 1 字节(Windows 才锁得住)")
+
+        # 模拟"另一个进程也判定文件不存在, 走到了创建分支"
+        config_files._seed_lock_file(lp)
+
+        self.assertEqual(os.stat(lp).st_ino, before,
+                         "锁文件被换成了新 inode —— 已持锁的进程会锁在孤儿 inode 上")
+
+    def test_seeding_never_overwrites_the_winner(self):
+        """两人同时创建时, 输的那个不能用自己的临时文件覆盖赢家。"""
+        lp = config_files.lock_file_for(self.ledger)
+        config_files._ensure_lock_file(lp)
+        winner = os.stat(lp).st_ino
+        # 反复"创建"多次, 每次都必须落在赢家那个 inode 上
+        for _ in range(5):
+            config_files._seed_lock_file(lp)
+            self.assertEqual(os.stat(lp).st_ino, winner)
+        # 临时文件不能留在数据目录里(会被当成本地文件列表的一部分)
+        self.assertEqual([p.name for p in self.tmp.iterdir() if p.suffix == ".seed"], [])
+
+    def test_creation_falls_back_when_hardlinks_are_unsupported(self):
+        """没有硬链接的文件系统(FAT/exFAT/部分 NFS)必须退回 O_CREAT|O_EXCL。
+
+        退路的意义是"换一种建法", 不是"建不出来就不锁了" —— 后者等于静默丢更新。
+        """
+        lp = config_files.lock_file_for(self.ledger)
+
+        def _no_link(*_a, **_k):
+            raise OSError(1, "hardlink not supported")
+
+        with patch.object(config_files.os, "link", _no_link):
+            config_files._ensure_lock_file(lp)
+        self.assertTrue(lp.exists(), "退路没建出锁文件")
+        self.assertEqual(lp.stat().st_size, 1, "必须是 1 字节, 否则 Windows 锁不住")
+
+        notes = []
+        with config_files.cross_process_lock(self.ledger, timeout=0.5,
+                                             on_degraded=notes.append):
+            pass
+        self.assertEqual(notes, [], "退路建出来的锁必须真的能用")
+
+    def test_lock_file_is_created_by_an_atomic_link(self):
+        """源码契约: 创建锁文件只能靠 os.link / O_EXCL, 不许 replace / rename / unlink。
+
+        这不是风格问题 —— 只要替换或删除锁文件, 就必然存在"别人正持着旧 inode
+        的锁"的窗口, 而那个窗口里两边都自认为独占。改回 replace 就等于把上面两条
+        并发断言重新变成碰运气(在 Windows 上还看不出来, 只在 Linux/CI 上丢记录)。
+        """
+        src = (WEB / "config_files.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        checked = 0
+        for name in ("_seed_lock_file", "_seed_lock_file_exclusive"):
+            fn = next((n for n in ast.walk(tree)
+                       if isinstance(n, ast.FunctionDef) and n.name == name), None)
+            self.assertIsNotNone(fn, "找不到 %s" % name)
+            calls = {(n.func.value.id, n.func.attr)
+                     for n in ast.walk(fn)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                     and isinstance(n.func.value, ast.Name)}
+            for attr in ("replace", "rename", "unlink", "remove"):
+                self.assertNotIn(("os", attr), calls, "%s 里不许 os.%s" % (name, attr))
+                self.assertNotIn(("lp", attr), calls, "%s 里不许对锁文件 %s" % (name, attr))
+            checked += 1
+        self.assertEqual(checked, 2)
+        seed = next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == "_seed_lock_file")
+        self.assertIn("link", {n.attr for n in ast.walk(seed)
+                               if isinstance(n, ast.Attribute)},
+                      "锁文件必须靠 os.link 原子建出来")
 
     def test_same_thread_reentrant_does_not_self_deadlock(self):
         """同线程嵌套不能死锁。
