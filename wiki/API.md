@@ -34,8 +34,10 @@
 
 - 所有 API 响应带 `Cache-Control: no-store`，避免前端「刷新列表」拿到浏览器缓存的旧数据。
   唯一例外是 `/api/files/get`（大文件必须允许缓存分片，否则 Range 续传失效）。
-- `GET /` 与 `/api/health` 额外带 **`X-Version`** 响应头，值是 `web/version.py` 里的当前版本号。
-  页面徽标也以 `/api/health` 的 `version` 为准（HTML 里的 `APP_VERSION` 只是首屏兜底），
+- **`GET /`（首页）的响应头带 `X-Version`**，值是 `web/version.py` 里的当前版本号 ——
+  `curl -sI http://<IP>:8899/` 就能确认线上跑的到底是哪个版本，不必翻镜像 tag。
+- 版本号在 `/api/health` 的 **JSON 体里的 `version` 字段**（该接口**不带** `X-Version` 头）。
+  页面徽标以 `/api/health` 的 `version` 为准（HTML 里的 `APP_VERSION` 只是首屏兜底），
   所以"徽章显示的版本"与"实际跑的镜像"不会再对不上。
 - 错误体统一为 `{"error": "..."}`，部分接口附带 `code` 字段。
 - 下载/刷新/同步这类长任务都是**后台异步**的：POST 立即返回，进度走 `/api/state`
