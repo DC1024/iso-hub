@@ -121,7 +121,13 @@ services:
       # ISO 存放模式: classified=按 类型/发行版 分文件夹(默认); flat=全部平铺到单一 iso/ 目录
       - ISO_HUB_STORAGE_MODE=${ISO_HUB_STORAGE_MODE:-classified}
       # 种子下载(qBittorrent sidecar)连接配置
-      - QB_URL=${QB_URL:-http://qbittorrent:8080}
+      # QB_PORT 是**唯一**需要改的端口配置: 宿主映射两侧、qB 的 --webui-port、
+      # 以及下面的 QB_URL 默认值全部由它派生, 用户可填任意 >=1024 的端口。
+      # (为什么必须同号: qB 的 Host 头校验拿 Host 里的端口比容器内监听端口,
+      #  不等就直接 401, 且该检查在 ServerDomains 白名单之前, 绕不过去。)
+      - QB_PORT=${QB_PORT:-8090}
+      # 留空即用 http://qbittorrent:${QB_PORT}。仅在指向**外部** qB 实例时填。
+      - QB_URL=${QB_URL:-}
       - QB_USER=${QB_USER:-admin}
       - QB_PASS=${QB_PASS:-adminadmin}
       # 网络共享默认凭据(可在网页「设置→共享设置」修改, 改后写入 ./data/settings.json 覆盖此处)
@@ -222,11 +228,16 @@ services:
     command: ["-c", "/config/webdav.yml"]
   # ---------- 种子下载 sidecar: qBittorrent (BitTorrent 下载) ----------
   # iso-hub 把种子/磁力交给它下载, 下载完成文件落入 ./data 被主容器统一识别/校验/删除。
-  # 主容器通过内部网络访问: http://qbittorrent:8080 (QB_URL)
-  # WebUI: http://<服务器IP>:8090
-  #   ⚠ qB 的 Host 头校验要求 Host 里的端口等于容器内端口(8080)。映射成 8090 时
-  #   浏览器直接访问会 401(v1.8.0 起恢复校验, 不再为这点便利关掉防护)。要用 qB
-  #   自己的界面就把映射改成 "8080:8080"(或设 QB_PORT=8080); 只用面板则不受影响。
+  # 主容器通过内部网络访问: http://qbittorrent:<QB_PORT> (QB_URL 由 QB_PORT 派生)
+  # WebUI: http://<服务器IP>:<QB_PORT>   ← 端口随你选, 默认 8090
+  #
+  # ⚠ 为什么映射写成 "${QB_PORT}:${QB_PORT}" 而不是 "${QB_PORT}:8080":
+  #   qB 的 Host 头校验 (validateHostHeader) 第一步就是「Host 里的端口必须等于
+  #   连接落在的本端端口」, 不相等立即 401; 这一步在 ServerDomains 白名单之前,
+  #   无法用白名单绕过。Docker 的端口映射会改写目的端口, 容器只看得到容器内那个
+  #   端口 —— 所以「宿主 8090 → 容器 8080」这种错位映射必然 401, 无解。
+  #   让容器内也监听同一个号, 用户就能自由选端口, 而防护一点没放松。
+  #   代价: 容器内由 uid 10001 运行, 绑不了 <1024 的端口, 故 QB_PORT 需 >=1024。
   # 默认不部署, 需启用 compose profile "bt":  docker compose --profile bt up -d
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest@sha256:e887804fa9de4c60f5f0fb1f3a7e4febe40a8f69fe736f70c4e8589b1f868dab
@@ -234,7 +245,8 @@ services:
     restart: no
     profiles: ["bt"]
     ports:
-      - "${QB_PORT:-8090}:8080"
+      # 两侧同号, 见上面的说明。改端口只需改 .env 里的 QB_PORT 一处。
+      - "${QB_PORT:-8090}:${QB_PORT:-8090}"
     volumes:
       - ./data:/data             # 与主容器共享同一数据卷, 下载的 ISO 主容器可见
       - ./qb-config:/config      # qBittorrent 配置/日志
@@ -245,5 +257,7 @@ services:
       - PUID=${QB_PUID:-10001}
       - PGID=${QB_PGID:-10001}
       - TZ=Asia/Shanghai
-      - WEBUI_PORT=8080
+      # WEBUI_PORT 是命令行参数(--webui-port), 优先级高于 qBittorrent.conf 里的
+      # WebUI\Port —— 手改配置文件改端口不生效, 改这个变量才生效, 且无需清 qb-config。
+      - WEBUI_PORT=${QB_PORT:-8090}
       - TORRENTING_PORT=6881

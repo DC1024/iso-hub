@@ -125,7 +125,7 @@ docker compose up -d   # 改 .env 后重启生效
 | `SAMBA_USER` / `SAMBA_PASS` | `iso` / 空 | SMB 账号/密码（**密码必填**，为空时拒绝启用共享） |
 | `WEBDAV_PORT` | `8081` | WebDAV 端口 |
 | `WEBDAV_USER` / `WEBDAV_PASS` | `iso` / 空 | WebDAV 账号/密码（**密码必填**，为空时拒绝启用共享） |
-| `QB_PORT` | `8090` | qBittorrent WebUI 端口 |
+| `QB_PORT` | `8090` | qBittorrent WebUI 端口。**容器内外同号**，可填任意 `>=1024` 的端口；端口映射两侧、qB 的 `--webui-port`、后端 `QB_URL` 都会自动跟随 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 
 ### 数据目录
