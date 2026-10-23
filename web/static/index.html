@@ -2573,6 +2573,18 @@ function toggleGroupFold(btn){
 /* ---------- 收藏 & 筛选 ---------- */
 const FAV_KEY='iso_hub_fav';
 let FILTER=localStorage.getItem('iso_hub_filter')||'all';
+/* P1 修复: FILTER 会从 localStorage 恢复, applyFilter 也照它执行 —— 但**没人回填下拉框**。
+   于是刷新后控件显示「全部」、列表却仍是「已下载」, 界面在骗人(用户在 13 行里找不到
+   另外 10 个版本)。这里与 #logflt 的做法保持一致: 声明之后立刻把值写回控件。
+   放在声明之后是必须的 —— FILTER 是 let, 初始化代码块在文件更上方, 提前访问会踩 TDZ。 */
+(function initFilterSel(){
+  const s=document.getElementById('filterSel');
+  if(!s)return;
+  // 取值必须真实存在于 options: 旧版本可能留下已删除的筛选值,
+  // 直接赋给 select 会变成 ''(下拉空白), 比不同步更难理解。
+  if([...s.options].some(o=>o.value===FILTER)){s.value=FILTER;return}
+  FILTER='all';localStorage.setItem('iso_hub_filter',FILTER);s.value='all';
+})();
 function favSet(){try{return new Set(JSON.parse(localStorage.getItem(FAV_KEY)||'[]'))}catch(e){return new Set()}}
 function isFav(type,name){return favSet().has(type+'|'+name)}
 function saveFav(set){localStorage.setItem(FAV_KEY,JSON.stringify([...set]))}
