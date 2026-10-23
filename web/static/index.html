@@ -1240,6 +1240,14 @@ function askToken(){return false} // 认证改为登录会话(REQUIRE_LOGIN)后,
 // 登录接口自身返回的 401 是"凭据错误"的业务响应(带 code/error), 必须原样透传给调用方,
 // 否则会被下面的 401 兜底逻辑替换成笼统的"请先登录后再操作", 让用户看不出哪里错了。
 const AUTH_ENDPOINTS=['/api/user/login'];
+/* P5 修复: 401 兜底只应改写「会话失效」, 不该改写「业务性 401」。
+   改密码接口在旧密码错误时返回 401 {"error":"当前密码错误"} —— 这是准确的提示,
+   但旧代码对所有非 AUTH_ENDPOINTS 的 401 一律换成"请先登录后再操作", 用户会以为
+   登录失效而跑去重新登录, 真正的原因(旧密码打错)被彻底掩盖。
+   现在先读一遍响应体: 后端给了**具体原因**就原样返回, 只有语义为
+   unauthorized(会话过期/未登录)或读不出 JSON 时才走原来的改写分支。
+   这样以后任何接口返回业务性 401 都不会再被吞掉, 不必逐个往白名单里加路径。 */
+function isSessionLost(j){return !j||!j.error||j.error==='unauthorized'}
 // jget 的 401 分支过去无条件 `return {}`, 调用方拿到的空对象和"接口真的返回空"
 // 无法区分, 于是失败被静默吞掉(典型症状: 点「刷新列表」毫无反应也无报错)。
 // askToken() 现恒返回 false, 该分支实际上已经变成"无条件吞掉 401"。
@@ -1256,7 +1264,18 @@ async function jget(u){
   if(!r.ok){LAST_GET_FAILED={status:r.status,url:u};}
   try{return await r.json()}catch(e){return{}}
 }
-async function jpost(u,b){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'});if(r.status===401&&!AUTH_ENDPOINTS.includes(u)){if(!askToken())return{s:401,j:{error:t('pleaseLogin')}};r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'})}return{s:r.status,j:await r.json()}}
+async function jpost(u,b){
+  const send=()=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json',...authH()},body:JSON.stringify(b||{}),cache:'no-store'});
+  let r=await send();
+  if(r.status===401&&!AUTH_ENDPOINTS.includes(u)){
+    // 先看后端说了什么: 具体原因(如「当前密码错误」)直接透传, 只改写会话失效。
+    let j=null;try{j=await r.clone().json()}catch(e){}
+    if(!isSessionLost(j))return{s:401,j};
+    if(!askToken())return{s:401,j:{error:t('pleaseLogin')}};
+    r=await send();
+  }
+  return{s:r.status,j:await r.json()}
+}
 
 /* ---------- 数据渲染 ---------- */
 /* 刷新镜像列表(「⟳ 刷新列表」按钮 / 各写操作完成后调用)。
