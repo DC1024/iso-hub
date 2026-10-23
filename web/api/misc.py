@@ -12,6 +12,7 @@ v1.7.0 从 app.py 按域迁出，只做搬移不改行为。两条铁律：
 from flask import Blueprint, jsonify, request, send_from_directory
 import json
 import gpg_ledger
+import version
 
 from api._ctx import core
 
@@ -26,6 +27,9 @@ def index():
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
+    # P9: 让 `curl -I /` 就能确认线上跑的是哪个版本 —— 出过"镜像 v1.8.2、
+    # 页面徽标 1.7.0"的事, 排查时唯一可靠的版本线索不该只是镜像 tag。
+    resp.headers["X-Version"] = version.__version__
     return resp
 
 
@@ -39,6 +43,8 @@ def api_health():
     # v1.5.2: writable 是布尔视图, writable_states 给出 ok/missing/denied/not_configured,
     # 用于区分"卷没挂"与"属主不对" —— 两者的处置方式完全不同。
     return jsonify({"ok": True,
+                    # P9: 版本从 web/version.py 单一来源取, 不再让前端常量独自漂移
+                    "version": version.__version__,
                     "gpg_ledger": gpg_ledger.build_summary(core.JSON_FILE, download_dir=core.DATA_DIR),
                     "writable": core.writable_snapshot(),
                     "writable_states": core.writable_states()})
