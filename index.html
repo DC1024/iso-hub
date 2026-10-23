@@ -1,19 +1,23 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark" data-page-node-id="3iYUVzCv0v9wFNUJbhB4lS">
-<head data-page-node-id="nsVae0Tsn3F8KBVGzEcSAp">
+<html lang="zh-CN" data-theme="dark" class="no-js">
+<head>
 <script>
   document.documentElement.dataset.theme=localStorage.getItem('isohub-theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
   (function(){var l=localStorage.getItem('isohub-lang')||'zh';document.documentElement.dataset.lang=l;document.documentElement.lang=l==='en'?'en':'zh-CN';})();
+  // 立刻摘掉 no-js: 它只该在「脚本根本没跑」时生效(.reveal 保持可见)。
+  // 放到 body 末尾再摘, 会让卡片先以可见状态画一帧、再缩回透明重播动画。
+  document.documentElement.classList.remove('no-js');
 </script>
-<meta charset="UTF-8" data-page-node-id="g9AibSUkxyqShTYw3LkjGf" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="jUyWD74Chgpy2q6p1qzthE" />
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</title>
-<meta name="description" content="ISO Hub —— 对 Sowevo/iso_download 的网页化封装，自动追踪多镜像站元数据、选择性下载、SHA256 校验、内置 SMB/WebDAV 共享。网页上搞定 Linux 发行版 ISO 的更新与分发。" data-page-node-id="S3cx97kFiL7YT5CEeV5E9E" />
+<meta name="description" content="ISO Hub —— 让 NAS 自己追 Linux 发行版 ISO：网页勾选、多镜像源下载、SHA256 + GPG 双层校验、订阅自动跟新版，内置 SMB / WebDAV 共享。一条 docker compose 起服务。" />
 <style>
   :root{
     --bg:#070b16; --bg2:#0b1222; --panel:rgba(255,255,255,.045);
     --panel-brd:rgba(120,170,255,.16); --txt:#e7eefb; --muted:#94a3b8;
     --cyan:#22d3ee; --blue:#3b82f6; --grad:linear-gradient(120deg,#22d3ee,#3b82f6 60%,#8b5cf6);
+    --ok:#28c840; --warn:#fbbf24;
     --r:16px; --maxw:1120px;
   }
   *{box-sizing:border-box;margin:0;padding:0}
@@ -31,7 +35,7 @@
   .btn.ghost{background:var(--panel);border-color:var(--panel-brd);color:var(--txt)}
   .btn.ghost:hover{border-color:var(--cyan);color:var(--cyan)}
   section{padding:84px 0;position:relative}
-  .sec-head{text-align:center;max-width:720px;margin:0 auto 48px}
+  .sec-head{text-align:center;max-width:760px;margin:0 auto 48px}
   .sec-head h2{font-size:clamp(26px,4vw,38px);margin:10px 0 12px;letter-spacing:-.5px}
   .sec-head p{color:var(--muted);font-size:16px}
 
@@ -42,25 +46,26 @@
   .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px}
   .logo{width:30px;height:30px;border-radius:9px;background:var(--grad);display:grid;place-items:center;
     font-weight:800;color:#04121f;font-size:15px;box-shadow:0 4px 16px rgba(34,211,238,.4)}
-  .nav-links{display:flex;gap:26px;font-size:14px;color:var(--muted)}
-  .nav-links a:hover{color:var(--txt)}
-  .nav-cta{display:flex;gap:12px;align-items:center}
+  .nav-links{display:flex;gap:24px;font-size:14px;color:var(--muted)}
+  .nav-links a:hover{color:var(--cyan)}
+  .nav-cta{display:flex;gap:10px;align-items:center}
   .burger{display:none;flex-direction:column;gap:5px;cursor:pointer;background:none;border:0;padding:6px}
   .burger span{width:22px;height:2px;background:var(--txt);border-radius:2px;transition:.3s}
   .mobile-menu{display:none;flex-direction:column;gap:4px;padding:10px 22px 18px;border-bottom:1px solid rgba(255,255,255,.06)}
   .mobile-menu a{padding:10px 0;color:var(--muted);border-bottom:1px solid rgba(255,255,255,.05)}
 
   /* hero */
-  .hero{padding:96px 0 70px;text-align:center;
+  .hero{padding:92px 0 68px;text-align:center;
     background:radial-gradient(1100px 460px at 50% -8%,rgba(59,130,246,.22),transparent 60%),
                radial-gradient(700px 360px at 80% 10%,rgba(34,211,238,.12),transparent 60%)}
-  .hero h1{font-size:clamp(34px,6.4vw,62px);line-height:1.08;letter-spacing:-1.5px;margin:16px 0 18px}
-  .hero p.lead{max-width:660px;margin:0 auto;color:var(--muted);font-size:18px}
-  .hero-cta{display:flex;gap:14px;justify-content:center;margin:30px 0 12px;flex-wrap:wrap}
-  .stats{display:flex;gap:30px;justify-content:center;flex-wrap:wrap;margin-top:42px}
-  .stat{text-align:center}
-  .stat b{display:block;font-size:30px;font-weight:800;background:var(--grad);
-    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero h1{font-size:clamp(34px,6.2vw,60px);line-height:1.1;letter-spacing:-1.5px;margin:16px 0 18px}
+  .hero p.lead{max-width:680px;margin:0 auto;color:var(--muted);font-size:18px}
+  .hero-cta{display:flex;gap:14px;justify-content:center;margin:30px 0 10px;flex-wrap:wrap}
+  .hero-note{font-size:13px;color:var(--muted);opacity:.85;margin-top:6px}
+  .stats{display:flex;gap:34px;justify-content:center;flex-wrap:wrap;margin-top:44px}
+  .stat{text-align:center;min-width:110px}
+  .stat b{display:block;font-size:28px;font-weight:800;background:var(--grad);
+    -webkit-background-clip:text;background-clip:text;color:transparent;line-height:1.25}
   .stat span{font-size:13px;color:var(--muted)}
 
   /* grid */
@@ -75,62 +80,62 @@
     background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.3);margin-bottom:14px}
   .card h3{font-size:17px;margin-bottom:7px}
   .card p{font-size:14px;color:var(--muted)}
+  /* 场景卡：多一行"以前 / 现在" */
+  .card .was{display:block;font-size:12.5px;color:var(--muted);opacity:.72;margin-top:9px;
+    padding-top:9px;border-top:1px dashed rgba(255,255,255,.09)}
 
   /* architecture */
   .arch{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:14px}
   .node{background:linear-gradient(180deg,rgba(59,130,246,.08),rgba(34,211,238,.04));
-    border:1px solid var(--panel-brd);border-radius:14px;padding:20px;text-align:center}
-  .node .t{font-weight:700;font-size:16px}
+    border:1px solid var(--panel-brd);border-radius:14px;padding:20px;text-align:center;position:relative}
+  .node.core{border-color:rgba(34,211,238,.42)}
+  .node .badge{position:absolute;top:-9px;left:50%;transform:translateX(-50%);
+    font-size:11px;padding:2px 9px;border-radius:999px;white-space:nowrap;
+    background:rgba(34,211,238,.16);border:1px solid rgba(34,211,238,.45);color:var(--cyan)}
+  .node.opt .badge{background:rgba(148,163,184,.14);border-color:rgba(148,163,184,.35);color:var(--muted)}
+  .node .t{font-weight:700;font-size:16px;margin-top:6px}
   .node .sub{font-size:12px;color:var(--cyan);margin:4px 0 10px}
+  .node.opt .sub{color:var(--muted)}
   .node ul{list-style:none;text-align:left;font-size:13px;color:var(--muted)}
   .node li{padding:3px 0;border-bottom:1px dashed rgba(255,255,255,.07)}
-  .flow{grid-column:1/-1;display:flex;justify-content:center;align-items:center;gap:8px;margin:24px 0 0;color:var(--muted);font-size:13px;flex-wrap:wrap}
+  .node li:last-child{border-bottom:0}
+  .legend{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;font-size:12.5px;
+    color:var(--muted);margin-top:22px}
+  .legend i{font-style:normal;color:var(--cyan)}
+  .flow{grid-column:1/-1;display:flex;justify-content:center;align-items:center;gap:8px;margin:26px 0 0;
+    color:var(--muted);font-size:13px;flex-wrap:wrap}
   .flow b{color:var(--cyan);font-weight:600;margin:0 4px}
   .meta{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:20px}
   .chip{font-size:12px;padding:8px 16px;border-radius:999px;background:var(--panel);
     border:1px solid var(--panel-brd);color:var(--muted);display:inline-flex;align-items:center;gap:6px}
 
-  /* distros */
-  .tags{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:8px}
-  .tag{font-size:13px;padding:8px 14px;border-radius:999px;background:var(--panel);
-    border:1px solid var(--panel-brd)}
-  .tag:hover{border-color:var(--cyan);color:var(--cyan)}
-  .mirrors{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:28px}
-
-  /* showcase */
-  .console{background:#060a14;border:1px solid var(--panel-brd);border-radius:14px;overflow:hidden;
-    box-shadow:0 20px 60px rgba(0,0,0,.5);max-width:880px;margin:0 auto}
-  .con-bar{display:flex;gap:7px;padding:12px 14px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.07)}
-  .con-bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
-  .con-bar .r{background:#ff5f57}.con-bar .y{background:#febc2e}.con-bar .g{background:#28c840}
-  .con-body{padding:18px;font-family:"SFMono-Regular",Consolas,Menlo,monospace;font-size:13px;line-height:1.7;
-    color:#c7d2e0;min-height:230px;white-space:pre-line}
-  .con-body .p{color:var(--cyan)}.con-body .ok{color:#28c840}.con-body .dim{color:#5b6b82}
-  .con-body .hl{color:#fbbf24}
-
   /* quickstart */
-  .steps{counter-reset:s;display:grid;gap:14px;max-width:760px;margin:0 auto}
+  .steps{counter-reset:s;display:grid;gap:14px;max-width:800px;margin:0 auto}
   .step{display:flex;gap:16px;align-items:flex-start;background:var(--panel);border:1px solid var(--panel-brd);
     border-radius:14px;padding:18px}
   .step::before{counter-increment:s;content:counter(s);flex:0 0 34px;width:34px;height:34px;border-radius:50%;
     display:grid;place-items:center;font-weight:800;color:#04121f;background:var(--grad)}
+  .step-body{flex:1;min-width:0}
   .step h4{font-size:15px;margin-bottom:6px}
   .step p{font-size:13px;color:var(--muted)}
   .code{position:relative;background:#060a14;border:1px solid var(--panel-brd);border-radius:12px;
     padding:16px 18px;font-family:"SFMono-Regular",Consolas,Menlo,monospace;font-size:13px;color:#d6e2f2;
-    overflow:auto;margin-top:8px;white-space:pre-wrap;word-break:break-all}
+    overflow:auto;margin-top:10px;white-space:pre-wrap;word-break:break-all;line-height:1.7}
   .code .c{color:#5b6b82}.code .k{color:#22d3ee}
   .copy{position:absolute;top:10px;right:10px;font-size:12px;padding:5px 11px;border-radius:8px;cursor:pointer;
     background:rgba(255,255,255,.07);border:1px solid var(--panel-brd);color:var(--muted)}
   .copy:hover{color:var(--cyan);border-color:var(--cyan)}
+  .hint{max-width:800px;margin:22px auto 0;font-size:13px;color:var(--muted);text-align:center}
+  .hint code{font-family:"SFMono-Regular",Consolas,Menlo,monospace;background:rgba(255,255,255,.06);
+    padding:2px 6px;border-radius:5px;color:var(--cyan);font-size:12.5px}
 
   /* faq */
-  .faq{max-width:780px;margin:0 auto;display:grid;gap:12px}
+  .faq{max-width:800px;margin:0 auto;display:grid;gap:12px}
   details{background:var(--panel);border:1px solid var(--panel-brd);border-radius:14px;padding:0 18px}
   summary{padding:16px 0;cursor:pointer;font-weight:600;list-style:none;display:flex;justify-content:space-between;
-    align-items:center}
+    align-items:center;gap:14px}
   summary::-webkit-details-marker{display:none}
-  summary::after{content:"+";font-size:20px;color:var(--cyan);transition:.3s}
+  summary::after{content:"+";font-size:20px;color:var(--cyan);transition:.3s;flex:0 0 auto}
   details[open] summary::after{transform:rotate(45deg)}
   details p{padding:0 0 16px;color:var(--muted);font-size:14px}
 
@@ -138,10 +143,21 @@
   .foot{display:flex;justify-content:space-between;flex-wrap:wrap;gap:16px;align-items:center}
   .reveal{opacity:0;transform:translateY(24px);transition:.7s cubic-bezier(.2,.7,.2,1)}
   .reveal.in{opacity:1;transform:none}
+  /* JS 被禁用时的兜底: 否则 .reveal 会永远停在 opacity:0, 整页看起来是空的 */
+  .no-js .reveal{opacity:1;transform:none}
+  /* 打印 / 存为 PDF 时同理: 纸面上没法滚动触发动画 */
+  @media print{.reveal{opacity:1 !important;transform:none !important}}
 
+  @media(max-width:900px){
+    .g3,.g2{grid-template-columns:1fr}
+    .arch{grid-template-columns:repeat(2,1fr)}
+  }
   @media(max-width:860px){
-    .g3,.arch,.mirrors,.g2{grid-template-columns:1fr}
     .nav-links{display:none}.nav-cta .ghost{display:none}.burger{display:flex}
+  }
+  @media(max-width:560px){
+    .arch{grid-template-columns:1fr}
+    .stats{gap:22px}
   }
 
   /* 主题 / 语言 切换按钮 */
@@ -153,6 +169,10 @@
   [data-theme="light"]{
     --bg:#eef2f8; --bg2:#e6ecf5; --panel:rgba(15,23,42,.04);
     --panel-brd:rgba(15,23,42,.13); --txt:#0f172a; --muted:#51607a;
+    /* 浅底上 #22d3ee 这类青色对比度不够, 整体调深一档;
+       下面这个 --cyan 同时被 eyebrow / 节点副标题 / chip 等等当文字色用, 必须一起换 */
+    --cyan:#0e7490;
+    --grad:linear-gradient(120deg,#0e7490,#1d4ed8 60%,#6d28d9);
   }
   [data-theme="light"] header{background:rgba(238,242,248,.82);border-bottom-color:rgba(15,23,42,.1)}
   [data-theme="light"] .mobile-menu{border-bottom-color:rgba(15,23,42,.1)}
@@ -160,108 +180,238 @@
   [data-theme="light"] .hero{background:
     radial-gradient(1100px 460px at 50% -8%,rgba(59,130,246,.14),transparent 60%),
     radial-gradient(700px 360px at 80% 10%,rgba(34,211,238,.1),transparent 60%)}
+  [data-theme="light"] .code{background:#0f172a;color:#d6e2f2}
+  /* 渐变底色在浅色主题里变深了, 叠在上面的字要跟着反过来 */
+  [data-theme="light"] .btn.primary,
+  [data-theme="light"] .logo,
+  [data-theme="light"] .step::before{color:#fff}
+  [data-theme="light"] .card .was{border-top-color:rgba(15,23,42,.1)}
+  [data-theme="light"] .node li{border-bottom-color:rgba(15,23,42,.09)}
+  [data-theme="light"] .hint code{background:rgba(15,23,42,.07)}
 </style>
 </head>
-<body data-page-node-id="oUBCgntcyRqfIe0cmSH5Xx">
+<body>
 
-<header data-page-node-id="xO2Sqpfuo4q4Yg2w2bSzLV">
-  <div class="wrap nav" data-page-node-id="9Bp5RlLPhvLFbd3WiVHjwt">
-    <div class="brand" data-page-node-id="SJeT13cK0yVqX3gVzim0Tr"><span class="logo" data-page-node-id="PKk4O37fDBMhlYbh8JU8dt">IS</span> ISO&nbsp;Hub</div>
-    <div class="nav-cta" data-page-node-id="mbcTxgB3dihIFBg91wtSZ5">
-      <button class="btn lang-toggle" id="langToggle" type="button" aria-label="切换语言" data-page-node-id="ND0nLPtw3GQsmCLkrYf8L6">中</button>
-      <button class="btn theme-toggle" id="themeToggle" type="button" aria-label="切换深浅色" data-page-node-id="cOErahatv9KpKv2atsKfie">🌙</button>
-      <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" data-page-node-id="UdHUu1qHnQScqF83I8Fkrq">GitHub</a>
-      <a class="btn ghost" href="https://gitee.com/dcchen1565710276/iso-hub" target="_blank" rel="noopener" data-page-node-id="L7NgjBgneNukTrR7CZpzjg">Gitee</a>
-      <a class="btn primary" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="cta_deploy" data-page-node-id="DbzTqCC4Q1wCp406i0fAQl">Wiki</a>
+<header>
+  <div class="wrap nav">
+    <div class="brand"><span class="logo">IS</span> ISO&nbsp;Hub</div>
+    <div class="nav-links">
+      <a href="#scenes" data-i18n="nav_scene">使用场景</a>
+      <a href="#features" data-i18n="nav_feat">核心能力</a>
+      <a href="#arch" data-i18n="nav_arch">架构</a>
+      <a href="#start" data-i18n="nav_start">快速开始</a>
+      <a href="#faq" data-i18n="nav_faq">FAQ</a>
     </div>
-    <button class="burger" aria-label="menu" data-page-node-id="pgTuXJRaTxLRD5yiMSSquH"><span data-page-node-id="hpVkJsgM1MdAieSsA6YKyq"></span><span data-page-node-id="FHQkdNqrBNao2rQKrGHJ8B"></span><span data-page-node-id="as1BOdW5AfEKdZi4vbifPJ"></span></button>
+    <div class="nav-cta">
+      <button class="btn lang-toggle" id="langToggle" type="button" aria-label="切换语言">中</button>
+      <button class="btn theme-toggle" id="themeToggle" type="button" aria-label="切换深浅色">🌙</button>
+      <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener">GitHub</a>
+      <a class="btn primary" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="cta_wiki">Wiki</a>
+    </div>
+    <button class="burger" aria-label="menu"><span></span><span></span><span></span></button>
   </div>
-  <div class="mobile-menu" data-page-node-id="c3n4lgxNNHP2JWKtWBEJPG">
-    <a href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-page-node-id="kKTE5rm9QeDYeWHztzznxH">Wiki</a>
-    <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" data-page-node-id="DA7ADz5cs6BeCePh3Uh7Bg">GitHub</a>
-    <a href="https://gitee.com/dcchen1565710276/iso-hub" target="_blank" rel="noopener" data-page-node-id="TGFY3OwF04JAEBkSLMOWHc">Gitee</a>
+  <div class="mobile-menu">
+    <a href="#scenes" data-i18n="nav_scene">使用场景</a>
+    <a href="#features" data-i18n="nav_feat">核心能力</a>
+    <a href="#arch" data-i18n="nav_arch">架构</a>
+    <a href="#start" data-i18n="nav_start">快速开始</a>
+    <a href="#faq" data-i18n="nav_faq">FAQ</a>
+    <a href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener">Wiki</a>
+    <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener">GitHub</a>
   </div>
 </header>
 
-<section class="hero" data-page-node-id="OUFvqo7hBYSRFYnYPrHgjp">
-  <div class="wrap" data-page-node-id="L7H9aH8yGwDBgeOXHF82ac">
-    <span class="eyebrow" data-page-node-id="mPDpoeFQpizPGYj12RaI0A">Web ISO Updater · Docker Ready</span>
-    <h1 data-i18n="hero_h1" data-page-node-id="CA5p9ZqEyeLy32D1WxgYT9">网页上的 <span class="grad" data-page-node-id="2W72rYDuPoWxoXemz9TSeg">Linux 发行版 ISO</span><br data-page-node-id="zAlhSRWIgzM9MHcpaOsWsj">自动更新器</h1>
-    <p class="lead" data-i18n="hero_lead" data-page-node-id="Ul3D9Me6fbq4KMd8c1cBZ8">ISO Hub 是对 Sowevo/iso_download 命令行工具的网页化封装。自动追踪多镜像站元数据、按需选择性下载、SHA256 校验、内置 SMB / WebDAV 共享——在浏览器里搞定 ISO 的更新与分发。</p>
-    <div class="hero-cta" data-page-node-id="DZ1kKTm1SU0opGAh7efErc">
-      <a class="btn primary" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="hero_cta1" data-page-node-id="z8bJjqBiULABG3i8AHT6Ws">📚 查看 Wiki</a>
-      <a class="btn ghost" href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" data-i18n="hero_cta2" data-page-node-id="0BtK6QcRLvAWCmseF0CKMB">在 GitHub 查看</a>
+<section class="hero">
+  <div class="wrap">
+    <span class="eyebrow" data-i18n="hero_eyebrow">Web ISO Updater · Docker Ready</span>
+    <h1 data-i18n="hero_h1">让 NAS 自己追<br><span class="grad">Linux 发行版 ISO</span></h1>
+    <p class="lead" data-i18n="hero_lead">网页上勾选要哪个发行版，剩下的交给它：多镜像源下载、SHA256 + GPG 双层校验、订阅自动跟新版、SMB / WebDAV 共享给局域网。一条 docker compose 起服务，不用登录服务器敲命令。</p>
+    <div class="hero-cta">
+      <a class="btn primary" href="#start" data-i18n="hero_cta1">⚡ 三分钟部署</a>
+      <a class="btn ghost" href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" data-i18n="hero_cta2">📚 查看 Wiki</a>
     </div>
-    <div class="stats" data-page-node-id="MGZBgWm5MSolACOtifbfXy">
-      <div class="stat" data-page-node-id="0aXtpRdajs8O61UIIKfdwP"><b data-page-node-id="RmgjoP7kTzXNCCm7xvKrfh">4</b><span data-i18n="stat_services" data-page-node-id="YazjdJ5iCx0qkyCYO395sM">容器化服务</span></div>
-      <div class="stat" data-page-node-id="IGfL0IZxE58B7H38U1jQ18"><b data-page-node-id="DOA9qBqK3O8koHJN5Y8T7H">20+</b><span data-i18n="stat_distros" data-page-node-id="bqHHBkbKrMsPCm7h156alo">镜像条目</span></div>
-      <div class="stat" data-page-node-id="ZB4tpKbZNEbgOOAuI7Ac57"><b data-page-node-id="NzbgtFdhHGEAGMFavX1dtf">SHA256</b><span data-i18n="stat_verify" data-page-node-id="Bm1wbAMTXZMLgWn485eCLJ">下载校验</span></div>
-      <div class="stat" data-page-node-id="caAzAluJ8DyKVRoP8C2Fvr"><b data-i18n="stat_src" data-page-node-id="MPreSNOJvG8ZWMGV5uFu99">多镜像源</b><span data-i18n="stat_src_s" data-page-node-id="EucGxhgdqJQpu9FyOb1bFe">元数据加速</span></div>
-    </div>
-  </div>
-</section>
-
-<section id="features" data-page-node-id="QlSOsuo0L5HSSvnC7zoJ30">
-  <div class="wrap" data-page-node-id="pUK0t55XPbUhkxFtkEF9oM">
-    <div class="sec-head reveal" data-page-node-id="JMoBGLd157netmVgzBlWQF">
-      <span class="eyebrow" data-page-node-id="zdG6sbva6VHpwGdBosoSeH">Features</span>
-      <h2 data-i18n="feat_h2" data-page-node-id="lVLqCPK7ulOKKNEgm9lF1P">为「追 ISO」这件麻烦事而生的能力</h2>
-      <p data-i18n="feat_p" data-page-node-id="CvmpiDXU453wqzdQF7BJ87">从清单浏览到下载校验，再到局域网共享，一条龙在网页里完成。</p>
-    </div>
-    <div class="grid g3" data-page-node-id="IEvBf3Q4EEtf2uhBF4s9xc">
-      <div class="card reveal" data-page-node-id="GDy0Nm0FutyUKVgkCBe0G6"><div class="ic" data-page-node-id="UQqIpOnDegGZxeoyNQf2Ky">📋</div><h3 data-i18n="feat1" data-page-node-id="ofvjtexzviWyJFZBuGCmbm">发行版清单</h3><p data-i18n="feat1d" data-page-node-id="Y4Hnd74nCgqbhOWUAE3ydC">聚合主流 Linux 发行版及其版本、架构、镜像变体，统一浏览。</p></div>
-      <div class="card reveal" data-page-node-id="dMjSmiJJao0OS8bFCs12z7"><div class="ic" data-page-node-id="iB4AB1SYMvGcOVxxiXZSn0">⬇️</div><h3 data-i18n="feat2" data-page-node-id="1vPfHURgnGEe4XdF2Af60I">选择性下载</h3><p data-i18n="feat2d" data-page-node-id="3VVqeYLQZw1ZGSrWAqKMwG">按版本 / 架构 / 变体勾选，只拉你真正需要的那几个 ISO。</p></div>
-      <div class="card reveal" data-page-node-id="lRDM6CwCpUro1ECsAkXHF2"><div class="ic" data-page-node-id="gcD5IKuOVuT27npaGy8wfX">✅</div><h3 data-i18n="feat3" data-page-node-id="dCKVjbsztOmSXU97SoLOnp">SHA256 校验</h3><p data-i18n="feat3d" data-page-node-id="QP7t7gLJefoj94cZOuSPSR">下载后自动校验哈希，确保镜像完整、未被篡改。</p></div>
-      <div class="card reveal" data-page-node-id="3ZSdgtpJaWLc4HTD9edCAm"><div class="ic" data-page-node-id="dYs9KD3sAWgkkb7lLnP4lw">🐉</div><h3 data-i18n="feat4" data-page-node-id="IGjetN3mVHkh4lRY9SYFkL">多镜像源</h3><p data-i18n="feat4d" data-page-node-id="GEHzDjigfzM5abbADKtcqr">支持清华 TUNA、中科大 USTC 等多镜像源，自动刷新元数据，国内访问快、延迟低。</p></div>
-      <div class="card reveal" data-page-node-id="z0IoeraGrCK7qREhv4hqWk"><div class="ic" data-page-node-id="DGjLFabV0KNRsJ1QbslRSm">🔧</div><h3 data-i18n="feat5" data-page-node-id="jkqUuCxjkoR5ZpVYKPiiZ3">自定义镜像源</h3><p data-i18n="feat5d" data-page-node-id="OCi1Cu6Wgb05snS1H88cAt">支持配置自有镜像源，适配内网或特定区域加速。</p></div>
-      <div class="card reveal" data-page-node-id="JH6CgV2v6oVUPvkVMFIKw5"><div class="ic" data-page-node-id="u0EeOP6sbF1Auld5Ode4TX">🛡️</div><h3 data-i18n="feat6" data-page-node-id="d5NARe87X7UByb371JZokA">镜像保护</h3><p data-i18n="feat6d" data-page-node-id="sHE0SiSexPq9BIDKhcNYI4">防止重复拉取、保护磁盘与带宽，已存在的版本智能跳过。</p></div>
-      <div class="card reveal" data-page-node-id="HQkudS5Ju6Om4vY8q3d6H9"><div class="ic" data-page-node-id="wma4od4PYuYfqnBPYJz7Ij">⭐</div><h3 data-i18n="feat7" data-page-node-id="lZNNOQSwGcsKkiELBPuiA3">收藏订阅</h3><p data-i18n="feat7d" data-page-node-id="A0Dt1LxKyZkcnFbQSbYraA">收藏常用发行版，变更时同步提醒，追新不掉队。</p></div>
-      <div class="card reveal" data-page-node-id="HHD6u7LnhvQOmqvN3ktS82"><div class="ic" data-page-node-id="tjOOgLAF7Gt9hwLzjst3yG">🔐</div><h3 data-i18n="feat8" data-page-node-id="cmag8NUNwXAbCYNJH5Rqsq">单管理员</h3><p data-i18n="feat8d" data-page-node-id="x0NdnaNrnI6z0uHbK54GeC">内置单管理员登录，轻量鉴权，适合家庭 / 小团队自建。</p></div>
-      <div class="card reveal" data-page-node-id="LTk6XYdHD3vNWicx2qkH6r"><div class="ic" data-page-node-id="XwBuBHhdaQR2UUJEKpIa0L">⏰</div><h3 data-i18n="feat9" data-page-node-id="jxflCruQFdGvA4aQBaYYTF">定时任务</h3><p data-i18n="feat9d" data-page-node-id="plrFRpfYHWlHrGGYhJJre3">按计划自动检查并更新元数据，无需人工值守。</p></div>
-      <div class="card reveal" data-page-node-id="DfQfwMRvuB99Y1MX3R8GAL"><div class="ic" data-page-node-id="B0iwYw6uAJ18fcTbiu7fNg">🌐</div><h3 data-i18n="feat10" data-page-node-id="UkheNsyGjBUCo1ObdYfc6p">中英文界面</h3><p data-i18n="feat10d" data-page-node-id="iQSYJCZ8VvlvaiTxoJYbrF">内置双语界面，中英切换无障碍。</p></div>
-      <div class="card reveal" data-page-node-id="G2js4hA62jE2CHEwXPe6FM"><div class="ic" data-page-node-id="WFjoPEKfGLPyISGMIXMFtV">🗂️</div><h3 data-i18n="feat11" data-page-node-id="sDGISKkyZQgADuoFX05QAo">SMB/WebDAV 网络共享</h3><p data-i18n="feat11d" data-page-node-id="eA4LFk0YBliJFqLg28nsSo">内置 Samba 与 WebDAV 容器，下载的 ISO 既可通过 SMB 在局域网共享，也可挂载为网络磁盘跨平台取用。</p></div>
-      <div class="card reveal" data-page-node-id="oQrKIA42neEe0uK0rBzjDs"><div class="ic" data-page-node-id="21PKhtd85KsYL39NrabxSY">🌱</div><h3 data-i18n="feat13" data-page-node-id="URTq10xiARC6MLFrxTYsub">种子下载</h3><p data-i18n="feat13d" data-page-node-id="BYfDxBvIEVVW1yv8gFI7WH">解析 DistroWatch 官方种子 RSS，交给内置 qBittorrent 下载，落盘后与直链统一识别、校验。</p></div>
+    <p class="hero-note" data-i18n="hero_note">开源 · MPL-2.0 · 数据全在本地卷里，不联网也能用</p>
+    <div class="stats">
+      <div class="stat"><b>2</b><span data-i18n="stat1_s">个容器即可起跑</span></div>
+      <div class="stat"><b>54</b><span data-i18n="stat2_s">条 REST API</span></div>
+      <div class="stat"><b data-i18n="stat3">SHA256+GPG</b><span data-i18n="stat3_s">双层校验</span></div>
+      <div class="stat"><b>0</b><span data-i18n="stat4_s">外部数据库依赖</span></div>
     </div>
   </div>
 </section>
 
-<section id="arch" style="background:linear-gradient(180deg,transparent,rgba(59,130,246,.05),transparent)" data-page-node-id="GQQUlEzYCAC1d92rs1d1N4">
-  <div class="wrap" data-page-node-id="TgMxiHpvrTUoAddBoDuzvd">
-    <div class="sec-head reveal" data-page-node-id="6zPDFgO7wXgssVIqBzNuSE">
-      <span class="eyebrow" data-page-node-id="0fZZAcgGT8YWMkBAp82D9t">Architecture</span>
-      <h2 data-i18n="arch_h2" data-page-node-id="Hnby23AVRO4E6yR1sRwk4j">四容器，一套 Docker Compose 拉起</h2>
-      <p data-i18n="arch_p" data-page-node-id="luBqP7rUYkdl0EHgOXpNT7">Web 服务 + SMB + WebDAV + qBittorrent，持久化数据独立挂载，健康检查内置。</p>
+<section id="scenes">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow" data-i18n="scene_eyebrow">Scenarios</span>
+      <h2 data-i18n="scene_h2">四种人，同一个需求：别让我手动追版本</h2>
+      <p data-i18n="scene_p">如果你的场景和下面任意一条重合，这个工具就是为你写的。</p>
     </div>
-    <div class="arch" data-page-node-id="TLJZEKhlnvRzKlfr9YeTGI">
-      <div class="node reveal" data-page-node-id="Yzf0JNvaQpkcNvH0XWw5Nh"><div class="t" data-page-node-id="LXguTTMHSKNwKNDSNxX2YC">iso-hub</div><div class="sub" data-page-node-id="V7bhpFuiyBaNtyy22BPDKe">Flask · Python 3.12</div>
-        <ul data-page-node-id="jKSyT2tKwlvSlGJSehBnxT"><li data-i18n="arch1_1" data-page-node-id="KUVaIXRzpr1Rul3yjRAiqu">Web UI / API</li><li data-i18n="arch1_2" data-page-node-id="6OfOXz00ivjypYC0tyBwOm">元数据刷新</li><li data-i18n="arch1_3" data-page-node-id="aG9o5agu8SAGsfNCCQQHeK">下载 & 校验</li><li data-i18n="arch1_4" data-page-node-id="DycSEAVXYoDhm8CaCnt4rb">定时任务</li></ul></div>
-      <div class="node reveal" data-page-node-id="3ZGtI0K0wSerD6NDn1JW3v"><div class="t" data-page-node-id="KKXM71hak5IiCyzdEMVxT0">samba</div><div class="sub" data-page-node-id="nx4CXKwWJQDeRLUMDzTpiy">SMB 共享</div>
-        <ul data-page-node-id="zTHFF5KQAbhQWdCXLGwGZM"><li data-i18n="arch2_1" data-page-node-id="mru97ZraBS3YdYPVvIEIyY">局域网文件共享</li><li data-i18n="arch2_2" data-page-node-id="5aJDkzh2AS6JTPwPp3K5sO">独立数据卷</li><li data-i18n="arch2_3" data-page-node-id="T5kz8mIAarQUgSpjENFEfu">只读 / 读写</li></ul></div>
-      <div class="node reveal" data-page-node-id="eGGdRxeSw6qmxkDdSsGjs5"><div class="t" data-page-node-id="FCKD8R2DCuGrkKgyyyACqo">qbittorrent</div><div class="sub" data-page-node-id="Ep6OORlt3qOASNLh24mlWd">种子下载</div>
-        <ul data-page-node-id="snKWlDtnOJCT69t7RRQg12"><li data-i18n="arch4_1" data-page-node-id="LY7dsiRbc72WIfPRxoDBQq">官方种子 RSS</li><li data-i18n="arch4_2" data-page-node-id="ecuTv1zkpJrYwE1hvK5tom">磁力 / 种子链接</li><li data-i18n="arch4_3" data-page-node-id="c58s80pRGmNueIU8I4Gc5L">落盘 ./data</li></ul></div>
-      <div class="node reveal" data-page-node-id="jmvnOa2aOgTWj4zGGaHC61"><div class="t" data-page-node-id="HLy4cmUF5tbLI10sZHJ7FD">webdav</div><div class="sub" data-page-node-id="Dye8X4RzC3XwpX5kPPSwOq">WebDAV 共享</div>
-        <ul data-page-node-id="z6M3x4DpQkQ3V2XRKNF6mH"><li data-i18n="arch3_1" data-page-node-id="E3UdGYSMQpvmNgoyMl77tG">挂载为网盘</li><li data-i18n="arch3_2" data-page-node-id="hFxhDDGYZiRPbGBizDKWM1">跨平台取用</li><li data-i18n="arch3_3" data-page-node-id="3T2F034eyilZjnJpr2O57A">Basic Auth</li></ul></div>
-      
-    <div class="flow reveal" data-i18n="flow" data-page-node-id="bKqggR9L3InBGQijNrHIYp">浏览器 <b data-page-node-id="A2b71jTIkDMJb7EpN4LHbs">→</b> iso-hub(Web) <b data-page-node-id="jkLpBGXGnc0MgWnW35C12Q">→</b> 多镜像站 / 官方种子(元数据/ISO) <b data-page-node-id="kucyM0jOlFLCldAQPp6YOw">→</b> 落盘 <b data-page-node-id="IvjihrSH2w8oNiOFNM8yEF">→</b> SMB / WebDAV 共享</div>
-    <div class="meta reveal" data-page-node-id="GBA4SU4SfyfP0WBOF5ttec">
-      <span class="chip" data-i18n="meta1" data-page-node-id="7ixxuldzEwvQPAVfLgHdjl">端口 · 可配置</span><span class="chip" data-i18n="meta2" data-page-node-id="LDuWIl4nrXwNCFwjevyLbZ">持久化 · 挂载卷</span>
-      <span class="chip" data-i18n="meta3" data-page-node-id="fSPkgUMKqXYHH6h3vdLUJC">健康检查 · 内置</span><span class="chip" data-i18n="meta4" data-page-node-id="93G2sQys5cjoVqzIxRcTWX">镜像 · Docker Hub</span>
-      <span class="chip" data-i18n="meta5" data-page-node-id="XE5aA0rD7qGhbhQhHYGxcC">栈 · Flask + Docker</span>
+    <div class="grid g2">
+      <div class="card reveal"><div class="ic">🏠</div>
+        <h3 data-i18n="sc1">家庭 NAS / 小主机常开机</h3>
+        <p data-i18n="sc1d">为发行版开启订阅并设保留版本数，每次同步自动"刷元数据 → 下最新 N 版 → 删过期"。锁定的文件永远不会被删。</p>
+        <span class="was" data-i18n="sc1w">以前：每周手动去镜像站翻目录、比对本地、下载、算哈希、删旧版</span>
+      </div>
+      <div class="card reveal"><div class="ic">🖥️</div>
+        <h3 data-i18n="sc2">给 PVE / 装机 U 盘备料</h3>
+        <p data-i18n="sc2d">ISO 是要写进系统盘的，来源不可信等于把后门装进宿主。下载后做 SHA256 校验，并对 checksum 文件验 GPG 签名 —— 公钥与硬编码指纹比对，不是"第一次见到就信"。</p>
+        <span class="was" data-i18n="sc2w">以前：下完不敢用，只能回官网手动核对哈希</span>
+      </div>
+      <div class="card reveal"><div class="ic">🌐</div>
+        <h3 data-i18n="sc3">内网多台机器要取同一批 ISO</h3>
+        <p data-i18n="sc3d">起 SMB + WebDAV 只读共享，PVE 直接把 smb://&lt;IP&gt;:1445/iso 加成存储，Windows / macOS 挂 WebDAV。不想开共享，也能点 ⬇ 直接把文件拉回本机（短时票据、支持续传）。</p>
+        <span class="was" data-i18n="sc3w">以前：每台机器各下一份，或手搭 Samba 并自己管账号</span>
+      </div>
+      <div class="card reveal"><div class="ic">🧩</div>
+        <h3 data-i18n="sc4">清单里没有的发行版 / 内网自建源</h3>
+        <p data-i18n="sc4d">自定义源支持任意 ISO 直链，也支持"发行版源"（给个目录地址 + 版本正则，后台自动抓取展开）。独立保存，不会被元数据刷新覆盖。</p>
+        <span class="was" data-i18n="sc4w">以前：内置清单没有 = 只能自己 scp 进去，还得手动补校验</span>
+      </div>
     </div>
   </div>
 </section>
 
+<section id="features" style="background:linear-gradient(180deg,transparent,rgba(59,130,246,.05),transparent)">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow" data-i18n="feat_eyebrow">Features</span>
+      <h2 data-i18n="feat_h2">为「把 ISO 管明白」这件事而生的能力</h2>
+      <p data-i18n="feat_p">从清单浏览到校验落盘，再到局域网共享，一条龙在网页里完成。</p>
+    </div>
+    <div class="grid g3">
+      <div class="card reveal"><div class="ic">📋</div>
+        <h3 data-i18n="feat1">发行版清单</h3>
+        <p data-i18n="feat1d">聚合主流发行版及其版本、架构、变体，统一浏览。点一次「抓取元数据」就换成镜像站当前的最新版本列表。</p></div>
+      <div class="card reveal"><div class="ic">⬇️</div>
+        <h3 data-i18n="feat2">选择性下载</h3>
+        <p data-i18n="feat2d">按版本 / 架构 / 变体勾选，只拉你真正需要的那几个 ISO。勾了整组也能一键全下。</p></div>
+      <div class="card reveal"><div class="ic">✅</div>
+        <h3 data-i18n="feat3">双层校验</h3>
+        <p data-i18n="feat3d">SHA256 对清单哈希，GPG 对 checksum 文件验签（覆盖 detached、只签 ISO、内嵌 clearsigned 三种机制）。</p></div>
+      <div class="card reveal"><div class="ic">🐉</div>
+        <h3 data-i18n="feat4">多镜像源容错</h3>
+        <p data-i18n="feat4d">每个版本配 2~4 个候选源（清华 TUNA、中科大、阿里云、网易、腾讯、官方兜底），失败自动切换；也可选"实测选最快"。</p></div>
+      <div class="card reveal"><div class="ic">🔗</div>
+        <h3 data-i18n="feat5">自定义源</h3>
+        <p data-i18n="feat5d">任意 ISO 直链，或"发行版源"（目录地址 + 版本正则自动展开）。独立文件保存，元数据刷新不会覆盖它。</p></div>
+      <div class="card reveal"><div class="ic">⭐</div>
+        <h3 data-i18n="feat6">订阅同步</h3>
+        <p data-i18n="feat6d">设一个保留版本数 N，之后自动"刷元数据 → 下最新 N 版 → 删过期"。可立即执行，也可交给定时任务。</p></div>
+      <div class="card reveal"><div class="ic">🔒</div>
+        <h3 data-i18n="feat7">镜像保护</h3>
+        <p data-i18n="feat7d">锁定的文件在清理过期、订阅同步、手动删除时全部硬拒绝 —— 后端连绕过参数都没有。</p></div>
+      <div class="card reveal"><div class="ic">🌱</div>
+        <h3 data-i18n="feat8">种子下载</h3>
+        <p data-i18n="feat8d">内置 DistroWatch 官方种子 RSS + 磁力链接 + 自建 RSS，交给 qBittorrent 下载，落盘后与直链统一识别、统一校验。</p></div>
+      <div class="card reveal"><div class="ic">📡</div>
+        <h3 data-i18n="feat9">健康检查与账本</h3>
+        <p data-i18n="feat9d">/api/health 报告版本、各挂载点可写性（区分"卷没挂"与"属主不对"）、验签账本；下载完成还能发 SMTP 邮件。</p></div>
+    </div>
+  </div>
+</section>
 
+<section id="arch">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow" data-i18n="arch_eyebrow">Architecture</span>
+      <h2 data-i18n="arch_h2">两个容器起跑，其余按需启用</h2>
+      <p data-i18n="arch_p">核心只起 Web 服务与 Docker API 白名单代理。SMB / WebDAV / qBittorrent 挂在 compose profile 下，不启用就不创建、不拉镜像。</p>
+    </div>
+    <div class="arch">
+      <div class="node core reveal"><span class="badge" data-i18n="badge_core">默认启动</span>
+        <div class="t">iso-hub</div><div class="sub">Flask · Python 3.12 · 非 root</div>
+        <ul><li data-i18n="a1_1">Web UI / 54 条 API</li><li data-i18n="a1_2">元数据刷新</li><li data-i18n="a1_3">下载 & 校验</li><li data-i18n="a1_4">订阅与定时任务</li></ul></div>
+      <div class="node core reveal"><span class="badge" data-i18n="badge_core">默认启动</span>
+        <div class="t">socket-proxy</div><div class="sub">haproxy · 静态白名单</div>
+        <ul><li data-i18n="a2_1">只放行读状态</li><li data-i18n="a2_2">start/stop/restart</li><li data-i18n="a2_3">create/delete 永久 403</li></ul></div>
+      <div class="node opt reveal"><span class="badge">--profile share</span>
+        <div class="t">samba + webdav</div><div class="sub" data-i18n="a3_sub">只读共享</div>
+        <ul><li data-i18n="a3_1">PVE 挂 SMB 存储</li><li data-i18n="a3_2">跨平台挂网盘</li><li data-i18n="a3_3">凭据不自带默认口令</li></ul></div>
+      <div class="node opt reveal"><span class="badge">--profile bt</span>
+        <div class="t">qbittorrent</div><div class="sub" data-i18n="a4_sub">种子下载</div>
+        <ul><li data-i18n="a4_1">DistroWatch RSS</li><li data-i18n="a4_2">磁力 / 种子链接</li><li data-i18n="a4_3">落盘 ./data 统一管理</li></ul></div>
 
+      <div class="flow reveal" data-i18n="flow">浏览器 <b>→</b> iso-hub（Web）<b>→</b> 多镜像站 / 官方种子 <b>→</b> 校验后落盘 <b>→</b> SMB / WebDAV 共享</div>
+      <div class="meta reveal">
+        <span class="chip" data-i18n="meta1">非 root · uid 10001</span>
+        <span class="chip" data-i18n="meta2">只读根文件系统</span>
+        <span class="chip" data-i18n="meta3">数据卷持久化</span>
+        <span class="chip" data-i18n="meta4">内置健康检查</span>
+        <span class="chip" data-i18n="meta5">依赖锁定 · 构建可复现</span>
+      </div>
+    </div>
+    <p class="hint" data-i18n="arch_hint">没挂 Docker socket 也不会坏：面板会降级为"容器状态未知"，但下载、校验、订阅、共享配置照常工作。</p>
+  </div>
+</section>
 
+<section id="start" style="background:linear-gradient(180deg,transparent,rgba(34,211,238,.05),transparent)">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow" data-i18n="start_eyebrow">Quick Start</span>
+      <h2 data-i18n="start_h2">三分钟，从零到能下载</h2>
+      <p data-i18n="start_p">需要 Docker 20.10+ 与 Compose v2（<code style="font-size:13px">docker compose</code>，带空格）。</p>
+    </div>
+    <div class="steps">
+      <div class="step reveal"><div class="step-body">
+        <h4 data-i18n="step1">拉配置并起容器</h4>
+        <p data-i18n="step1d">容器以 uid 10001 非 root 运行，所以挂载目录要先交给它。下面这段国内直连可用。</p>
+        <div class="code"><button class="copy" type="button">复制</button><span class="c"># 建目录 + 拉 compose（阿里云 ACR 源，国内推荐）</span>
+mkdir iso-hub &amp;&amp; cd iso-hub
+curl -O https://raw.githubusercontent.com/DC1024/iso-hub/master/docker-compose.acr.yml
+mkdir -p data backups qb-config webdav-config samba-config
+sudo chown -R 10001:10001 data backups qb-config webdav-config samba-config
+docker compose -f docker-compose.acr.yml up -d</div>
+      </div></div>
+      <div class="step reveal"><div class="step-body">
+        <h4 data-i18n="step2">播种管理员</h4>
+        <p data-i18n="step2d">公网访问必做。不设的话只允许从本机 / 局域网首次建号（防抢注）。</p>
+        <div class="code"><button class="copy" type="button">复制</button>cat &gt; .env &lt;&lt;'EOF'
+<span class="k">ISO_HUB_ADMIN_USER</span>=admin
+<span class="k">ISO_HUB_ADMIN_PASS</span>=换成你的强密码
+EOF
+docker compose -f docker-compose.acr.yml up -d</div>
+      </div></div>
+      <div class="step reveal"><div class="step-body">
+        <h4 data-i18n="step3">打开面板，抓一次元数据</h4>
+        <p data-i18n="step3d">访问 http://&lt;服务器IP&gt;:8899 登录，点右上角「⤓ 抓取最新版本元数据」，然后勾选要的版本开始下载。</p>
+        <div class="code"><button class="copy" type="button">复制</button><span class="c"># 确认服务健康（顺带看版本）</span>
+curl -s http://127.0.0.1:8899/api/health
+curl -sI http://127.0.0.1:8899/ | grep -i x-version</div>
+      </div></div>
+    </div>
+    <p class="hint" data-i18n="start_hint">要 SMB / WebDAV 共享或种子下载？追加 <code>--profile share</code> / <code>--profile bt</code>。海外服务器把 compose 文件换成 <code>docker-compose.dockerhub.yml</code>。</p>
+  </div>
+</section>
 
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow" data-i18n="faq_eyebrow">FAQ</span>
+      <h2 data-i18n="faq_h2">上手前最常问的六个问题</h2>
+      <p data-i18n="faq_p">更多排障条目在 Wiki 的常见问题与「已知坑」两篇里。</p>
+    </div>
+    <div class="faq">
+      <details class="reveal"><summary data-i18n="q1">为什么我起来之后没有「网络共享」和「种子下载」？</summary>
+        <p data-i18n="a1">它们是可选的 sidecar，挂在 compose profile 下。默认只起 iso-hub + socket-proxy 两个容器；要共享就 <code>--profile share</code>，要种子就 <code>--profile bt</code>。也可以写在 .env 里：COMPOSE_PROFILES=share,bt。</p></details>
+      <details class="reveal"><summary data-i18n="q2">容器启动就退出，日志写「数据目录不可写」？</summary>
+        <p data-i18n="a2">宿主挂载目录的属主不是 10001。在 compose 目录执行 sudo chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config 后重启。漏了会立即退出而不是半死不活。</p></details>
+      <details class="reveal"><summary data-i18n="q3">登录报「管理员账号未设置」？</summary>
+        <p data-i18n="a3">用户表为空且没设 ISO_HUB_ADMIN_USER / ISO_HUB_ADMIN_PASS，此时只允许本机或私有网段建号。在 .env 里播种管理员，或从局域网设备打开面板首次建号。</p></details>
+      <details class="reveal"><summary data-i18n="q4">为什么要把 docker.sock 交给一个代理，而不直接挂？</summary>
+        <p data-i18n="a4">挂裸 socket 等于把宿主机 root 交给容器里的进程。socket-proxy 用静态白名单只放行"读容器状态 + start/stop/restart"，create / delete / exec 永久 403，切断"应用被攻破 → 起特权容器 → 宿主机 root"这条链。</p></details>
+      <details class="reveal"><summary data-i18n="q5">「刷新列表」和「抓取最新版本元数据」有什么区别？</summary>
+        <p data-i18n="a5">刷新列表只重读本地清单，不联网；抓取元数据才会联网访问镜像站目录并把最新版本写进清单。前者用于任务结束后刷新展示。</p></details>
+      <details class="reveal"><summary data-i18n="q6">升级会丢数据吗？</summary>
+        <p data-i18n="a6">不会。所有状态都在宿主机挂载卷里，镜像无状态。docker compose pull &amp;&amp; docker compose up -d 即可。唯一要注意的是从 v1.4.x 跨到 v1.5.0+ 必须先 chown 那批目录。升级前想留后路：docker exec iso-hub python /app/scripts/backup.py。</p></details>
+    </div>
+  </div>
+</section>
 
-
-
-<footer data-page-node-id="uogDBOMEHs6RLVluOy6TPj">
-  <div class="wrap foot" data-page-node-id="4nRALv9xkcaAuK260rDyqR">
-    <div data-page-node-id="Iicd2sVqPJ2EXbX3T9gCyT">© <span id="yr" data-page-node-id="Iz10NElATktp6KG4rZK0H0"></span> <span data-i18n="footer_main" data-page-node-id="pPqvSosjazope2g4UpOKgd">ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</span></div>
-    <div data-page-node-id="bjX0ERHLap0cPMhNsq3Ear">基于 <a href="https://github.com/DC1024/iso-hub" target="_blank" rel="noopener" style="color:var(--cyan)" data-page-node-id="pubQSExNBjbbzPuxHIS3cs">DC1024/iso-hub</a> · <a href="https://github.com/DC1024/iso-hub/wiki" target="_blank" rel="noopener" style="color:var(--cyan)" data-page-node-id="9YLUdEC5LlIj7p3Jaw2sOk">Wiki</a> · Flask + Docker</div>
+<footer>
+  <div class="wrap foot">
+    <div>© <span id="yr"></span> <span data-i18n="footer_main">ISO Hub · 网页版 Linux 发行版 ISO 自动更新器</span></div>
+    <div data-i18n="footer_right">开源 · MPL-2.0 · 基于 Sowevo/iso_download · Flask + Docker</div>
   </div>
 </footer>
 
@@ -272,13 +422,43 @@
   burger && burger.addEventListener('click', () => mm.style.display = mm.style.display === 'flex' ? 'none' : 'flex');
   mm && mm.querySelectorAll('a').forEach(a => a.addEventListener('click', () => mm.style.display = 'none'));
   // 滚动入场
-  const io = new IntersectionObserver((es) => es.forEach(e => { if (e.isIntersecting) e.target.classList.add('in'); }), { threshold: .12 });
-  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+  // 没有 IntersectionObserver 时必须一次性显示: 这些卡片默认 opacity:0,
+  // 拿不到观察器就等于整页空白(搜索引擎/旧浏览器/in-app webview 都会中招)。
+  const revealEls = document.querySelectorAll('.reveal');
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((es) => es.forEach(e => { if (e.isIntersecting) e.target.classList.add('in'); }), { threshold: .12 });
+    revealEls.forEach(el => io.observe(el));
+  } else {
+    revealEls.forEach(el => el.classList.add('in'));
+  }
+  document.documentElement.classList.remove('no-js');
   // 复制按钮
+  // 注意: navigator.clipboard 只在安全上下文(https / localhost)可用, 且可能被策略拒绝;
+  // 直接用会抛未捕获的 Promise rejection 并在控制台留红字。这里降级到 execCommand。
   document.querySelectorAll('.copy').forEach(b => b.addEventListener('click', () => {
     const code = b.closest('.code').innerText.replace(/复制|Copy/g, '').trim();
-    navigator.clipboard && navigator.clipboard.writeText(code);
-    const t = b.textContent; b.textContent = (document.documentElement.dataset.lang === 'en' ? 'Copied' : '已复制'); setTimeout(() => b.textContent = t, 1400);
+    const done = () => {
+      const t = b.textContent;
+      b.textContent = (document.documentElement.dataset.lang === 'en' ? 'Copied' : '已复制');
+      setTimeout(() => b.textContent = t, 1400);
+    };
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = code;
+        ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        done();
+      } catch (e) { /* 复制不可用时静默: 代码块本身可选择 */ }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).then(done).catch(fallback);
+    } else {
+      fallback();
+    }
   }));
   // 日夜主题切换
   const tgl = document.getElementById('themeToggle');
@@ -295,67 +475,169 @@
   const I18N = {
     zh: {
       title: 'ISO Hub · 网页版 Linux 发行版 ISO 自动更新器',
-      desc: 'ISO Hub —— 对 Sowevo/iso_download 的网页化封装，自动追踪多镜像站元数据、选择性下载、SHA256 校验、内置 SMB/WebDAV 共享。网页上搞定 Linux 发行版 ISO 的更新与分发。',
-      cta_deploy: 'Wiki',
-      hero_h1: '网页上的 <span class="grad">Linux 发行版 ISO</span><br>自动更新器',
-      hero_lead: 'ISO Hub 是对 Sowevo/iso_download 命令行工具的网页化封装。自动追踪多镜像站元数据、按需选择性下载、SHA256 校验、内置 SMB / WebDAV 共享——在浏览器里搞定 ISO 的更新与分发。',
-      hero_cta1: '📚 查看 Wiki', hero_cta2: '在 GitHub 查看',
-      stat_services: '容器化服务', stat_distros: '镜像条目', stat_verify: '下载校验', stat_src_s: '元数据加速', stat_src: '多镜像源',
-      feat_h2: '为「追 ISO」这件麻烦事而生的能力',
-      feat_p: '从清单浏览到下载校验，再到局域网共享，一条龙在网页里完成。',
-      feat1: '发行版清单', feat1d: '聚合主流 Linux 发行版及其版本、架构、镜像变体，统一浏览。',
-      feat2: '选择性下载', feat2d: '按版本 / 架构 / 变体勾选，只拉你真正需要的那几个 ISO。',
-      feat3: 'SHA256 校验', feat3d: '下载后自动校验哈希，确保镜像完整、未被篡改。',
-      feat4: '多镜像源', feat4d: '支持清华 TUNA、中科大 USTC 等多镜像源，自动刷新元数据，国内访问快、延迟低。',
-      feat5: '自定义镜像源', feat5d: '支持配置自有镜像源，适配内网或特定区域加速。',
-      feat6: '镜像保护', feat6d: '防止重复拉取、保护磁盘与带宽，已存在的版本智能跳过。',
-      feat7: '收藏订阅', feat7d: '收藏常用发行版，变更时同步提醒，追新不掉队。',
-      feat8: '单管理员', feat8d: '内置单管理员登录，轻量鉴权，适合家庭 / 小团队自建。',
-      feat9: '定时任务', feat9d: '按计划自动检查并更新元数据，无需人工值守。',
-      feat10: '中英文界面', feat10d: '内置双语界面，中英切换无障碍。',
-      feat11: 'SMB/WebDAV 网络共享', feat11d: '内置 Samba 与 WebDAV 容器，下载的 ISO 既可通过 SMB 在局域网共享，也可挂载为网络磁盘跨平台取用。',
-      feat13: '种子下载', feat13d: '解析 DistroWatch 官方种子 RSS，交给内置 qBittorrent 下载，落盘后与直链统一识别、校验。',
-      arch_h2: '四容器，一套 Docker Compose 拉起',
-      arch_p: 'Web 服务 + SMB + WebDAV + qBittorrent，持久化数据独立挂载，健康检查内置。',
-      arch1_1: 'Web UI / API', arch1_2: '元数据刷新', arch1_3: '下载 & 校验', arch1_4: '定时任务',
-      arch2_1: '局域网文件共享', arch2_2: '独立数据卷', arch2_3: '只读 / 读写',
-      arch3_1: '挂载为网盘', arch3_2: '跨平台取用', arch3_3: 'Basic Auth',
-      arch4_1: '官方种子 RSS', arch4_2: '磁力 / 种子链接', arch4_3: '落盘 ./data',
-      flow: '浏览器 <b>→</b> iso-hub(Web) <b>→</b> 多镜像站 / 官方种子(元数据/ISO) <b>→</b> 落盘 <b>→</b> SMB / WebDAV 共享',
-      meta1: '端口 · 可配置', meta2: '持久化 · 挂载卷', meta3: '健康检查 · 内置', meta4: '镜像 · Docker Hub', meta5: '栈 · Flask + Docker',
-      footer_main: 'ISO Hub · 网页版 Linux 发行版 ISO 自动更新器'
+      desc: 'ISO Hub —— 让 NAS 自己追 Linux 发行版 ISO：网页勾选、多镜像源下载、SHA256 + GPG 双层校验、订阅自动跟新版，内置 SMB / WebDAV 共享。一条 docker compose 起服务。',
+      nav_scene: '使用场景', nav_feat: '核心能力', nav_arch: '架构', nav_start: '快速开始', nav_faq: 'FAQ',
+      cta_wiki: 'Wiki',
+      hero_eyebrow: 'Web ISO Updater · Docker Ready',
+      hero_h1: '让 NAS 自己追<br><span class="grad">Linux 发行版 ISO</span>',
+      hero_lead: '网页上勾选要哪个发行版，剩下的交给它：多镜像源下载、SHA256 + GPG 双层校验、订阅自动跟新版、SMB / WebDAV 共享给局域网。一条 docker compose 起服务，不用登录服务器敲命令。',
+      hero_cta1: '⚡ 三分钟部署', hero_cta2: '📚 查看 Wiki',
+      hero_note: '开源 · MPL-2.0 · 数据全在本地卷里，不联网也能用',
+      stat1_s: '个容器即可起跑', stat2_s: '条 REST API', stat3: 'SHA256+GPG', stat3_s: '双层校验', stat4_s: '外部数据库依赖',
+
+      scene_eyebrow: 'Scenarios',
+      scene_h2: '四种人，同一个需求：别让我手动追版本',
+      scene_p: '如果你的场景和下面任意一条重合，这个工具就是为你写的。',
+      sc1: '家庭 NAS / 小主机常开机',
+      sc1d: '为发行版开启订阅并设保留版本数，每次同步自动"刷元数据 → 下最新 N 版 → 删过期"。锁定的文件永远不会被删。',
+      sc1w: '以前：每周手动去镜像站翻目录、比对本地、下载、算哈希、删旧版',
+      sc2: '给 PVE / 装机 U 盘备料',
+      sc2d: 'ISO 是要写进系统盘的，来源不可信等于把后门装进宿主。下载后做 SHA256 校验，并对 checksum 文件验 GPG 签名 —— 公钥与硬编码指纹比对，不是"第一次见到就信"。',
+      sc2w: '以前：下完不敢用，只能回官网手动核对哈希',
+      sc3: '内网多台机器要取同一批 ISO',
+      sc3d: '起 SMB + WebDAV 只读共享，PVE 直接把 smb://&lt;IP&gt;:1445/iso 加成存储，Windows / macOS 挂 WebDAV。不想开共享，也能点 ⬇ 直接把文件拉回本机（短时票据、支持续传）。',
+      sc3w: '以前：每台机器各下一份，或手搭 Samba 并自己管账号',
+      sc4: '清单里没有的发行版 / 内网自建源',
+      sc4d: '自定义源支持任意 ISO 直链，也支持"发行版源"（给个目录地址 + 版本正则，后台自动抓取展开）。独立保存，不会被元数据刷新覆盖。',
+      sc4w: '以前：内置清单没有 = 只能自己 scp 进去，还得手动补校验',
+
+      feat_eyebrow: 'Features',
+      feat_h2: '为「把 ISO 管明白」这件事而生的能力',
+      feat_p: '从清单浏览到校验落盘，再到局域网共享，一条龙在网页里完成。',
+      feat1: '发行版清单', feat1d: '聚合主流发行版及其版本、架构、变体，统一浏览。点一次「抓取元数据」就换成镜像站当前的最新版本列表。',
+      feat2: '选择性下载', feat2d: '按版本 / 架构 / 变体勾选，只拉你真正需要的那几个 ISO。勾了整组也能一键全下。',
+      feat3: '双层校验', feat3d: 'SHA256 对清单哈希，GPG 对 checksum 文件验签（覆盖 detached、只签 ISO、内嵌 clearsigned 三种机制）。',
+      feat4: '多镜像源容错', feat4d: '每个版本配 2~4 个候选源（清华 TUNA、中科大、阿里云、网易、腾讯、官方兜底），失败自动切换；也可选"实测选最快"。',
+      feat5: '自定义源', feat5d: '任意 ISO 直链，或"发行版源"（目录地址 + 版本正则自动展开）。独立文件保存，元数据刷新不会覆盖它。',
+      feat6: '订阅同步', feat6d: '设一个保留版本数 N，之后自动"刷元数据 → 下最新 N 版 → 删过期"。可立即执行，也可交给定时任务。',
+      feat7: '镜像保护', feat7d: '锁定的文件在清理过期、订阅同步、手动删除时全部硬拒绝 —— 后端连绕过参数都没有。',
+      feat8: '种子下载', feat8d: '内置 DistroWatch 官方种子 RSS + 磁力链接 + 自建 RSS，交给 qBittorrent 下载，落盘后与直链统一识别、统一校验。',
+      feat9: '健康检查与账本', feat9d: '/api/health 报告版本、各挂载点可写性（区分"卷没挂"与"属主不对"）、验签账本；下载完成还能发 SMTP 邮件。',
+
+      arch_eyebrow: 'Architecture',
+      arch_h2: '两个容器起跑，其余按需启用',
+      arch_p: '核心只起 Web 服务与 Docker API 白名单代理。SMB / WebDAV / qBittorrent 挂在 compose profile 下，不启用就不创建、不拉镜像。',
+      badge_core: '默认启动',
+      a1_1: 'Web UI / 54 条 API', a1_2: '元数据刷新', a1_3: '下载 & 校验', a1_4: '订阅与定时任务',
+      a2_1: '只放行读状态', a2_2: 'start/stop/restart', a2_3: 'create/delete 永久 403',
+      a3_sub: '只读共享', a3_1: 'PVE 挂 SMB 存储', a3_2: '跨平台挂网盘', a3_3: '凭据不自带默认口令',
+      a4_sub: '种子下载', a4_1: 'DistroWatch RSS', a4_2: '磁力 / 种子链接', a4_3: '落盘 ./data 统一管理',
+      flow: '浏览器 <b>→</b> iso-hub（Web）<b>→</b> 多镜像站 / 官方种子 <b>→</b> 校验后落盘 <b>→</b> SMB / WebDAV 共享',
+      meta1: '非 root · uid 10001', meta2: '只读根文件系统', meta3: '数据卷持久化', meta4: '内置健康检查', meta5: '依赖锁定 · 构建可复现',
+      arch_hint: '没挂 Docker socket 也不会坏：面板会降级为"容器状态未知"，但下载、校验、订阅、共享配置照常工作。',
+
+      start_eyebrow: 'Quick Start',
+      start_h2: '三分钟，从零到能下载',
+      start_p: '需要 Docker 20.10+ 与 Compose v2（docker compose，带空格）。',
+      step1: '拉配置并起容器',
+      step1d: '容器以 uid 10001 非 root 运行，所以挂载目录要先交给它。下面这段国内直连可用。',
+      step2: '播种管理员',
+      step2d: '公网访问必做。不设的话只允许从本机 / 局域网首次建号（防抢注）。',
+      step3: '打开面板，抓一次元数据',
+      step3d: '访问 http://&lt;服务器IP&gt;:8899 登录，点右上角「⤓ 抓取最新版本元数据」，然后勾选要的版本开始下载。',
+      start_hint: '要 SMB / WebDAV 共享或种子下载？追加 --profile share / --profile bt。海外服务器把 compose 文件换成 docker-compose.dockerhub.yml。',
+
+      faq_eyebrow: 'FAQ',
+      faq_h2: '上手前最常问的六个问题',
+      faq_p: '更多排障条目在 Wiki 的常见问题与「已知坑」两篇里。',
+      q1: '为什么我起来之后没有「网络共享」和「种子下载」？',
+      a1: '它们是可选的 sidecar，挂在 compose profile 下。默认只起 iso-hub + socket-proxy 两个容器；要共享就 --profile share，要种子就 --profile bt。也可以写在 .env 里：COMPOSE_PROFILES=share,bt。',
+      q2: '容器启动就退出，日志写「数据目录不可写」？',
+      a2: '宿主挂载目录的属主不是 10001。在 compose 目录执行 sudo chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config 后重启。漏了会立即退出而不是半死不活。',
+      q3: '登录报「管理员账号未设置」？',
+      a3: '用户表为空且没设 ISO_HUB_ADMIN_USER / ISO_HUB_ADMIN_PASS，此时只允许本机或私有网段建号。在 .env 里播种管理员，或从局域网设备打开面板首次建号。',
+      q4: '为什么要把 docker.sock 交给一个代理，而不直接挂？',
+      a4: '挂裸 socket 等于把宿主机 root 交给容器里的进程。socket-proxy 用静态白名单只放行"读容器状态 + start/stop/restart"，create / delete / exec 永久 403，切断"应用被攻破 → 起特权容器 → 宿主机 root"这条链。',
+      q5: '「刷新列表」和「抓取最新版本元数据」有什么区别？',
+      a5: '刷新列表只重读本地清单，不联网；抓取元数据才会联网访问镜像站目录并把最新版本写进清单。前者用于任务结束后刷新展示。',
+      q6: '升级会丢数据吗？',
+      a6: '不会。所有状态都在宿主机挂载卷里，镜像无状态。docker compose pull &amp;&amp; docker compose up -d 即可。唯一要注意的是从 v1.4.x 跨到 v1.5.0+ 必须先 chown 那批目录。升级前想留后路：docker exec iso-hub python /app/scripts/backup.py。',
+
+      footer_main: 'ISO Hub · 网页版 Linux 发行版 ISO 自动更新器',
+      footer_right: '开源 · MPL-2.0 · 基于 Sowevo/iso_download · Flask + Docker'
     },
     en: {
       title: 'ISO Hub · Web-based Linux distro ISO auto-updater',
-      desc: 'ISO Hub —— a web wrapper around Sowevo/iso_download. It auto-tracks multiple mirror metadata, supports selective downloads, SHA256 verification, and built-in SMB/WebDAV sharing. Manage Linux distro ISO updates and distribution right from your browser.',
-      cta_deploy: 'Wiki',
-      hero_h1: 'Web-based <span class="grad">Linux distro ISO</span><br>auto-updater',
-      hero_lead: 'ISO Hub is a web wrapper for the Sowevo/iso_download CLI. It auto-tracks multiple mirror metadata, downloads only what you pick, verifies SHA256, and serves built-in SMB / WebDAV sharing — all ISO updates and distribution handled in your browser.',
-      hero_cta1: '📚 View Wiki', hero_cta2: 'View on GitHub',
-      stat_services: 'Containerized services', stat_distros: 'ISO entries', stat_verify: 'Download verify', stat_src_s: 'Mirror metadata', stat_src: 'Multi-mirror',
-      feat_h2: 'Built for the messy job of chasing ISOs',
-      feat_p: 'From browsing the catalog to verifying downloads and sharing over LAN — all in one web page.',
-      feat1: 'Distro catalog', feat1d: 'Aggregates major Linux distros with versions, architectures and flavors in one browsable view.',
-      feat2: 'Selective download', feat2d: 'Pick by version / arch / flavor — pull only the ISOs you actually need.',
-      feat3: 'SHA256 verify', feat3d: 'Hashes are auto-checked after download to guarantee integrity and authenticity.',
-      feat4: 'Multi-mirror', feat4d: 'Supports TUNA, USTC and more mirrors, auto-refreshing metadata — fast and low-latency in China.',
-      feat5: 'Custom sources', feat5d: 'Configure your own mirror for intranet or regional acceleration.',
-      feat6: 'Mirror guard', feat6d: 'Avoids duplicate pulls, saves disk and bandwidth, smart-skips existing versions.',
-      feat7: 'Watch & subscribe', feat7d: 'Star your favorites and get notified on changes — never miss an update.',
-      feat8: 'Single admin', feat8d: 'Built-in single-admin login, lightweight auth for home / small teams.',
-      feat9: 'Scheduled jobs', feat9d: 'Auto-checks and refreshes metadata on a schedule — no manual watch.',
-      feat10: 'i18n UI', feat10d: 'Bilingual interface with seamless zh / en switching.',
-      feat11: 'SMB/WebDAV share', feat11d: 'Built-in Samba and WebDAV containers — downloaded ISOs are shared over LAN via SMB and mountable as a network drive on any platform.',
-      feat13: 'Torrent download', feat13d: 'Parses the official DistroWatch torrent RSS, hands it to built-in qBittorrent, then verifies alongside direct downloads.',
-      arch_h2: 'Four containers, one docker compose',
-      arch_p: 'Web service + SMB + WebDAV + qBittorrent, with isolated persistent volumes and built-in health checks.',
-      arch1_1: 'Web UI / API', arch1_2: 'Metadata refresh', arch1_3: 'Download & verify', arch1_4: 'Scheduled jobs',
-      arch2_1: 'LAN file sharing', arch2_2: 'Dedicated volume', arch2_3: 'Read-only / read-write',
-      arch3_1: 'Mount as drive', arch3_2: 'Cross-platform', arch3_3: 'Basic Auth',
-      arch4_1: 'Official torrent RSS', arch4_2: 'Magnet / torrent links', arch4_3: 'Land in ./data',
-      flow: 'Browser <b>→</b> iso-hub (Web) <b>→</b> mirror sites / official torrents (metadata/ISO) <b>→</b> disk <b>→</b> SMB / WebDAV share',
-      meta1: 'Port · configurable', meta2: 'Persistence · mounted volume', meta3: 'Health check · built-in', meta4: 'Image · Docker Hub', meta5: 'Stack · Flask + Docker',
-      footer_main: 'ISO Hub · Web-based Linux distro ISO auto-updater'
+      desc: 'ISO Hub lets your NAS chase Linux distro ISOs for you: pick in the browser, multi-mirror download, SHA256 + GPG verification, subscription auto-updates, built-in SMB / WebDAV sharing. One docker compose to start.',
+      nav_scene: 'Scenarios', nav_feat: 'Features', nav_arch: 'Architecture', nav_start: 'Quick start', nav_faq: 'FAQ',
+      cta_wiki: 'Wiki',
+      hero_eyebrow: 'Web ISO Updater · Docker Ready',
+      hero_h1: 'Let your NAS chase<br><span class="grad">Linux distro ISOs</span>',
+      hero_lead: 'Pick the distro in your browser and it handles the rest: multi-mirror downloads, SHA256 + GPG verification, subscription auto-updates, and SMB / WebDAV sharing for your LAN. One docker compose to start — no SSH required.',
+      hero_cta1: '⚡ Deploy in 3 minutes', hero_cta2: '📚 Read the Wiki',
+      hero_note: 'Open source · MPL-2.0 · everything stays in local volumes',
+      stat1_s: 'containers to start', stat2_s: 'REST endpoints', stat3: 'SHA256+GPG', stat3_s: 'verification', stat4_s: 'external databases',
+
+      scene_eyebrow: 'Scenarios',
+      scene_h2: 'Four kinds of people, one wish: stop chasing versions manually',
+      scene_p: 'If any of these sounds like you, this tool was written for you.',
+      sc1: 'Always-on home NAS / mini PC',
+      sc1d: 'Turn on a subscription with a keep-N setting; every sync refreshes metadata, pulls the newest N versions and deletes the expired ones. Locked files are never removed.',
+      sc1w: 'Before: browse the mirror weekly, diff against local, download, hash, delete old ones',
+      sc2: 'Stocking ISOs for Proxmox / installers',
+      sc2d: 'An ISO gets written to a system disk — an untrusted source is a backdoor on the host. Every download is SHA256-checked and the checksum file is GPG-verified against a hard-coded fingerprint, not trust-on-first-use.',
+      sc2w: 'Before: download, then go back to the vendor site to compare hashes by hand',
+      sc3: 'Several LAN machines need the same ISOs',
+      sc3d: 'Start SMB + WebDAV read-only shares: add smb://&lt;IP&gt;:1445/iso as Proxmox storage, mount WebDAV on Windows / macOS. Or skip sharing and click ⬇ to pull a file straight into your browser (short-lived ticket, resumable).',
+      sc3w: 'Before: every machine downloads its own copy, or hand-roll Samba and manage accounts',
+      sc4: 'Distros missing from the catalog / internal mirrors',
+      sc4d: 'Custom sources accept any direct ISO link, or a "distro source" (a listing URL plus a version regex that gets expanded in the background). Stored separately, never overwritten by metadata refresh.',
+      sc4w: 'Before: not in the catalog meant scp-ing files in by hand, then verifying them manually',
+
+      feat_eyebrow: 'Features',
+      feat_h2: 'Built for actually managing your ISOs',
+      feat_p: 'Browse the catalog, download and verify, then share over LAN — all in one page.',
+      feat1: 'Distro catalog', feat1d: 'Aggregates major distros with versions, architectures and flavors in one view. One "fetch metadata" click swaps in the mirror current release list.',
+      feat2: 'Selective download', feat2d: 'Pick by version / arch / flavor — pull only the ISOs you actually need. Whole groups can be selected at once.',
+      feat3: 'Two-layer verification', feat3d: 'SHA256 against the manifest, plus GPG on the checksum file — covering detached signatures, ISO-only signatures and inline clearsigned files.',
+      feat4: 'Multi-mirror failover', feat4d: 'Each version carries 2-4 candidate mirrors (TUNA, USTC, Aliyun, NetEase, Tencent, upstream fallback) with automatic failover, or a "measure the fastest" strategy.',
+      feat5: 'Custom sources', feat5d: 'Any direct ISO link, or a "distro source" (listing URL + version regex, auto-expanded). Kept in its own file, untouched by metadata refresh.',
+      feat6: 'Subscriptions', feat6d: 'Set a keep-N count and it refreshes metadata, pulls the newest N versions and deletes expired ones — on demand or on a schedule.',
+      feat7: 'Mirror guard', feat7d: 'Locked files are refused by cleanup, subscription sync and manual delete alike — the backend has no force override at all.',
+      feat8: 'Torrent downloads', feat8d: 'Built-in DistroWatch official torrent RSS, magnet links and your own feeds, handed to qBittorrent, then identified and verified alongside direct downloads.',
+      feat9: 'Health and ledger', feat9d: '/api/health reports the version, per-mount writability (telling "volume missing" apart from "wrong owner") and the GPG ledger; optional SMTP mail on completion.',
+
+      arch_eyebrow: 'Architecture',
+      arch_h2: 'Two containers to start, the rest on demand',
+      arch_p: 'The core is just the web service plus a whitelisted Docker API proxy. SMB / WebDAV / qBittorrent live behind compose profiles — not enabled means not created, not pulled.',
+      badge_core: 'Default',
+      a1_1: 'Web UI / 54 endpoints', a1_2: 'Metadata refresh', a1_3: 'Download & verify', a1_4: 'Subscriptions & cron',
+      a2_1: 'Read state only', a2_2: 'start/stop/restart', a2_3: 'create/delete always 403',
+      a3_sub: 'Read-only shares', a3_1: 'Proxmox SMB storage', a3_2: 'Mount as a drive', a3_3: 'No default password',
+      a4_sub: 'Torrent downloads', a4_1: 'DistroWatch RSS', a4_2: 'Magnet / torrent links', a4_3: 'Lands in ./data',
+      flow: 'Browser <b>→</b> iso-hub (web) <b>→</b> mirrors / official torrents <b>→</b> verified on disk <b>→</b> SMB / WebDAV shares',
+      meta1: 'Non-root · uid 10001', meta2: 'Read-only rootfs', meta3: 'Persistent volumes', meta4: 'Built-in health checks', meta5: 'Pinned deps · reproducible builds',
+      arch_hint: 'Without the Docker socket nothing breaks: the panel degrades to "container state unknown", while downloads, verification, subscriptions and share settings keep working.',
+
+      start_eyebrow: 'Quick Start',
+      start_h2: 'Three minutes from zero to downloading',
+      start_p: 'Requires Docker 20.10+ and Compose v2 (docker compose, with a space).',
+      step1: 'Fetch the compose file and start',
+      step1d: 'The container runs as non-root uid 10001, so hand it the mount directories first. This uses the Aliyun ACR mirror.',
+      step2: 'Seed an admin account',
+      step2d: 'Required for public access. Otherwise only loopback / private networks may create the first account (anti-squatting).',
+      step3: 'Open the panel and fetch metadata once',
+      step3d: 'Visit http://&lt;server-IP&gt;:8899 and log in, click "fetch latest metadata" in the top right, then tick the versions you want.',
+      start_hint: 'Need SMB / WebDAV or torrents? Add --profile share / --profile bt. Outside China, swap the compose file for docker-compose.dockerhub.yml.',
+
+      faq_eyebrow: 'FAQ',
+      faq_h2: 'Six questions before you start',
+      faq_p: 'More troubleshooting entries live in the Wiki FAQ and "known pitfalls" pages.',
+      q1: 'Why are sharing and torrents missing after startup?',
+      a1: 'They are optional sidecars behind compose profiles. By default only iso-hub + socket-proxy start. Add --profile share for SMB/WebDAV, --profile bt for qBittorrent, or set COMPOSE_PROFILES=share,bt in .env.',
+      q2: 'The container exits with "data directory not writable"?',
+      a2: 'The host directories are not owned by uid 10001. Run sudo chown -R 10001:10001 ./data ./backups ./qb-config ./webdav-config ./samba-config in the compose directory, then restart. It exits immediately instead of half-working.',
+      q3: 'Login says "administrator account not set"?',
+      a3: 'The user table is empty and ISO_HUB_ADMIN_USER / ISO_HUB_ADMIN_PASS are unset, so only loopback or private networks may create the first account. Seed the admin in .env, or open the panel from a LAN device.',
+      q4: 'Why put docker.sock behind a proxy instead of mounting it directly?',
+      a4: 'A raw socket mount hands host root to any process in the container. socket-proxy allows only "read container state" and start/stop/restart via a static allowlist; create / delete / exec stay 403 — cutting the app-compromise → privileged-container → host-root chain.',
+      q5: 'What is the difference between "refresh list" and "fetch latest metadata"?',
+      a5: 'Refresh list only re-reads the local manifest and never touches the network. Fetching metadata queries the mirrors and writes the newest versions into the manifest.',
+      q6: 'Will upgrading lose my data?',
+      a6: 'No. All state lives in host volumes; images are stateless. Just docker compose pull &amp;&amp; docker compose up -d. The one caveat: crossing v1.4.x to v1.5.0+ needs the chown step first. Want a fallback? docker exec iso-hub python /app/scripts/backup.py.',
+
+      footer_main: 'ISO Hub · Web-based Linux distro ISO auto-updater',
+      footer_right: 'Open source · MPL-2.0 · built on Sowevo/iso_download · Flask + Docker'
     }
   };
 
