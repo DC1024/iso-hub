@@ -1462,7 +1462,7 @@ document.addEventListener('change',e=>{
   refreshSelState();
 });
 /* 当前用户**看得见**的已勾选行。下载/删除一律走这里:
-   勾选从 v1.9.0 起能跨筛选保留, 若不过滤可见性, 一个被筛掉的行会被悄悄带进
+   勾选从 v1.8.3 起能跨筛选保留, 若不过滤可见性, 一个被筛掉的行会被悄悄带进
    删除范围(它在界面上根本看不见)。线上功能测试用例 84 专门盯这条。 */
 function visibleChecked(){
   return [...document.querySelectorAll('#groups .ck:checked')]
@@ -2734,7 +2734,7 @@ function applyFilter(){
     // 对按状态筛选的: 逐行判定可见性, 组内只要有一行命中就显示该组
     if(wanted){
       let any=false;
-      // 只作用于 tbody 里的数据行: v1.9.0 起表头也在这张表里, 旧选择器
+      // 只作用于 tbody 里的数据行: v1.8.3 起表头也在这张表里, 旧选择器
       // `.tbl tr` 会把 thead 行一并置为 display:none —— 一筛就没表头了。
       card.querySelectorAll('.tbl tbody tr').forEach(tr=>{
         if(tr.classList.contains('stray')){tr.style.display='none';return}
