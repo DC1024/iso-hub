@@ -373,7 +373,7 @@
           <input id="rs-sub" class="inp" style="grid-column:1/-1" placeholder="[高级] sub_listing_template: 子页URL模板(versioned_flat_listing用),如 {listing_url}{version}/Workstation/x86_64/iso/" data-page-node-id="9K8ZKQiXu85RM9lCirbv0q">
           <input id="rs-dltpl" class="inp" style="grid-column:1/-1" placeholder="下载模板,如 {listing_url}{version}/ubuntu-{version}-desktop-amd64.iso" data-page-node-id="GQ3u7PGp1b39FLELzgGH3o">
           <input id="rs-chktpl" class="inp" style="grid-column:1/-1" placeholder="校验模板(可选),如 {listing_url}{version}/SHA256SUMS" data-page-node-id="3nAdFa46weFok7mqejo6Ae">
-          <div id="rs-versions-row" style="display:none;grid-column:1/-1;display:flex;gap:8px;align-items:center" data-page-node-id="dYlvjiLJmN9RIVhfCzDckS">
+          <div id="rs-versions-row" style="display:none;grid-column:1/-1;gap:8px;align-items:center" data-page-node-id="dYlvjiLJmN9RIVhfCzDckS">
             <span class="muted" style="font-size:12px;white-space:nowrap" data-i18n="fixedList" data-page-node-id="QfRkOIFnt4Fd8eSa51eNYu">固定版本列表(逗号分隔)</span>
             <input id="rs-versions" class="inp" style="flex:1" placeholder="如 7.9.2009,8.0.2008 (static策略用)" data-page-node-id="gAfrdwI99JTNiddwEHLuF7">
           </div>
@@ -2422,7 +2422,7 @@ function applySrcTpl(){
   $('#rs-chktpl').value=tpl.chktpl||'';
   $('#rs-max').value=(tpl.max||2);
   if(tpl.versions)$('#rs-versions').value=tpl.versions.join(',');else $('#rs-versions').value='';
-  $('#rs-versions-row').style.display=(tpl.strategy==='static')?'':'none';
+  $('#rs-versions-row').style.display=(tpl.strategy==='static')?'flex':'none';
   toast(t('fillingTpl')+' '+$('#rs-tpl').selectedOptions[0].text);
 }
 async function loadCustomSources(){
