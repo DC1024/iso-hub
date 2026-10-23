@@ -189,6 +189,12 @@
   .tbl tr:last-child td{border-bottom:0}
   .tbl td:first-child{padding-left:16px;width:30px}
   .tbl td:nth-child(2){width:26px}
+  /* P2 修复: 清单表格此前没有任何列标题 —— 第 5 列是「下载源」下拉、第 6 列是状态文案、
+     第 7 列是锁定开关, 不看源码无法判断含义。表头用弱化色 + 细线, 不抢数据行的注意力。 */
+  .tbl th{padding:6px 16px 6px 0;font-size:11px;font-weight:600;color:var(--ink3);
+    text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  .tbl th:first-child{padding-left:16px}
+  /* 已折叠的分组表格整张隐藏时, 表头跟着一起隐藏(display:none 在 table 上, 无需额外处理) */
   .fname{font-family:var(--mono);font-size:12.8px;word-break:break-all;color:var(--fname)}
   .fname a{color:inherit;text-decoration:none;margin-left:4px;opacity:.55}
   .fname a:hover{opacity:1;color:var(--brand2)}
@@ -795,6 +801,13 @@ const I18N={
   'metaStat':{zh:'清单元数据更新时间',en:'Meta Updated'},
   'versions':{zh:'个版本',en:'versions'},
   'local':{zh:'本地',en:'Local'},
+  // P2: 清单表格的列标题(8 列, 前两列是勾选框与状态点, 留空)
+  'colFile':{zh:'文件名',en:'File'},
+  'colLocalSize':{zh:'本地大小',en:'Local size'},
+  'colSource':{zh:'下载源',en:'Source'},
+  'colStatus':{zh:'状态',en:'Status'},
+  'colLock':{zh:'锁定',en:'Lock'},
+  'colAction':{zh:'操作',en:'Actions'},
   'downloaded':{zh:'已下载',en:'Downloaded'},
   'unverified':{zh:'未验签',en:'Not verified'},
   'unverifiedTip':{zh:'文件长度与服务器声明一致，但校验源不可达或清单里没有该文件名 —— 这次落定没有任何 SHA256/GPG 证据。检查该发行版的 checksum 配置后，点本行 ⟳ 重新校验（只读盘，不会重新下载）。',en:'File length matches the server, but the checksum source was unreachable or the filename was missing from its manifest — this file was accepted without any SHA256/GPG evidence. Check the checksum config, then click ⟳ on this row to verify it (reads the file only, no re-download).'},
@@ -1309,6 +1322,17 @@ function render(d){
     return;
   }
   $('#empty').style.display='none';
+  // P2: 列标题(8 列与数据行一一对应)。前两列是勾选框与状态色点, 留空不占文案。
+  // 放在 render 内构造而不是模块级常量 —— 切语言时 loadDistros→render 会重建, 表头跟着翻译。
+  const tblHead='<thead><tr>'
+    +'<th></th><th></th>'
+    +'<th>'+t('colFile')+'</th>'
+    +'<th>'+t('colLocalSize')+'</th>'
+    +'<th>'+t('colSource')+'</th>'
+    +'<th class="td-r">'+t('colStatus')+'</th>'
+    +'<th class="td-r">'+t('colLock')+'</th>'
+    +'<th class="td-r">'+t('colAction')+'</th>'
+    +'</tr></thead>';
   groups.forEach(g=>{
     const card=document.createElement('div');card.className='card';
     const stray=g.stray_files||[];
@@ -1367,7 +1391,7 @@ function render(d){
         <button class="btn-fav ${isFav(g.type,g.name)?'on':''}" onclick="toggleFav(this)" title="${isFav(g.type,g.name)?t('unfavGroup'):t('favGroup')}">${isFav(g.type,g.name)?'★':'☆'}</button>
         <button class="btn-sub ${isSubscribed(g.type,g.name)?'on':''}" data-act="subscribe" data-name="${esc(g.name)}" data-type="${esc(g.type)}" title="${isSubscribed(g.type,g.name)?t('subTipOn'):t('subTipOff')}">${isSubscribed(g.type,g.name)?('★ '+t('subscribed')):('☆ '+t('subscribe'))}</button>
       </div>
-      <table class="tbl" id="tbl-${esc(g.type)}-${esc(g.name)}" style="${isFolded(g.type,g.name)?'display:none':''}">${rows}${strayHtml}</table>`;
+      <table class="tbl" id="tbl-${esc(g.type)}-${esc(g.name)}" style="${isFolded(g.type,g.name)?'display:none':''}">${tblHead}<tbody>${rows}${strayHtml}</tbody></table>`;
     box.appendChild(card);
   });
   $('#sFiles').textContent=total;
@@ -2620,7 +2644,9 @@ function applyFilter(){
     // 对按状态筛选的: 逐行判定可见性, 组内只要有一行命中就显示该组
     if(wanted){
       let any=false;
-      card.querySelectorAll('.tbl tr').forEach(tr=>{
+      // 只作用于 tbody 里的数据行: v1.9.0 起表头也在这张表里, 旧选择器
+      // `.tbl tr` 会把 thead 行一并置为 display:none —— 一筛就没表头了。
+      card.querySelectorAll('.tbl tbody tr').forEach(tr=>{
         if(tr.classList.contains('stray')){tr.style.display='none';return}
         const st=tr.dataset.status||'';
         const show=wanted.includes(st);
@@ -2629,7 +2655,7 @@ function applyFilter(){
       });
       match=any;
     }else{
-      card.querySelectorAll('.tbl tr').forEach(tr=>{tr.style.display=''});
+      card.querySelectorAll('.tbl tbody tr').forEach(tr=>{tr.style.display=''});
     }
     card.style.display=match?'':'none';
   });
