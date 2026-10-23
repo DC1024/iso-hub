@@ -233,39 +233,96 @@ def _oserr(e: OSError) -> str:
     return "%s%s" % (e, (" (winerror=%s)" % w) if w else "")
 
 
-def _ensure_lock_file(lp: Path) -> None:
-    """保证锁文件存在, 且在 Windows 上**至少 1 字节**。
+def _top_up_if_empty(lp: Path) -> None:
+    """Windows: 把历史遗留的 0 字节锁文件补到 1 个字节。
+
+    只补字节, **不删不换**: 一旦删/换, 别人此刻持有的那把锁就成了孤儿锁
+    (句柄指着旧 inode, 而新来的人锁新 inode, 两边都以为自己独占)。
+    """
+    if os.name != "nt":
+        return
+    try:
+        if lp.stat().st_size:
+            return
+    except OSError:
+        return
+    with contextlib.suppress(OSError):
+        with open(lp, "r+b") as f:
+            f.write(b"\0")
+
+
+def _seed_lock_file(lp: Path) -> None:
+    """创建锁文件(1 字节), 且**绝不改变已存在文件的 inode**。
 
     为什么非要 1 个字节: Windows 的字节范围锁对"文件末尾之外"的区域不生效 ——
     对 0 字节文件加锁会返回成功, 而另一个进程同样能加锁成功, 等于没锁
     (实测: 0 字节时两个进程都拿到锁; 1 字节时第二个被 errno 13 挡住)。
 
-    为什么用临时文件 + 原子改名, 而不是"不存在就 open(O_CREAT) 再写":
-    两个进程会同时看到"文件存在但 0 字节", 抢着写同一个字节; 而此刻对方可能
-    已经对 byte 0 加了锁, 后写的那次被强制锁挡成 EACCES → 静默降级 → 丢更新。
-    先写临时文件再 rename, 文件一出现就是 1 字节, 没有 0 字节窗口。
-    (这个问题是实测出来的: 50 条并发写里稳定丢 1 条, 全部发生在锁文件刚诞生那几次。)
+    为什么不用 os.replace(临时文件, lp) —— v1.8.0 就是这么写的, 错在这里:
+      replace 会把 lp 指向**新 inode**。两个进程同时判定"文件不存在"时各 replace
+      一次, 后到者把先到者的 inode 从目录里摘掉; 而先到者已经 open 的句柄仍指着
+      旧 inode —— 于是两个进程 flock 的是两个不同 inode, 两个都返回"加锁成功",
+      锁形同虚设。Windows 上碰巧安全(对已打开的文件 replace 抛 PermissionError),
+      Linux 允许替换, 所以在 CI 上表现为 50 条并发写丢 1 条, 且**没有任何降级日志**
+      (两边都认为自己拿到了锁)。
+
+    为什么用 os.link(临时文件, lp):
+      * 目标已存在时**原子失败**(FileExistsError), 不会覆盖别人的 inode —— 锁文件
+        的 inode 从诞生到删除只出现一次, 谁来 open 打开的都是同一个;
+      * 链接建立时文件已经带着那 1 个字节, 不存在"文件存在但 0 字节"的窗口
+        (那正是上一版踩过的坑: 两个进程抢着写同一个字节, 后写的被强制锁挡成
+        EACCES → 静默降级 → 丢更新)。
     """
-    with contextlib.suppress(OSError):
-        lp.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if lp.exists():
-            # POSIX 的 flock 不看文件大小; Windows 才需要补字节(兼容旧版本留下的空文件)
-            if os.name == "nt" and lp.stat().st_size == 0:
-                with contextlib.suppress(OSError):
-                    with open(lp, "r+b") as f:
-                        f.write(b"\0")
-            return
-    except OSError:
-        pass
     tmp = lp.parent / (".%s.%d.seed" % (lp.name, os.getpid()))
     try:
         with open(tmp, "wb") as f:
             f.write(b"\0")
-        os.replace(tmp, lp)
+            f.flush()
+            with contextlib.suppress(OSError):
+                os.fsync(f.fileno())      # 别让崩溃在盘上留下 0 字节锁文件
+        try:
+            os.link(tmp, lp)
+        except FileExistsError:
+            pass                          # 别人先建好了, 是同一个 inode, 直接用
+        except OSError:
+            _seed_lock_file_exclusive(lp)  # 不支持硬链接的文件系统(FAT/exFAT/部分 NFS)
     except OSError:
+        pass                              # 建不出来 → 调用方走降级分支, 不失败
+    finally:
         with contextlib.suppress(OSError):
             tmp.unlink()
+
+
+def _seed_lock_file_exclusive(lp: Path) -> None:
+    """硬链接不可用时的退路: O_CREAT|O_EXCL, 只有一个人能建成。
+
+    POSIX 上这就够了(flock 不看文件大小); Windows 上仍留一个极短的 0 字节窗口,
+    但只会在"既没有硬链接、又跑 Windows"的组合里走到 —— FAT/exFAT 之类。
+    """
+    try:
+        fd = os.open(lp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except OSError:                       # 含 FileExistsError: 别人建好了
+        return
+    try:
+        os.write(fd, b"\0")
+    except OSError:
+        pass
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+def _ensure_lock_file(lp: Path) -> None:
+    """保证锁文件存在(且在 Windows 上至少 1 字节)。创建规则见 _seed_lock_file。"""
+    with contextlib.suppress(OSError):
+        lp.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if lp.exists():
+            _top_up_if_empty(lp)          # POSIX 的 flock 不看大小; Windows 才需要补
+            return
+    except OSError:
+        pass
+    _seed_lock_file(lp)
 
 
 def _os_lock_once(fh) -> bool:
@@ -284,10 +341,10 @@ def _os_lock_once(fh) -> bool:
 def _open_and_lock(lp: Path, timeout: float):
     """在超时前反复尝试"打开锁文件 + 加锁", 返回 (fh, 是否拿到, 失败原因)。
 
-    为什么**打开失败也要重试**: 另一个进程正在 os.replace 生成锁文件的那一瞬间,
-    这边的 open 会拿到 EACCES / 共享冲突 —— 那是毫秒级的瞬时状态。把它直接判成
-    "没有跨进程锁"就会丢更新(实测: 50 条并发写里稳定丢 1 条, 全部发生在锁文件
-    刚诞生那几次)。重试 50ms 之后再来一次就好。
+    为什么**打开失败也要重试**: 锁文件刚诞生的那一瞬间, 这边的 open 可能拿到
+    EACCES / 共享冲突 —— 那是毫秒级的瞬时状态。把它直接判成"没有跨进程锁"就会
+    丢更新(实测: 50 条并发写里稳定丢 1 条, 全部发生在锁文件刚诞生那几次)。
+    重试 50ms 之后再来一次就好。
     """
     deadline = time.monotonic() + max(0.0, timeout)
     last = "超时"
