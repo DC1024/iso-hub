@@ -1754,7 +1754,14 @@ function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-th
 })();
 
 /* ---------- Tab 切换 ---------- */
+// P6: 当前页签记在 localStorage, 刷新后恢复 —— 在种子页做批量操作时误按 F5,
+// 不该把上下文丢回镜像列表。取值必须在白名单内: 旧版本/手改 localStorage
+// 可能留下已不存在的页签名, switchTab 会去取一个不存在的 panel 并抛错。
+const TAB_KEY='iso_hub_tab';
+const TABS=['mirror','source','subs','settings','torrent'];
 function switchTab(tab){
+  if(!TABS.includes(tab))tab='mirror';
+  try{localStorage.setItem(TAB_KEY,tab)}catch(e){}
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   ['mirror','source','subs','settings','torrent'].forEach(p=>{
     document.getElementById('panel-'+p).style.display=(p===tab)?'':'none';
@@ -3025,7 +3032,16 @@ async function gateLogin(){
 $('#gate-pass').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
 $('#gate-user').addEventListener('keydown',e=>{if(e.key==='Enter')gateLogin()});
 // 页面加载即检查: 强制登录开启时未登录显示遮罩
-if(typeof checkLoginGate==='function')checkLoginGate();
+// P6: 等登录态确认后再恢复上次页签 —— 未登录时切页签会立刻发出几个必然 401 的请求,
+// 在登录遮罩背后空转、把控制台刷红。mirror 是默认状态, 不必重切(避免多打一轮请求)。
+if(typeof checkLoginGate==='function'){
+  Promise.resolve(checkLoginGate()).then(ok=>{
+    if(!ok)return;
+    let tab=null;
+    try{tab=localStorage.getItem(TAB_KEY)}catch(e){}
+    if(tab&&TABS.includes(tab)&&tab!=='mirror')switchTab(tab);
+  });
+}
 </script>
 </body>
 </html>
