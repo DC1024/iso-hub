@@ -94,7 +94,7 @@
 | GET | `/api/subscriptions` | 订阅配置（自动拉最新 + 删旧） |
 | POST | `/api/subscriptions` | 保存订阅配置 |
 | POST | `/api/sync-subscriptions` | 对所有已启用订阅执行：刷新清单 → 下载最新 N → 删旧版 |
-| GET / POST / DELETE | `/api/schedules` | 定时任务增删改查 |
+| GET / POST / DELETE | `/api/schedules` | 定时任务增删改查。**POST 会校验参数**：`type` 必须是 `daily`/`weekly`/`monthly`/`yearly`/`once`，`time` 必须是 `HH:MM`（00:00–23:59），`once` 还需有效的 `scheduled_at`；非法一律 400 且不落盘 |
 | POST | `/api/schedules/run` | 手动触发一次订阅同步 |
 
 ## 网络共享（Samba / WebDAV）

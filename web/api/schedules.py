@@ -11,10 +11,20 @@ v1.7.0 从 app.py 按域迁出，只做搬移不改行为。两条铁律：
 """
 from flask import Blueprint, jsonify, request
 
+import re
+
 from api._ctx import core
 
 bp = Blueprint("schedules", __name__)
 
+# P3 修复: 这两个白名单是 app._sched_matches() 真正认得的值。
+# 此前接口把 type/time 原样落盘, `type=every_second` 或 `time=99:99` 都能存进去 ——
+# 前端下拉限制只是"看起来有效", 直接打接口就能造出一条永远不触发的任务,
+# 而界面上看不出任何异常(调度器只是永远不命中)。这类脏数据只能靠人翻 settings.json 才找得到。
+SCHEDULE_TYPES = ("daily", "weekly", "monthly", "yearly", "once")
+# 只接受 24 小时制的 HH:MM。允许 "2:00"? 不允许 —— type=time 的输入框只会给出补零值,
+# 而 2:5 / 02:5 这类半补零写法在 split(":") 后虽能 int(), 却会让用户对"到底存了什么"产生分歧。
+_TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
 @bp.get("/api/schedules")
@@ -27,15 +37,28 @@ def api_schedules_add():
     body = request.get_json(force=True, silent=True) or {}
     name = (body.get("name") or "").strip() or "定时任务"
     typ = body.get("type") or "daily"
+    if typ not in SCHEDULE_TYPES:
+        return jsonify({"error": "无效的任务类型 %r, 可选: %s"
+                                 % (typ, ", ".join(SCHEDULE_TYPES))}), 400
+    # 缺省时间沿用旧行为(00:00); 但给了就必须合法 —— 空串也按缺省处理,
+    # 别把 "" 存进配置(调度器会 split 失败然后静默按 00:00 算, 与用户理解不符)。
+    raw_time = body.get("time")
+    time_str = "00:00" if raw_time in (None, "") else str(raw_time).strip()
+    if not _TIME_RE.match(time_str):
+        return jsonify({"error": "时间必须为 HH:MM(00:00-23:59), 收到 %r" % (raw_time,)}), 400
+    scheduled_at = core._as_int(body.get("scheduled_at") or 0, 0, 0)
+    if typ == "once" and scheduled_at <= 0:
+        # 一次性任务没有执行时刻 = 永远不会触发(调度器判 scheduled_at 为真才动手)
+        return jsonify({"error": "一次性任务必须指定有效的执行时间(scheduled_at)"}), 400
     sched = {
         "id": body.get("id") or core._sched_id(),
         "name": name,
         "type": typ,
-        "time": body.get("time") or "00:00",
+        "time": time_str,
         "day_of_week": core._as_int(body.get("day_of_week", 0) or 0, 0, 0, 6),
         "day_of_month": core._as_int(body.get("day_of_month", 1) or 1, 1, 1, 31),
         "month_of_year": core._as_int(body.get("month_of_year", 1) or 1, 1, 1, 12),
-        "scheduled_at": core._as_int(body.get("scheduled_at") or 0, 0, 0),  # 一次性调度用的时间戳
+        "scheduled_at": scheduled_at,  # 一次性调度用的时间戳
         "enabled": bool(body.get("enabled", True)),
         "last_run": 0,
     }
