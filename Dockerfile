@@ -22,7 +22,7 @@
 # 升级: 改 tag 后执行
 #   docker pull python:3.12.15-slim && docker inspect --format='{{index .RepoDigests 0}}' python:3.12.15-slim
 # 把新 digest 粘回来, 再跑一遍 Container Smoke。
-FROM python:3.12.15-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
+FROM python:3.12.16-slim@sha256:8523d6abeb48ceae0b7240d30c5808fc26cb79c1a635bacdf19cf3baecfbec07
 
 # 国内构建可传 --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG PIP_INDEX_URL=https://pypi.org/simple
