@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "generated_at": "2026-10-12",
-  "image": "registry.cn-hangzhou.aliyuncs.com/dcchen/isohub:latest",
-  "app_version": "1.3.12",
+  "generated_at": "2026-11-16",
+  "image": "isohub-cve-ci:local (由 master v1.8.3 的 Dockerfile 本地构建并扫描)",
+  "app_version": "1.8.3",
   "base": "python:3.12-slim (Debian 13 trixie)",
   "sources": [
     "镜像内 dpkg-query 实包清单 (109 deb / 75 源码包)",
@@ -10,7 +10,7 @@
     "NVD 官方 CVSS (v4.0 / v3.1 / v2 三源核对)",
     "Debian Security Tracker 全量库"
   ],
-  "note": "这是**基线快照**, 不是「可接受风险清单」。用途: CI 只对本集合之外的**新增 High/Critical** 告警, 避免 101 条长期未修的基础镜像噪音把告警淹没。判断依据是逐条可达性分诊: 全部条目均不可达或受限(零个真实可达)。本基线中所有条目 Debian 均无修复版本, apt upgrade 一条都修不掉 —— 因此**不要**用 CVE 数量做门禁阈值, 否则永远红。",
+  "note": "这是**基线快照**, 不是「可接受风险清单」。用途: CI 只对本集合之外的**新增 High/Critical** 告警, 避免 101 条长期未修的基础镜像噪音把告警淹没。判断依据是逐条可达性分诊: 全部条目均不可达或受限(零个真实可达)。本基线中所有条目 Debian 均无修复版本, apt upgrade 一条都修不掉 —— 因此**不要**用 CVE 数量做门禁阈值, 否则永远红。 2026-11-16 刷新: 基于 v1.8.3 本地构建镜像重扫, 新增 25 条(其中 3 条 HIGH 均为 SQLite 扩展不可达漏洞, 已逐条分诊落 reach=unreachable), 32 条消失标记 reach=gone。",
   "entries": {
     "CVE-2005-2541": {
       "pkg": "tar",
@@ -160,10 +160,11 @@
       "pkg": "zlib",
       "score": 8.3,
       "severity": "high",
-      "reach": "unreachable",
+      "reach": "gone",
       "debian_status": "open",
       "urgency": "not yet assigned",
-      "fixed": ""
+      "fixed": "",
+      "note": "已不在最新扫描结果中(可能已修复)"
     },
     "CVE-2026-86145": {
       "pkg": "pcre2",
@@ -891,10 +892,11 @@
       "pkg": "zlib",
       "score": 2.9,
       "severity": "low",
-      "reach": "unreachable",
+      "reach": "gone",
       "debian_status": "open",
       "urgency": "not yet assigned",
-      "fixed": ""
+      "fixed": "",
+      "note": "已不在最新扫描结果中(可能已修复)"
     },
     "CVE-2026-53910": {
       "pkg": "diffutils",
@@ -958,7 +960,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-102474": {
       "pkg": "",
@@ -968,7 +970,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-105712": {
       "pkg": "",
@@ -978,7 +980,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-102010": {
       "pkg": "",
@@ -988,7 +990,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-95619": {
       "pkg": "",
@@ -998,7 +1000,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-8674": {
       "pkg": "",
@@ -1008,7 +1010,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-86805": {
       "pkg": "",
@@ -1018,7 +1020,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-95818": {
       "pkg": "",
@@ -1028,7 +1030,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-97399": {
       "pkg": "",
@@ -1038,7 +1040,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-88647": {
       "pkg": "gnutls28",
@@ -1068,7 +1070,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-95184": {
       "pkg": "",
@@ -1078,17 +1080,17 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-95209": {
       "pkg": "",
       "score": null,
       "severity": "unknown",
-      "reach": "unknown",
+      "reach": "gone",
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "已不在最新扫描结果中(可能已修复)"
     },
     "CVE-2026-95210": {
       "pkg": "",
@@ -1098,7 +1100,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-107161": {
       "pkg": "",
@@ -1108,7 +1110,7 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     },
     "CVE-2026-82560": {
       "pkg": "",
@@ -1118,7 +1120,257 @@
       "debian_status": "",
       "urgency": "",
       "fixed": "",
-      "note": "经 --update-baseline 并入, 尚未分诊"
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-91094": {
+      "pkg": "",
+      "score": null,
+      "severity": "unknown",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-114690": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-114691": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-115455": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-125709": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-115456": {
+      "pkg": "",
+      "score": null,
+      "severity": "low",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-84243": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-100290": {
+      "pkg": "",
+      "score": null,
+      "severity": "unknown",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-115819": {
+      "pkg": "",
+      "score": null,
+      "severity": "unknown",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-129483": {
+      "pkg": "",
+      "score": null,
+      "severity": "low",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-119373": {
+      "pkg": "sqlite3",
+      "score": null,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "<no-dsa> (Minor issue)",
+      "urgency": "unimportant",
+      "fixed": "",
+      "note": "2026-11-16 人工分诊: SQLite <3.54.0 的 FTS5/session 扩展堆溢出; 触发需构造 detail=none FTS5 表 + 负 rowid + prefix MATCH 或恶意 changeset/损坏索引文件; iso-hub 全项目未 import sqlite3、未用 FTS5/session 扩展、不接受外部 .db 文件 => 不可达; Debian trixie 3.46.1-7+deb13u2 标 <no-dsa> (Minor issue), 无 apt 修复版本。"
+    },
+    "CVE-2026-119374": {
+      "pkg": "sqlite3",
+      "score": null,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "<no-dsa> (Minor issue)",
+      "urgency": "unimportant",
+      "fixed": "",
+      "note": "2026-11-16 人工分诊: SQLite <3.54.0 的 FTS5/session 扩展堆溢出; 触发需构造 detail=none FTS5 表 + 负 rowid + prefix MATCH 或恶意 changeset/损坏索引文件; iso-hub 全项目未 import sqlite3、未用 FTS5/session 扩展、不接受外部 .db 文件 => 不可达; Debian trixie 3.46.1-7+deb13u2 标 <no-dsa> (Minor issue), 无 apt 修复版本。"
+    },
+    "CVE-2026-119379": {
+      "pkg": "sqlite3",
+      "score": null,
+      "severity": "high",
+      "reach": "unreachable",
+      "debian_status": "<no-dsa> (Minor issue)",
+      "urgency": "unimportant",
+      "fixed": "",
+      "note": "2026-11-16 人工分诊: SQLite <3.54.0 的 FTS5/session 扩展堆溢出; 触发需构造 detail=none FTS5 表 + 负 rowid + prefix MATCH 或恶意 changeset/损坏索引文件; iso-hub 全项目未 import sqlite3、未用 FTS5/session 扩展、不接受外部 .db 文件 => 不可达; Debian trixie 3.46.1-7+deb13u2 标 <no-dsa> (Minor issue), 无 apt 修复版本。"
+    },
+    "CVE-2026-119371": {
+      "pkg": "sqlite3",
+      "score": null,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "<no-dsa> (Minor issue)",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 人工分诊: 同批 SQLite <3.54.0 漏洞(扩展/WAL 页缓存); iso-hub 未 import sqlite3、未用受影响扩展、不接受外部 .db 文件 => 不可达; Debian trixie 标 <no-dsa> (Minor issue), 无 apt 修复版本。"
+    },
+    "CVE-2026-119372": {
+      "pkg": "sqlite3",
+      "score": null,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "<no-dsa> (Minor issue)",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 人工分诊: 同批 SQLite <3.54.0 漏洞(扩展/WAL 页缓存); iso-hub 未 import sqlite3、未用受影响扩展、不接受外部 .db 文件 => 不可达; Debian trixie 标 <no-dsa> (Minor issue), 无 apt 修复版本。"
+    },
+    "CVE-2026-119375": {
+      "pkg": "sqlite3",
+      "score": null,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "<no-dsa> (Minor issue)",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 人工分诊: 同批 SQLite <3.54.0 漏洞(扩展/WAL 页缓存); iso-hub 未 import sqlite3、未用受影响扩展、不接受外部 .db 文件 => 不可达; Debian trixie 标 <no-dsa> (Minor issue), 无 apt 修复版本。"
+    },
+    "CVE-2026-119376": {
+      "pkg": "sqlite3",
+      "score": null,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "<no-dsa> (Minor issue)",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 人工分诊: 同批 SQLite <3.54.0 漏洞(扩展/WAL 页缓存); iso-hub 未 import sqlite3、未用受影响扩展、不接受外部 .db 文件 => 不可达; Debian trixie 标 <no-dsa> (Minor issue), 无 apt 修复版本。"
+    },
+    "CVE-2026-119378": {
+      "pkg": "sqlite3",
+      "score": null,
+      "severity": "medium",
+      "reach": "unreachable",
+      "debian_status": "<no-dsa> (Minor issue)",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 人工分诊: 同批 SQLite <3.54.0 漏洞(扩展/WAL 页缓存); iso-hub 未 import sqlite3、未用受影响扩展、不接受外部 .db 文件 => 不可达; Debian trixie 标 <no-dsa> (Minor issue), 无 apt 修复版本。"
+    },
+    "CVE-2026-119591": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-119377": {
+      "pkg": "sqlite3",
+      "score": null,
+      "severity": "low",
+      "reach": "unreachable",
+      "debian_status": "<no-dsa> (Minor issue)",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 人工分诊: 同批 SQLite <3.54.0 漏洞(扩展/WAL 页缓存); iso-hub 未 import sqlite3、未用受影响扩展、不接受外部 .db 文件 => 不可达; Debian trixie 标 <no-dsa> (Minor issue), 无 apt 修复版本。"
+    },
+    "CVE-2026-107496": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-88822": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-88823": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-95691": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
+    },
+    "CVE-2026-95692": {
+      "pkg": "",
+      "score": null,
+      "severity": "medium",
+      "reach": "unknown",
+      "debian_status": "",
+      "urgency": "",
+      "fixed": "",
+      "note": "2026-11-16 扫描并入: 非 High/Critical, 未逐条分诊; 若后续升级为 High/Critical 需重新分诊。"
     }
   }
 }

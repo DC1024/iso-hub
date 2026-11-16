@@ -87,6 +87,31 @@ class TestExitCodes(_TmpCase):
         """条目消失是好事(上游修了), 不应触发告警。"""
         self.assertEqual(0, self._run({"cves": {"CVE-2019-1010022": "LOW"}}))
 
+    def test_gone_entries_not_listed_as_removed(self):
+        """reach=gone 的历史条目不该每周重复出现在 removed 列表制造噪音。
+
+        基线刷新一次可能标记几十条 gone(cve_check.py 的 update_baseline 会写这个字段),
+        若每周都列出来, 「只对变化告警」的设计意图就被噪音淹没了。
+        """
+        base = _baseline()
+        base["entries"]["CVE-2020-00001"] = {
+            "pkg": "glibc", "severity": "low", "reach": "gone",
+            "note": "已不在最新扫描结果中(可能已修复)"}
+        # 只有一个基线内条目出现在扫描里, 另一条目 gone、另一条目普通消失
+        base["entries"]["CVE-2020-00002"] = {
+            "pkg": "glibc", "severity": "low", "reach": "unreachable"}
+        _rc, out = self._run_with_report({"cves": {"CVE-2019-1010022": "LOW"}}, base)
+        self.assertNotIn("CVE-2020-00001", out, "gone 条目不该出现在 removed 列表")
+        self.assertIn("CVE-2020-00002", out, "非 gone 的消失条目仍应列出")
+        self.assertIn("CVE-2026-89092", out, "非 gone 的消失条目仍应列出")
+
+    def _run_with_report(self, scan, baseline):
+        base = self._write("baseline.json", baseline)
+        inp = self._write("scan.json", scan)
+        report = str(self.tmp / "report.txt")
+        rc = cc.main(["--input", inp, "--baseline", base, "--out", report])
+        return rc, Path(report).read_text(encoding="utf-8")
+
     def test_empty_scan_is_config_error_not_clean(self):
         self.assertEqual(3, self._run({"cves": []}))
 

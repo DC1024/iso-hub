@@ -114,10 +114,16 @@ def load_baseline(path: Path) -> dict:
     return doc
 
 
-def diff(baseline_ids, scan):
-    """scan: {cve: severity} -> (added:{cve:sev}, removed:set)"""
-    added = {c: s for c, s in scan.items() if c not in baseline_ids}
-    removed = {c for c in baseline_ids if c not in scan}
+def diff(baseline_doc, scan):
+    """scan: {cve: severity} -> (added:{cve:sev}, removed:set)
+
+    reach=gone 是「已确认从扫描结果消失」的历史标记。一次基线刷新可能标记几十条,
+    若每周仍在 removed 里重复列出, 报告会被噪音淹没 —— 这正是基线机制要消除的东西。
+    """
+    entries = baseline_doc.get("entries", {})
+    added = {c: s for c, s in scan.items() if c not in entries}
+    removed = {c for c, e in entries.items()
+               if c not in scan and e.get("reach") != "gone"}
     return added, removed
 
 
@@ -237,7 +243,7 @@ def main(argv=None) -> int:
         update_baseline(baseline_doc, scan, Path(args.baseline))
         return EXIT_OK
 
-    added, removed = diff(set(baseline_doc.get("entries", {})), scan)
+    added, removed = diff(baseline_doc, scan)
     report = render(baseline_doc, added, removed, non_cve)
     print(report)
     if args.out:
